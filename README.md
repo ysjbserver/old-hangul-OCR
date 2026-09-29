@@ -9,7 +9,7 @@
 [특수:내사용자문서/common.js](https://ko.wikisource.org/wiki/Special:MyPage/common.js) 에 두 줄을 넣고 저장한 뒤 새로 고침하세요.
 
 ```javascript
-window.옛한글OCR자료 = "https://cdn.jsdelivr.net/gh/ysjbserver/old-hangul-ocr@v3.1/";
+window.옛한글OCR자료 = "https://cdn.jsdelivr.net/gh/ysjbserver/old-hangul-ocr@v3.2/";
 mw.loader.load(window.옛한글OCR자료 + "소도구.js");
 ```
 
