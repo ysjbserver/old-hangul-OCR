@@ -9,7 +9,7 @@
 [특수:내사용자문서/common.js](https://ko.wikisource.org/wiki/Special:MyPage/common.js) 에 두 줄을 넣고 저장한 뒤 새로 고침하세요.
 
 ```javascript
-window.옛한글OCR자료 = "https://cdn.jsdelivr.net/gh/ysjbserver/old-hangul-ocr@v1/";
+window.옛한글OCR자료 = "https://cdn.jsdelivr.net/gh/ysjbserver/old-hangul-ocr@v2/";
 mw.loader.load(window.옛한글OCR자료 + "소도구.js");
 ```
 
@@ -23,18 +23,29 @@ mw.loader.load(window.옛한글OCR자료 + "소도구.js");
 
 ## 알아 두실 것
 
-- **꼭 눈으로 확인한 뒤 저장하세요.** 색칠되지 않은 자리에도 오류가 글자 100개에 1개 안팎 남습니다. 열 끝의 글자가 빠지는 일도 종종 있습니다.
-- 한 쪽에 20~35초 가량 소요됩니다(사용 환경에 따라 다름).
-- 처음 한 번은 모델(2.4 MB)을 받느라 조금 더 걸립니다.
+- **꼭 눈으로 확인한 뒤 저장하세요.** 색칠되지 않은 자리에도 오류가 글자 100개에 1개 안팎 남습니다. 열 끝의 글자가 빠지는 일도 있습니다.
+- 한 쪽에 20~35초 가량 소요됩니다 (사용 환경에 따라 다름).
+- 처음 한 번은 모델 두 개(글자 읽기 2.4 MB · 글자 경계 0.4 MB)를 받느라 조금 더 걸립니다.
+- 처음 보는 파일은 판형(몇 단 구성인지)을 보기 위해 여러 쪽을 한 번에 받아서 판정합니다. 이 때 시간이 다소 소요됩니다.
 - 모델과 스크립트는 jsDelivr(cdn.jsdelivr.net)에서 받습니다. 받을 때 사용자의 IP 주소가 jsDelivr에 전달됩니다. 스캔 그림과 읽은 글은 전달되지 않습니다.
-- 한 단·두 단·세 단 판형을 알아서 가립니다. 처음 보는 파일은 몇 쪽을 먼저 살피느라 첫 쪽이 더 오래 걸립니다.
+
+## 학습 자료
+
+OCR 모델(`옛한글모델.onnx` · `경계검출.onnx`)은 아래 자료로 학습했습니다.
+이 저장소에는 학습된 모델만 있고, 학습 자료(그림·글자)는 들어 있지 않습니다.
+
+- 과학기술정보통신부 및 한국지능정보사회진흥원이 작성한 [AI 허브](https://aihub.or.kr)에 있는 데이터 중 다음
+  - [옛한글 문자인식(OCR) 인공지능 학습용 데이터](https://www.aihub.or.kr/aihubdata/data/view.do?currMenu=115&topMenu=100&dataSetSn=504) (2021)
+  - [OCR 데이터(옛한글)](https://www.aihub.or.kr/aihubdata/data/view.do?currMenu=115&topMenu=100&dataSetSn=71295) (2022)
+- 국립중앙도서관 공유서재 중 저작권이 만료된 근대 잡지(1914~1940)의 스캔과 글자 자료
+- 한국어 위키문헌 내의 전사된 문서
 
 ## 사용권
 
-[CC0 1.0](LICENSE) - 뭐 제가 100% 만든 것도 아닌데.
+모델 자체는 [CC0 1.0](LICENSE) 라이선스로 공개합니다. 저작권을 주장할 생각은 일절 없습니다. (제가 만들었다기에는 양심이 찔리니까)
 
-(실행할 때 받아 오는 [onnxruntime-web](https://github.com/microsoft/onnxruntime)은 이 저장소에
-들어 있지 않으며 MIT 사용권을 따릅니다.)
+- 위 학습 자료 중 'AI 허브' 내 자료는 재사용 시 해당 자료를 사용하였음을 밝혀야 합니다. 저 쪽의 이용약관입니다. 이 모델을 가져가실 때에는 참고해 주세요.
+- 실행할 때 받아 오는 [onnxruntime-web](https://github.com/microsoft/onnxruntime)은 이 저장소에 들어 있지 않으며 MIT 사용권을 따릅니다.
 
 ## 문의
-[사용자:Aspere] (aspere.kowiki@gmail.com / https://ko.wikisource.org/wiki/사용자토론:Aspere)
+[사용자:Aspere](https://ko.wikisource.org/wiki/사용자:Aspere) — aspere.kowiki@gmail.com

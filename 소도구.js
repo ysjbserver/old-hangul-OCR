@@ -129,7 +129,10 @@ function 준비() {
     ort.env.wasm.numThreads = 1;
     var 세션 = await ort.InferenceSession.create(자료 + "옛한글모델.onnx",
                     { executionProviders: 실행기 });
-    모델 = window.옛한글읽기.모델만들기(설정, 세션, ort);
+    // 글자 경계 검출기(0.4MB) — 자를 자리를 고를 때 씀(`align.CUT_LEARN`, 2026-09-28)
+    var 경계세션 = 설정.경계 ? await ort.InferenceSession.create(자료 + "경계검출.onnx",
+                    { executionProviders: 실행기 }) : null;
+    모델 = window.옛한글읽기.모델만들기(설정, 세션, ort, 경계세션);
   })();
   return 준비중;
 }
