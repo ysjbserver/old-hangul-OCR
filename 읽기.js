@@ -82,6 +82,7 @@ function 그림읽기(src) {
 let INK = 120;          // 이보다 어두우면 잉크로 본다
 let GLYPH = 0.35;       // 글자가 있는 줄은 열 폭의 이만큼 이상이 잉크다
 let SPAN_EXTEND = true, SPAN_LOW = 0.15, SPAN_REACH = 1.5, SPAN_GAP = 0.4;   // scan._이어잡기
+let FRAME_LOCAL = true, FRAME_LOCAL_FILL = 0.6, FRAME_LOCAL_REACH = 0.35, FRAME_LOCAL_EDGE = 8;   // scan._열광곽
 let YX_RATIO = 0.867;   // 세로 자간 ÷ 가로 자간 (기본값)
 
 let FRAME_SEG = 300, FRAME_FILL = 0.85, FRAME_AGREE = 0.6;   // scan.py 와 같은 값
@@ -430,6 +431,63 @@ function 광곽(g, cols, 읽기) {
   return [T, B];
 }
 
+/**
+ * `scan._열광곽` — 열마다 광곽 안쪽 위·아래(쪽 값보다 안쪽으로만). 읽을 때 · `광곽합의` 가 찾았을 때만.
+ * 열 + 쪽 가운데 쪽 고랑 띠가 찬 줄 = 광곽(글자 획은 고랑을 안 건넘). 못 찾은 열은 x 로 양옆을 곧게 이음
+ */
+function 열광곽(g, cols, T, B, xpitch, pitch) {
+  const W = g.너비, H = g.높이;
+  const R = Math.max(6, Math.trunc(FRAME_LOCAL_REACH * pitch));
+  let 합 = 0;
+  for (let i = 0; i < cols.length; i++) 합 += (cols[i][0] + cols[i][1]) / 2;
+  const 쪽가운데 = 합 / cols.length;
+  const 위 = [], 아래 = [], xs = [];
+  for (let i = 0; i < cols.length; i++) {
+    const x0 = cols[i][0], x1 = cols[i][1];
+    const 고랑 = Math.max(0, Math.trunc(xpitch - (x1 - x0)));
+    let a, b;
+    if ((x0 + x1) / 2 < 쪽가운데) { a = x0; b = Math.min(W, x1 + 고랑); }
+    else { a = Math.max(0, x0 - 고랑); b = x1; }
+    const 띠 = 열잉크(g, a, b), 열 = 열잉크(g, x0, x1);
+    const 찬 = function (y) { return 띠[y] >= (b - a) * FRAME_LOCAL_FILL; };
+    const 획 = function (y) { return 열[y] > (x1 - x0) * GLYPH; };
+    let y0 = Math.max(0, T - 4 - R), y = -1;
+    for (let k = y0; k < Math.min(H, T - 4 + R); k++) if (찬(k)) y = k;       // 가장 안쪽(아래) 찬 줄
+    if (y >= 0) {
+      let e = y;
+      while (e + 1 < H && e + 1 - y <= FRAME_LOCAL_EDGE && 획(e + 1)) e++;
+      위.push(Math.max(y + 4, e + 2));
+    } else 위.push(null);
+    y0 = Math.max(0, B + 4 - R); y = -1;
+    for (let k = y0; k < Math.min(H, B + 4 + R); k++) if (찬(k)) { y = k; break; }   // 가장 안쪽(위) 찬 줄
+    if (y >= 0) {
+      let e = y;
+      while (e - 1 >= 0 && y - (e - 1) <= FRAME_LOCAL_EDGE && 획(e - 1)) e--;
+      아래.push(Math.min(y - 4, e - 2));
+    } else 아래.push(null);
+    xs.push((x0 + x1) / 2);
+  }
+  function 잇기(v, 쪽값, 안쪽) {
+    const 있 = [];
+    for (let i = 0; i < v.length; i++) if (v[i] !== null) 있.push(i);
+    if (!있.length) return v.map(function () { return 쪽값; });
+    return v.map(function (t, i) {
+      if (t === null) {
+        let l = null, r = null;               // 파이썬 max/min(key) 처럼 같은 x 면 먼저 나온 것
+        for (let k = 0; k < 있.length; k++) {
+          const j = 있[k];
+          if (xs[j] <= xs[i] && (l === null || xs[j] > xs[l])) l = j;
+          if (xs[j] >= xs[i] && (r === null || xs[j] < xs[r])) r = j;
+        }
+        if (l === null || r === null || xs[r] === xs[l]) t = v[r === null ? l : r];
+        else t = Math.floor(v[l] + (v[r] - v[l]) * (xs[i] - xs[l]) / (xs[r] - xs[l]));
+      }
+      return 안쪽(쪽값, t);
+    });
+  }
+  return [잇기(위, T, Math.max), 잇기(아래, B, Math.min)];
+}
+
 /** `scan.ink_profile` — 뒤 계산이 모두 이것을 돌려쓴다. */
 function 잉크무늬(g, cols) {
   return cols.map(function (c) { return 열잉크(g, c[0], c[1]); });
@@ -459,22 +517,24 @@ function 이어잡기(p, a, b, w, T, B, pitch) {
  * 뒷면 비침·계선 때문에 열 폭의 GLYPH 이상이 잉크인 줄만 글자 줄로 봄
  */
 function 글자구간(prof, cols, T, B, pitch, 이어) {
+  const Ts = Array.isArray(T) ? T : cols.map(function () { return T; });   // 열마다 목록이어도 됨(`열광곽`)
+  const Bs = Array.isArray(B) ? B : cols.map(function () { return B; });
   const spans = cols.map(function (c, i) {
-    const p = prof[i], need = (c[1] - c[0]) * GLYPH;
+    const p = prof[i], need = (c[1] - c[0]) * GLYPH, t = Ts[i], bb = Bs[i];
     let a = -1, b = -1;
-    for (let y = T; y < B; y++) if (p[y] > need) { if (a < 0) a = y; b = y; }
+    for (let y = t; y < bb; y++) if (p[y] > need) { if (a < 0) a = y; b = y; }
     if (a < 0) return null;
-    return (이어 && SPAN_EXTEND) ? 이어잡기(p, a, b + 1, c[1] - c[0], T, B, pitch) : [a, b + 1];
+    return (이어 && SPAN_EXTEND) ? 이어잡기(p, a, b + 1, c[1] - c[0], t, bb, pitch) : [a, b + 1];
   });
   const real = spans.filter(function (s) { return s; });
   if (!real.length) return null;
   let Emax = -Infinity;
   for (let i = 0; i < real.length; i++) if (real[i][1] > Emax) Emax = real[i][1];
-  return spans.map(function (s) {
+  return spans.map(function (s, i) {
     if (!s) return null;
     let a = s[0], b = s[1];
-    if (a - T < pitch * 0.5) a = T;             // 첫 글자가 흐려도 위에서 시작
-    if (Emax - b < pitch * 0.6) b = Emax;       // 끝도 마찬가지
+    if (a - Ts[i] < pitch * 0.5) a = Ts[i];                 // 첫 글자가 흐려도 위에서 시작
+    if (Emax - b < pitch * 0.6) b = Math.min(Emax, Bs[i]);  // 끝도 마찬가지 (열 광곽 너머로는 안 감)
     return [a, b];
   });
 }
@@ -823,6 +883,7 @@ function 쪽기하(g, ratio, 단, 읽기, 표준자간) {
   const pitch = xpitch * ratio;
   let prof = 잉크무늬(g, cols0);
   const TB = 광곽(g, cols0, 읽기), T = TB[0], B = TB[1];
+  const 쪽광곽 = !!읽기 && FRAME_LOCAL && 광곽합의(g, cols0) !== null;   // 열마다 다듬을 수 있나(`열광곽`)
   if (후보 && EDGE_MOVE) {
     cols0 = 줄에서비키기(g, cols0, xpitch, T, B);
     prof = 잉크무늬(g, cols0);
@@ -843,7 +904,9 @@ function 쪽기하(g, ratio, 단, 읽기, 표준자간) {
     cols = cols0.concat(cols0);              // 같은 x 자리를 두 번 쓴다
     sm = sm0.concat(sm0);
   } else {
-    spans = 글자구간(prof, cols0, T, B, pitch, !!읽기);
+    let TT = T, BB = B;
+    if (쪽광곽) { const 열TB = 열광곽(g, cols0, T, B, xpitch, pitch); TT = 열TB[0]; BB = 열TB[1]; }
+    spans = 글자구간(prof, cols0, TT, BB, pitch, !!읽기);
     cols = cols0; sm = sm0;
   }
   if (spans === null) return null;
@@ -1672,6 +1735,9 @@ const API = {
     if (s.큰제목 !== undefined) {
       HEADING = s.큰제목; HEADING_LOW = s.큰제목낮음; HEADING_GAIN = s.큰제목이득; HEADING_CONF = s.큰제목확신;
       HEADING_INK = s.큰제목잉크; HEADING_K = s.큰제목글자수; HEADING_H = s.큰제목높이;
+    }
+    if (s.열광곽 !== undefined) {
+      FRAME_LOCAL = s.열광곽; FRAME_LOCAL_FILL = s.열광곽잉크; FRAME_LOCAL_REACH = s.열광곽거리; FRAME_LOCAL_EDGE = s.열광곽가장자리;
     }
     if (s.구간이어 !== undefined) {
       SPAN_EXTEND = s.구간이어; SPAN_LOW = s.구간이어잉크; SPAN_REACH = s.구간이어거리; SPAN_GAP = s.구간이어빈줄;
