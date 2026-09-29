@@ -1598,20 +1598,41 @@ function 모델만들기(설정, 세션, ort, 경계세션) {
       const 종 = new Int32Array(n), 확신 = new Float64Array(n);
       if (!n) return { 초: 초, 중: 중, 종: 종, 확신: 확신 };
       const nL = 설정.초성.length, nV = 설정.중성.length, nT = 설정.종성.length;
-      for (let s = 0; s < n; s += 뭉치) {
-        const m = Math.min(뭉치, n - s);
+      // ★ 같은 상자는 한 번만(2026-09-29) — 칸수를 est±폭으로 여러 번 자르면 같은 자리 상자가 되풀이됨
+      //   (서로 다른 것 22~25%). WASM 은 뭉치가 달라도 상자마다 답이 같음 — 파이썬(CUDA)은 아님(1e-4)
+      const 자리 = new Int32Array(n), 읽을 = [];
+      if (this.중복빼기 === false) {
+        for (let i = 0; i < n; i++) { 자리[i] = i; 읽을.push(boxes[i]); }
+      } else {
+        const 본 = new Map();
+        for (let i = 0; i < n; i++) {
+          const b = boxes[i], 열쇠 = b[0] + "," + b[1] + "," + b[2] + "," + b[3];
+          let j = 본.get(열쇠);
+          if (j === undefined) { j = 읽을.length; 본.set(열쇠, j); 읽을.push(b); }
+          자리[i] = j;
+        }
+      }
+      const u = 읽을.length;
+      const 초u = new Int32Array(u), 중u = new Int32Array(u);
+      const 종u = new Int32Array(u), 확신u = new Float64Array(u);
+      for (let s = 0; s < u; s += 뭉치) {
+        const m = Math.min(뭉치, u - s);
         const buf = new Float32Array(m * size * size);
-        for (let k = 0; k < m; k++) buf.set(오리기(g, boxes[s + k], size), k * size * size);
+        for (let k = 0; k < m; k++) buf.set(오리기(g, 읽을[s + k], size), k * size * size);
         const r = await 세션.run({ x: new ort.Tensor("float32", buf, [m, 1, size, size]) });
         const L = r.L.data, V = r.V.data, T = r.T.data;
         for (let k = 0; k < m; k++) {
           const a = 최대소프트맥스(L, k * nL, nL);
           const b = 최대소프트맥스(V, k * nV, nV);
           const c = 최대소프트맥스(T, k * nT, nT);
-          초[s + k] = a.자리; 중[s + k] = b.자리; 종[s + k] = c.자리;
-          확신[s + k] = Math.min(a.값, Math.min(b.값, c.값));
+          초u[s + k] = a.자리; 중u[s + k] = b.자리; 종u[s + k] = c.자리;
+          확신u[s + k] = Math.min(a.값, Math.min(b.값, c.값));
         }
-        if (알림) 알림(Math.min(s + m, n), n);
+        if (알림) 알림(Math.min(s + m, u), u);
+      }
+      for (let i = 0; i < n; i++) {
+        const j = 자리[i];
+        초[i] = 초u[j]; 중[i] = 중u[j]; 종[i] = 종u[j]; 확신[i] = 확신u[j];
       }
       return { 초: 초, 중: 중, 종: 종, 확신: 확신 };
     },
