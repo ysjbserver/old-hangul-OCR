@@ -1010,7 +1010,103 @@ async function 쪽읽기(모델, geo, span) {
       out.push(열들[i].글자[j]); conf.push(열들[i].확신[j]);
     }
   });
-  return { 글자: out, 확신: conf, 줄들: 줄들, 상자수: r.상자수, 남긴열: 남 };
+  let 띄움 = null;
+  if (SPACE) {                        // `read_page_lines(…, 띄움=True)` — 줄.빈[k] = k 번째 글자 뒤를 띄우는가
+    띄움 = 띄울자리(geo.그림, 줄들);
+    줄들.forEach(function (z, k) { z.빈 = 띄움.빈[k]; });
+  }
+  return { 글자: out, 확신: conf, 줄들: 줄들, 상자수: r.상자수, 남긴열: 남, 띄움: 띄움 };
+}
+
+// ── 띄어쓰기 (`align.띄울자리`, 2026-09-29) ─────────────────────────
+// 한 열 안 이웃 글자의 잉크 빈틈 ÷ 칸 높이 중앙값 − 모양 고침 > 쪽마다 오츠 문턱이면 띄움. 열 끝은 못 봄
+// ⚠ 합은 앞에서부터 차례로 — 파이썬도 그렇게 짬(numpy 합은 차례가 달라 안 씀)
+let SPACE = true, SPACE_ROW = 0.03, SPACE_ETA = 0.5, SPACE_LOW = 0.2;
+let SPACE_FRAC = [0.08, 0.6], SPACE_CLIP = [-0.5, 1.5], SPACE_BEFORE = {}, SPACE_AFTER = {};   // 표는 설정.json 에서
+
+/** `align._띄움모양` — 중성(없으면 글자 그대로) + 받침이 있으면 '받침' */
+function 띄움모양(c) {
+  return (c.length > 1 ? c[1] : c) + (c.length > 2 ? "받침" : "");
+}
+
+function 표값(표, k) {
+  return Object.prototype.hasOwnProperty.call(표, k) ? 표[k] : 0.0;
+}
+
+/** `align._잉크위아래` — 상자 안 잉크 행의 첫 · 끝(쪽 좌표). 없으면 null */
+function 잉크위아래(g, b) {
+  const W = g.너비, H = g.높이, v = g.값;
+  const x0 = b[0], y0 = b[1], x1 = b[2], y1 = b[3];
+  const ya = Math.max(0, y0), yb = Math.min(H, Math.max(0, y1));
+  const xa = Math.max(0, x0), xb = Math.min(W, Math.max(0, x1));
+  if (yb <= ya || xb <= xa) return null;
+  const 문 = Math.max(2, (x1 - x0) * SPACE_ROW);
+  let 첫 = -1, 끝 = -1;
+  for (let y = ya; y < yb; y++) {
+    let n = 0;
+    const o = y * W;
+    for (let x = xa; x < xb; x++) if (v[o + x] < INK) n++;
+    if (n > 문) { if (첫 < 0) 첫 = y; 끝 = y; }
+  }
+  return 첫 < 0 ? null : [첫, 끝];
+}
+
+/** `align.빈틈값` — 한 열의 이웃 글자 쌍마다 빈틈 값. 잴 수 없으면 null */
+function 빈틈값(글, 상, 잉크) {
+  if (!상.length) return [];
+  const h = 중앙값(상.map(function (b) { return b[3] - b[1]; }));
+  const out = [];
+  for (let k = 0; k + 1 < 글.length; k++) {
+    const a = 잉크[k], b = 잉크[k + 1];
+    if (a === null || b === null || h <= 0) { out.push(null); continue; }
+    let x = (b[0] - a[1]) / h;
+    x -= 표값(SPACE_BEFORE, 띄움모양(글[k])) + 표값(SPACE_AFTER, 띄움모양(글[k + 1]));
+    out.push(x);
+  }
+  return out;
+}
+
+/** `align.빈틈가르기` — 쪽의 빈틈을 둘로 가르는 문턱(오츠). 띄우지 말아야 하면 null */
+function 빈틈가르기(값들) {
+  const lo = SPACE_CLIP[0], hi = SPACE_CLIP[1];
+  const v = Float64Array.from(값들, function (x) { return Math.min(Math.max(x, lo), hi); }).sort();
+  const n = v.length;
+  if (n < 10) return null;
+  const 누적 = new Float64Array(n + 1);
+  for (let i = 0; i < n; i++) 누적[i + 1] = 누적[i] + v[i];
+  const m = 누적[n] / n;
+  let 제곱 = 0.0;
+  for (let i = 0; i < n; i++) 제곱 += (v[i] - m) * (v[i] - m);
+  if (제곱 <= 0) return null;
+  let 최고 = -1.0, 자리 = -1;
+  for (let i = 1; i < n; i++) {
+    if (v[i - 1] === v[i]) continue;
+    const ma = 누적[i] / i, mb = (누적[n] - 누적[i]) / (n - i);
+    const s = i * (n - i) * (ma - mb) * (ma - mb);
+    if (s > 최고) { 최고 = s; 자리 = i; }
+  }
+  if (자리 < 0) return null;
+  const η = 최고 / (n * 제곱), i = 자리;
+  const 아래 = (i % 2) ? v[(i - 1) >> 1] : (v[i / 2 - 1] + v[i / 2]) / 2;
+  const 위몫 = (n - i) / n;
+  if (η < SPACE_ETA || 아래 >= SPACE_LOW || !(SPACE_FRAC[0] <= 위몫 && 위몫 <= SPACE_FRAC[1])) return null;
+  return (v[i - 1] + v[i]) / 2;
+}
+
+/** `align.띄울자리` — 줄마다 [글자 뒤를 띄우는가]. 반환: {빈, 문턱, 값(대조용)} */
+function 띄울자리(g, 줄들) {
+  const 값 = 줄들.map(function (z) {
+    return 빈틈값(z.글자, z.상자, z.상자.map(function (b) { return 잉크위아래(g, b); }));
+  });
+  const 모두 = [];
+  값.forEach(function (열) { 열.forEach(function (x) { if (x !== null) 모두.push(x); }); });
+  const t = 빈틈가르기(모두);
+  const 빈 = 값.map(function (열, k) {
+    const r = 열.map(function (x) { return t !== null && x !== null && x > t; });
+    if (줄들[k].글자.length) r.push(false);
+    return r;
+  });
+  return { 빈: 빈, 문턱: t, 값: 값 };
 }
 
 /**
@@ -1040,7 +1136,7 @@ async function 열마다읽기(모델, geo, span) {
       if (v > bestv) { bestv = v; best = o; }
     }
     // 글자가 아닌 칸(작은 절 번호 · 광곽 가로줄)은 글자에서 뺀다 — 점수는 그대로
-    const 글 = [], 확 = [];
+    const 글 = [], 확 = [], 상 = [];
     for (let j = 0; j < best.개수; j++) {
       const c = cf[best.시작 + j];
       const 자 = 모델.글자(pL[best.시작 + j], pV[best.시작 + j], pT[best.시작 + j]);
@@ -1050,8 +1146,9 @@ async function 열마다읽기(모델, geo, span) {
       }
       글.push(자);
       확.push(c);
+      상.push(best.상자들[j]);
     }
-    열들.push({ 점수: bestv, 글자: 글, 확신: 확, 칸수: best.개수 });
+    열들.push({ 점수: bestv, 글자: 글, 확신: 확, 칸수: best.개수, 상자: 상 });
   }
   if (HEADING) await 큰제목읽기(모델, geo, 열들, span);
   return { 열들: 열들, 상자수: bp.상자.length };
@@ -1133,7 +1230,7 @@ function 잉크범위(prof, y0, y1, 틈) {
 async function 구간읽기(모델, geo, i, y0, y1, span) {
   const x0 = geo.crop_cols[i][0], x1 = geo.crop_cols[i][1], sm = geo.sm[i];
   const r = (y1 - y0 >= geo.pitch * 0.6) ? 잉크범위(sm, y0, y1, geo.pitch * 1.5) : null;
-  if (r === null || r[1] - r[0] < geo.pitch * 0.6) return { 합: 0.0, n: 0, 글: [], 확: [] };
+  if (r === null || r[1] - r[0] < geo.pitch * 0.6) return { 합: 0.0, n: 0, 글: [], 확: [], 상: [] };
   y0 = r[0]; y1 = r[1];
   const cands = 자를후보(sm, y0, y1, geo.pitch);
   const est = Math.max(1, 반올림((y1 - y0) / geo.pitch));
@@ -1152,7 +1249,7 @@ async function 구간읽기(모델, geo, i, y0, y1, span) {
     if (best === null || s / bx.length > best.합 / best.n) {
       const 글 = [];
       for (let j = 0; j < n; j++) 글.push(모델.글자(읽.초[j], 읽.중[j], 읽.종[j]));
-      best = { 합: s, n: n, 글: 글, 확: Array.from(읽.확신) };
+      best = { 합: s, n: n, 글: 글, 확: Array.from(읽.확신), 상: bx };
     }
   }
   return best;
@@ -1204,13 +1301,14 @@ async function 큰제목읽기(모델, geo, 열들, span) {
         if (ra === null || rb === null) continue;
         const v = (합 + ra.합 + rb.합) / (k + ra.n + rb.n);
         if (최고 === null || v > 최고.v) {
-          최고 = { v: v, 글: 제.concat(ra.글), 확: Array.from(읽.확신).concat(ra.확), 글2: rb.글, 확2: rb.확 };
+          최고 = { v: v, 글: 제.concat(ra.글), 확: Array.from(읽.확신).concat(ra.확), 글2: rb.글, 확2: rb.확,
+                  상: bx.concat(ra.상), 상2: rb.상 };
         }
       }
     }
     if (최고 !== null && 최고.v > 옛 + HEADING_GAIN) {
-      열들[i] = { 점수: a.점수, 글자: 최고.글, 확신: 최고.확, 칸수: a.칸수 };
-      열들[i + 1] = { 점수: b.점수, 글자: 최고.글2, 확신: 최고.확2, 칸수: b.칸수 };
+      열들[i] = { 점수: a.점수, 글자: 최고.글, 확신: 최고.확, 칸수: a.칸수, 상자: 최고.상 };
+      열들[i + 1] = { 점수: b.점수, 글자: 최고.글2, 확신: 최고.확2, 칸수: b.칸수, 상자: 최고.상2 };
       i += 2;
     } else {
       i++;
@@ -1474,7 +1572,7 @@ const 안쪽 = "⟪", 바깥 = "⟫";     // ⟪ ⟫
 let MARK = 0.9;                   // step4_read.표시문턱 — 설정.json 의 표시문턱으로 덮음
 
 /** `step4_read.확신표시` — 확신 낮은 글자를 `⟪…⟫` 로 감쌈 (기본 문턱 MARK) */
-function 확신표시(글자, 확신, 문턱) {
+function 확신표시(글자, 확신, 문턱, 빈) {
   if (문턱 === undefined) 문턱 = MARK;
   const 조각 = [];
   let 셀 = 0, 켬 = false;
@@ -1484,6 +1582,10 @@ function 확신표시(글자, 확신, 문턱) {
     else if (!낮 && 켬) { 조각.push(바깥); 켬 = false; }
     조각.push(글자[i]);
     if (낮) 셀++;
+    if (빈 && 빈[i]) {                 // 띄어쓰기 — ⟪⟫ 는 빈칸을 감싸지 않음
+      if (켬) { 조각.push(바깥); 켬 = false; }
+      조각.push(" ");
+    }
   }
   if (켬) 조각.push(바깥);
   return { 글월: 조각.join(""), 표시: 셀 };
@@ -1498,8 +1600,9 @@ function 줄글월(줄들, 문턱) {
   const 글 = [], 표 = [];
   let 셀 = 0;
   줄들.forEach(function (줄) {
-    const t = 확신표시(줄.글자, 줄.확신, 문턱);
-    글.push(줄.글자.join("")); 표.push(t.글월); 셀 += t.표시;
+    const t = 확신표시(줄.글자, 줄.확신, 문턱, 줄.빈);
+    글.push(줄.글자.map(function (c, k) { return c + (줄.빈 && 줄.빈[k] ? " " : ""); }).join(""));
+    표.push(t.글월); 셀 += t.표시;
   });
   return { 글월: 글.join("\n"), 교정용: 표.join("\n"), 표시: 셀 };
 }
@@ -1540,6 +1643,9 @@ const API = {
   모델만들기: 모델만들기,
   확신표시: 확신표시,
   줄글월: 줄글월,
+  빈틈값: 빈틈값,
+  빈틈가르기: 빈틈가르기,
+  띄울자리: 띄울자리,
 
   /** `설정.json` 넣기 — 상수들이 파이썬에서 그대로 옴 */
   설정넣기: function (s) {
@@ -1569,6 +1675,12 @@ const API = {
     }
     if (s.구간이어 !== undefined) {
       SPAN_EXTEND = s.구간이어; SPAN_LOW = s.구간이어잉크; SPAN_REACH = s.구간이어거리; SPAN_GAP = s.구간이어빈줄;
+    }
+    if (s.띄움 !== undefined) {
+      SPACE = s.띄움; SPACE_ROW = s.띄움행; SPACE_ETA = s.띄움갈림; SPACE_LOW = s.띄움아래;
+      SPACE_FRAC = s.띄움몫; SPACE_CLIP = s.띄움자름; SPACE_BEFORE = s.띄움앞; SPACE_AFTER = s.띄움뒤;
+    } else {
+      SPACE = false;                  // 표가 없는 옛 설정.json 이면 띄우지 않음
     }
     API.설정 = s;
     return s;
