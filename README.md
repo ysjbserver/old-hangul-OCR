@@ -9,7 +9,7 @@
 [특수:내사용자문서/common.js](https://ko.wikisource.org/wiki/Special:MyPage/common.js) 에 두 줄을 넣고 저장한 뒤 새로 고침하세요.
 
 ```javascript
-window.옛한글OCR자료 = "https://cdn.jsdelivr.net/gh/ysjbserver/old-hangul-ocr@v3.2/";
+window.옛한글OCR자료 = "https://cdn.jsdelivr.net/gh/ysjbserver/old-hangul-OCR@v4/";
 mw.loader.load(window.옛한글OCR자료 + "소도구.js");
 ```
 
@@ -24,9 +24,9 @@ mw.loader.load(window.옛한글OCR자료 + "소도구.js");
 ## 알아 두실 것
 
 - **꼭 눈으로 확인한 뒤 저장하세요.** 색칠되지 않은 자리에도 오류가 글자 100개에 1개 안팎 남습니다. 열 끝의 글자가 빠지는 일도 있습니다.
-- 한 쪽에 20~35초 가량 소요됩니다 (사용 환경에 따라 다름).
+- 한 쪽에 5~10초 가량 소요됩니다 (사용 환경에 따라 다름).
 - 처음 한 번은 모델 두 개(글자 읽기 2.4 MB · 글자 경계 0.4 MB)를 받느라 조금 더 걸립니다.
-- 처음 보는 파일은 판형(몇 단 구성인지)을 보기 위해 여러 쪽을 한 번에 받아서 판정합니다. 이 때 시간이 다소 소요됩니다.
+- 파일마다 처음 한 번은 판형(몇 단 구성인지)과 글자 간격을 재기 위해 여러 쪽을 한 번에 받아서 판정합니다. 이 때 시간이 다소 소요됩니다(1~3분). 잰 값은 브라우저에 기억해 두고 다음부터는 바로 읽습니다.
 - 모델과 스크립트는 jsDelivr(cdn.jsdelivr.net)에서 받습니다. 받을 때 사용자의 IP 주소가 jsDelivr에 전달됩니다. 스캔 그림과 읽은 글은 전달되지 않습니다.
 
 ## 학습 자료
