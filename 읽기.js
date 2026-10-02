@@ -86,6 +86,8 @@ let FRAME_LOCAL = true, FRAME_LOCAL_FILL = 0.6, FRAME_LOCAL_REACH = 0.35, FRAME_
 let YX_RATIO = 0.867;   // 세로 자간 ÷ 가로 자간 (기본값)
 
 let FRAME_SEG = 300, FRAME_FILL = 0.85, FRAME_AGREE = 0.6;   // scan.py 와 같은 값
+let FRAME_GUTTER = 0.6;   // scan.FRAME_GUTTER — (읽을 때) 옛 광곽 줄은 옆 고랑의 이 몫 넘게 찬 것만 (2026-10-02, null = 끔)
+let FRAME_GUTTER_CUT = 0.6;   // scan.FRAME_GUTTER_CUT — 자르는 경로의 같은 규칙(대조용 — 브라우저는 읽기만 함)
 
 /**
  * `scan.세로줄있나` — x 가 [xa, xb) 인 띠에 끊기지 않은 세로줄(광곽 선·제본 골)이
@@ -411,6 +413,24 @@ function 광곽합의(g, cols, fill, agree) {
   return (B - T > H * 0.4) ? [T, B] : null;
 }
 
+/** `scan._고랑찬몫` — 열 c 의 양옆 고랑에서 y0..y1 줄 중 가장 많이 찬 줄의 잉크 몫(둘 중 큰 쪽) */
+function 고랑찬몫(g, 순, c, y0, y1) {
+  let j = -1, 몫 = 0;
+  for (let k = 0; k < 순.length; k++) if (순[k][0] === c[0] && 순[k][1] === c[1]) { j = k; break; }
+  const v = g.값, W = g.너비, ya = Math.max(0, y0), yb = Math.min(g.높이, y1);
+  for (const k of [j - 1, j + 1]) {
+    if (k < 0 || k >= 순.length) continue;
+    const x0 = k < j ? 순[k][1] : c[1], x1 = k < j ? c[0] : 순[k][0];
+    if (x1 - x0 < 3 || y1 <= ya) continue;
+    for (let y = ya; y < yb; y++) {
+      let s = 0; const o = y * W;
+      for (let x = x0; x < x1; x++) if (v[o + x] < INK) s++;
+      if (s / (x1 - x0) > 몫) 몫 = s / (x1 - x0);
+    }
+  }
+  return 몫;
+}
+
 /**
  * `scan.page_frame` — 광곽 안쪽 위·아래. ⚠ 읽기와 자르기가 일부러 다름
  *   읽기 → `광곽합의`(안쪽까지 바짝), 자르기 → 옛 방식(넉넉하게)
@@ -421,9 +441,10 @@ function 광곽(g, cols, 읽기) {
     if (got) return got;
   }
   const H = g.높이;
-  const got = [];
+  const got = [], frames = [];
   for (let i = 0; i < cols.length; i++) {
     const f = 광곽한열(g, cols[i][0], cols[i][1]);
+    frames.push(f);
     if (f) got.push(f);
   }
   let T, B;
@@ -432,6 +453,19 @@ function 광곽(g, cols, 읽기) {
   } else {
     T = 자름(중앙값(got.map(function (f) { return f[0]; })));
     B = 자름(중앙값(got.map(function (f) { return f[1]; })));
+    const 문턱 = 읽기 ? FRAME_GUTTER : FRAME_GUTTER_CUT;
+    if (문턱) {                             // 옆 고랑까지 찬 줄만 광곽 — 굵은 글자 획 거르기 (봉황대 0009 · 권2 0653)
+      const 순 = cols.slice().sort(function (p, q) { return p[0] - q[0] || p[1] - q[1]; });
+      const 위 = [], 아래 = [];
+      for (let i = 0; i < cols.length; i++) {
+        const f = frames[i];
+        if (!f) continue;
+        if (고랑찬몫(g, 순, cols[i], f[0] - 10, f[0] - 2) >= 문턱) 위.push(f[0]);
+        if (고랑찬몫(g, 순, cols[i], f[1] + 2, f[1] + 10) >= 문턱) 아래.push(f[1]);
+      }
+      T = 위.length >= 2 ? 자름(중앙값(위)) : 자름(H * 0.06);
+      B = 아래.length >= 2 ? 자름(중앙값(아래)) : 자름(H * 0.95);
+    }
   }
   if (B - T < H * 0.4) { T = 자름(H * 0.06); B = 자름(H * 0.95); }
   return [T, B];
@@ -872,11 +906,11 @@ function 열가르기(sp, y0, y1, n, cands, lam) {
  * `scan.page_geometry` — 쪽 그림 → 열·글자 구간·세로 자간. 못 읽으면 null.
  * 무거운 계산은 여기 한 번뿐이고 뒤 단계는 이 결과를 돌려쓴다.
  */
-function 쪽기하(g, ratio, 단, 읽기, 표준자간) {
+function 쪽기하(g, ratio, 단, 읽기, 표준자간, 가장자리) {
   ratio = ratio || YX_RATIO;
   if (Array.isArray(단)) return 가름판기하(g, ratio, 단);   // 가름줄 판형
   단 = 단 || 1;
-  const 후보 = !!읽기 && 단 === 1;
+  const 후보 = !!읽기 && 단 === 1 && 가장자리 !== false;   // 가장자리=false — 후보 열 없이(`전사대조.js` 가 씀)
   const 찾 = 열찾기(g, !후보, 읽기 ? 표준자간 : null);
   const xpitch = 찾.자간;
   let cols0 = 찾.열;
@@ -1719,6 +1753,50 @@ function 모델만들기(설정, 세션, ort, 경계세션) {
       }
       return { 초: 초, 중: 중, 종: 종, 확신: 확신 };
     },
+    /**
+     * 상자들 → 세 머리의 소프트맥스 전부(`전사대조.js` 가 씀 — 전사 글자의 확률을 보려고).
+     * 반환 {L, V, T}: 상자 i 의 초성 확률은 L[i·nL … (i+1)·nL). 같은 상자는 한 번만 읽음.
+     */
+    확률: async function (g, boxes, 뭉치) {
+      뭉치 = 뭉치 || 256;
+      const n = boxes.length;
+      const nL = 설정.초성.length, nV = 설정.중성.length, nT = 설정.종성.length;
+      const L = new Float64Array(n * nL), V = new Float64Array(n * nV), T = new Float64Array(n * nT);
+      const 자리 = new Int32Array(n), 읽을 = [], 본 = new Map();
+      for (let i = 0; i < n; i++) {
+        const b = boxes[i], 열쇠 = b[0] + "," + b[1] + "," + b[2] + "," + b[3];
+        let j = 본.get(열쇠);
+        if (j === undefined) { j = 읽을.length; 본.set(열쇠, j); 읽을.push(b); }
+        자리[i] = j;
+      }
+      const u = 읽을.length;
+      const Lu = new Float64Array(u * nL), Vu = new Float64Array(u * nV), Tu = new Float64Array(u * nT);
+      function 펴기(a, off, m, out, o) {      // 소프트맥스 (최댓값을 빼고)
+        let mx = -Infinity;
+        for (let k = 0; k < m; k++) if (a[off + k] > mx) mx = a[off + k];
+        let s = 0;
+        for (let k = 0; k < m; k++) { const e = Math.exp(a[off + k] - mx); out[o + k] = e; s += e; }
+        for (let k = 0; k < m; k++) out[o + k] /= s;
+      }
+      for (let s = 0; s < u; s += 뭉치) {
+        const m = Math.min(뭉치, u - s);
+        const buf = new Float32Array(m * size * size);
+        for (let k = 0; k < m; k++) buf.set(오리기(g, 읽을[s + k], size), k * size * size);
+        const r = await 세션.run({ x: new ort.Tensor("float32", buf, [m, 1, size, size]) });
+        for (let k = 0; k < m; k++) {
+          펴기(r.L.data, k * nL, nL, Lu, (s + k) * nL);
+          펴기(r.V.data, k * nV, nV, Vu, (s + k) * nV);
+          펴기(r.T.data, k * nT, nT, Tu, (s + k) * nT);
+        }
+      }
+      for (let i = 0; i < n; i++) {
+        const j = 자리[i];
+        L.set(Lu.subarray(j * nL, (j + 1) * nL), i * nL);
+        V.set(Vu.subarray(j * nV, (j + 1) * nV), i * nV);
+        T.set(Tu.subarray(j * nT, (j + 1) * nT), i * nT);
+      }
+      return { L: L, V: V, T: T };
+    },
   };
 }
 
@@ -1827,6 +1905,8 @@ const API = {
     if (s.가장자리막대 !== undefined) EDGE_BAR = s.가장자리막대;
     if (s.가장자리계선 !== undefined) EDGE_GUIDE = s.가장자리계선;
     if (s.자간절반 !== undefined) RATIO_HALF = s.자간절반;
+    if (s.광곽고랑 !== undefined) FRAME_GUTTER = s.광곽고랑;
+    if (s.광곽고랑자르기 !== undefined) FRAME_GUTTER_CUT = s.광곽고랑자르기;
     if (s.가장자리안문턱 !== undefined) {
       EDGE_DROP_IN = s.가장자리안문턱;
       FRAME_SEG = s.세로줄토막; FRAME_FILL = s.세로줄덮개; FRAME_AGREE = s.세로줄합의;
