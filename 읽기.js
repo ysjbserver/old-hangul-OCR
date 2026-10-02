@@ -263,16 +263,44 @@ function 판심떼기(cols, ratio) {
  */
 let PITCH_OFF = 0.15, PITCH_ON = 0.12, PITCH_USE = true;   // scan.py · page.py 와 같은 값
 let PITCH_MORE = 1.5;   // 간격이 가까워도 다른 문턱이 열을 이 배 넘게 더 찾으면 바꿈(처음 보는 문헌의 흐린 쪽, 2026-10-01)
+let INK_EDGE = 0.0, EDGE_ZONE = 0.03, STRIP_FILL = 0.6;   // scan.INK_EDGE · EDGE_ZONE · STRIP_FILL — 스캔 끝의 제본 그림자 띠(자르는 경로만, 2026-10-02).
+                                                         // 기본 끔 — `전사대조.js` 가 `쪽기하(…, 끝띠=true)` 로 후보 하나만 만듦
 
-function 열찾기(g, 판심뗌, 표준자간) {
+/** `scan._끝띠지우기` — 양 끝 `몫` 에 걸친 진한 띠(높이의 STRIP_FILL 넘게 잉크)와 그 바깥을 0 으로 */
+function 끝띠지우기(ink, 높이, W, 몫) {
+  const e = 자름(W * 몫);
+  if (e <= 0) return ink;
+  const 진 = function (x) { return ink[x] > 높이 * STRIP_FILL; };
+  const out = Float64Array.from(ink);
+  let 왼 = -1;
+  for (let x = 0; x < e; x++) if (진(x)) 왼 = x;
+  if (왼 >= 0) {
+    let b = 왼;
+    while (b < W && 진(b)) b++;
+    for (let x = 0; x < b; x++) out[x] = 0;
+  }
+  let 오 = -1;
+  for (let x = W - e; x < W; x++) if (진(x)) { 오 = x; break; }
+  if (오 >= 0) {
+    let a = 오;
+    while (a >= 0 && 진(a)) a--;
+    for (let x = a + 1; x < W; x++) out[x] = 0;
+  }
+  return out;
+}
+
+function 열찾기(g, 판심뗌, 표준자간, 끝띠) {
   if (판심뗌 === undefined) 판심뗌 = true;
   const H = g.높이, W = g.너비, v = g.값;
   const y0 = 자름(H * 0.12), y1 = 자름(H * 0.88);
-  const ink = new Float64Array(W);
+  let ink = new Float64Array(W);
   for (let y = y0; y < y1; y++) {
     const o = y * W;
     for (let x = 0; x < W; x++) if (v[o + x] < INK) ink[x]++;
   }
+  // 스캔 끝의 제본 그림자 띠 — 자르는 경로(판심뗌)만. 읽는 경로는 `가장자리다듬기` 가 가림 (권2 0003)
+  const 몫 = 끝띠 === undefined || 끝띠 === null ? INK_EDGE : (끝띠 ? EDGE_ZONE : 0.0);
+  if (몫 && 판심뗌) ink = 끝띠지우기(ink, y1 - y0, W, 몫);
   let mx = 0;
   for (let x = 0; x < W; x++) if (ink[x] > mx) mx = ink[x];
   if (!(mx > 0)) return { 자간: null, 열: [] };
@@ -906,12 +934,12 @@ function 열가르기(sp, y0, y1, n, cands, lam) {
  * `scan.page_geometry` — 쪽 그림 → 열·글자 구간·세로 자간. 못 읽으면 null.
  * 무거운 계산은 여기 한 번뿐이고 뒤 단계는 이 결과를 돌려쓴다.
  */
-function 쪽기하(g, ratio, 단, 읽기, 표준자간, 가장자리) {
+function 쪽기하(g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠) {
   ratio = ratio || YX_RATIO;
   if (Array.isArray(단)) return 가름판기하(g, ratio, 단);   // 가름줄 판형
   단 = 단 || 1;
   const 후보 = !!읽기 && 단 === 1 && 가장자리 !== false;   // 가장자리=false — 후보 열 없이(`전사대조.js` 가 씀)
-  const 찾 = 열찾기(g, !후보, 읽기 ? 표준자간 : null);
+  const 찾 = 열찾기(g, !후보, 읽기 ? 표준자간 : null, 끝띠);
   const xpitch = 찾.자간;
   let cols0 = 찾.열;
   if (!cols0.length || !xpitch) return null;
@@ -1907,6 +1935,7 @@ const API = {
     if (s.자간절반 !== undefined) RATIO_HALF = s.자간절반;
     if (s.광곽고랑 !== undefined) FRAME_GUTTER = s.광곽고랑;
     if (s.광곽고랑자르기 !== undefined) FRAME_GUTTER_CUT = s.광곽고랑자르기;
+    if (s.잉크끝 !== undefined) { INK_EDGE = s.잉크끝; EDGE_ZONE = s.끝띠몫; STRIP_FILL = s.끝띠채움; }
     if (s.가장자리안문턱 !== undefined) {
       EDGE_DROP_IN = s.가장자리안문턱;
       FRAME_SEG = s.세로줄토막; FRAME_FILL = s.세로줄덮개; FRAME_AGREE = s.세로줄합의;

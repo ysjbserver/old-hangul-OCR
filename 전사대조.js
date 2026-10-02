@@ -31,6 +31,7 @@ const LAST = new Set(["왼쪽 여백"]), JOIN = new Set(["분주"]);
 const FIRST = new Set(["u", "du", "wu", "물결밑줄", "밑줄", "더크게", "더더크게", "크게", "작게",
   "가운데", "복원", "SIC", "sc", "글자크기"]);
 const 오식틀 = new Set(["SIC"]);
+const 큰틀 = new Set(["크게", "더크게", "더더크게"]);   // `대조.큰틀` — 큰 활자, '빼고 맞대기' 후보
 // 파이썬 `\s` 와 같은 빈칸(자바스크립트 `\s` 와 조금 다름 — \x1c-\x1f · \x85 가 있고 ﻿ 가 없음)
 const S = "\\t\\n\\v\\f\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
 const 속성 = new RegExp("^[" + S + "]*[A-Za-z-]+[" + S + "]*=");
@@ -38,8 +39,8 @@ const 다듬기 = function (s) { return s.replace(new RegExp("^[" + S + "]+|[" +
 const 제목꼴 = new RegExp("(?<![^\\n])[" + S + "]*=+[" + S + "]*([^\\n]*?)[" + S + "]*=+[" + S + "]*(?![^\\n])", "gd");
 const 빈칸꼴 = new RegExp("[" + S + "\\u200b]+", "g");
 
-function 틀남길것(이름, 인자) {
-  if (DROP.has(이름) || 이름.indexOf("왼쪽 여백/") === 0) return [];
+function 틀남길것(이름, 인자, 큰빼기) {
+  if (DROP.has(이름) || 이름.indexOf("왼쪽 여백/") === 0 || (큰빼기 && 큰틀.has(이름))) return [];
   if (JOIN.has(이름)) return 인자.slice(0, 2);
   if (LAST.has(이름)) return 인자.slice(-1);
   if (FIRST.has(이름)) return 인자.slice(0, 1);
@@ -101,7 +102,7 @@ function 표구간(t, 표) {
  * `대조.인쇄글자` — 위키 원문 → [[글자, 원문 시작, 원문 끝, {{SIC}} 안인가], …]
  * 글자는 `wikitext.letters(wikitext.printed_text(raw, 제목))` 와 같음. 자리는 자바스크립트 문자열 자리(UTF-16).
  */
-function 인쇄글자(raw, 제목) {
+function 인쇄글자(raw, 제목, 큰빼기) {
   let t = raw, pos = new Array(raw.length);
   for (let i = 0; i < raw.length; i++) pos[i] = i;
   const 오식 = new Set();
@@ -117,7 +118,7 @@ function 인쇄글자(raw, 제목) {
     조각.push([a, e1]);
     const 이름 = 다듬기(t.slice(조각[0][0], 조각[0][1]));
     const 인자 = 조각.slice(1).filter(function (ab) { return !속성.test(t.slice(ab[0], ab[1])); });
-    const 남길 = 틀남길것(이름, 인자);
+    const 남길 = 틀남길것(이름, 인자, 큰빼기);
     if (오식틀.has(이름)) for (const ab of 남길) for (let k = ab[0]; k < ab[1]; k++) 오식.add(pos[k]);
     [t, pos] = 걷어내기(t, pos, [{ s: m.index, e: m.index + m[0].length }], function () { return 남길; });
   }
@@ -492,22 +493,35 @@ function 같은후보(c, 들) {                                // 다른 자르�
 }
 
 // ── 한 쪽 (`대조.한쪽` · `_한번`) ──
-async function 한번(A, 모델, 읽개, 기하얻기, raw, 제목, 경계, 기하들) {
+// 기하 후보: false = 자르는 기하 · true = 읽는 기하 · "끝띠" = 제본 그림자 띠를 지운 자르는 기하(권2 0003 — 전사문과 더 잘 맞을 때만).
+// 큰빼기: 큰 활자 틀(책 이름) 안 글자를 빼고 맞대기 — null 이면 그대로 해 보고, 잘 안 맞고 큰 활자 틀이 있으면 빼고도.
+async function 한번(A, 모델, 읽개, 기하얻기, raw, 제목, 경계, 기하들, 큰빼기) {
   const 시도 = (제목 === null || 제목 === undefined) ? [false, true] : [제목];
+  const 큰있음 = Array.from(큰틀).some(function (n) { return new RegExp("\\{\\{[" + S + "]*" + n + "[" + S + "]*\\|").test(raw); });
+  const 빼기들 = (큰빼기 === null || 큰빼기 === undefined) ? [false, true] : [큰빼기];
   let best = null;
-  for (const 읽기 of 기하들) {
-    if (best && (best[0].일치 || 0) >= 다시볼일치) break;     // 자르는 기하로 잘 맞았으면 그만
-    const geo = 기하얻기(읽기);
-    if (!geo) continue;
-    let 이전 = null;
-    for (const kh of 시도) {
-      const 글자들 = 인쇄글자(raw, kh);
-      if (이전 !== null && 글자들.length === 이전) continue;   // 제목이 없는 쪽 — 같은 것을 두 번 안 함
-      이전 = 글자들.length;
-      const r = await 맞대기(A, 모델, 읽개, geo, 글자들, 3, 경계);
-      r.기하 = 읽기 ? "읽기" : "자르기";
-      r.제목 = kh;
-      if (best === null || (r.일치 || -1) > (best[0].일치 || -1)) best = [r, 글자들];
+  const 본열 = {};
+  for (const 빼기 of 빼기들) {
+    if (빼기 && (큰빼기 === null || 큰빼기 === undefined) && (!큰있음 || (best && (best[0].일치 || 0) >= 다시볼일치))) break;
+    for (const 판 of 기하들) {
+      if (best && (best[0].일치 || 0) >= 다시볼일치) break;     // 자르는 기하로 잘 맞았으면 그만
+      const 읽기 = 판 === true, 끝띠 = 판 === "끝띠";
+      if (끝띠 && !("자르기" in 본열)) { const g0 = 기하얻기(false, false); 본열.자르기 = g0 ? g0.cols : null; }
+      const geo = 기하얻기(읽기, 끝띠);
+      if (!geo) continue;
+      if (끝띠 && JSON.stringify(geo.cols) === JSON.stringify(본열.자르기)) continue;   // 띠가 없는 쪽 — 자르는 기하와 같음
+      if (!읽기 && !끝띠) 본열.자르기 = geo.cols;
+      let 이전 = null;
+      for (const kh of 시도) {
+        const 글자들 = 인쇄글자(raw, kh, 빼기);
+        if (이전 !== null && 글자들.length === 이전) continue;   // 제목이 없는 쪽 — 같은 것을 두 번 안 함
+        이전 = 글자들.length;
+        const r = await 맞대기(A, 모델, 읽개, geo, 글자들, 3, 경계);
+        r.기하 = 끝띠 ? "끝띠" : (읽기 ? "읽기" : "자르기");
+        r.제목 = kh;
+        r.큰빼기 = 빼기;
+        if (best === null || (r.일치 || -1) > (best[0].일치 || -1)) best = [r, 글자들];
+      }
     }
   }
   if (best === null) return [{ 사유: "스캔에서 열을 못 찾았습니다" }, []];
@@ -525,25 +539,25 @@ async function 한쪽(모델, g, raw, 옵션) {
   const A = 전역.옛한글읽기;
   const s = 옵션.문헌설정 || null;
   const 합의 = 옵션.합의 !== false, 밀림 = !!옵션.밀림;
-  const 기하들 = 옵션.기하들 || [false, true];
+  const 기하들 = 옵션.기하들 || [false, true, "끝띠"];
   const 읽개 = 읽개만들기(모델, g);
   let 쪽자간 = undefined;
   const 보관 = {};
-  const 기하얻기 = function (읽기) {                       // `대조.기하` — 가장자리 후보 열 없이
-    const 열쇠 = 읽기 ? "읽기" : "자르기";
+  const 기하얻기 = function (읽기, 끝띠) {                 // `대조.기하` — 가장자리 후보 열 없이(끝띠 = 제본 그림자 띠를 지우고)
+    const 열쇠 = (읽기 ? "읽기" : "자르기") + (끝띠 ? "끝띠" : "");
     if (열쇠 in 보관) return 보관[열쇠];
     let geo;
     if (s) {
       const r = (읽기 && s.읽기자간비) || s.자간비 || null;
       const 표준 = (읽기 && s.판짜임) ? s.판짜임.자간 : null;
-      geo = A.쪽기하(g, r, s.단 || 1, 읽기, 표준, false);
+      geo = A.쪽기하(g, r, s.단 || 1, 읽기, 표준, false, !!끝띠);
     } else {
       if (쪽자간 === undefined) 쪽자간 = A.쪽자간비(g, 1);
-      geo = A.쪽기하(g, 쪽자간, 1, 읽기, null, false);
+      geo = A.쪽기하(g, 쪽자간, 1, 읽기, null, false, !!끝띠);
     }
     return (보관[열쇠] = geo);
   };
-  const 처음 = await 한번(A, 모델, 읽개, 기하얻기, raw, 옵션.제목, false, 기하들);
+  const 처음 = await 한번(A, 모델, 읽개, 기하얻기, raw, 옵션.제목, false, 기하들, null);
   const r = 처음[0], 글자들 = 처음[1];
   if (r.사유) return r;
   if (!밀림) r.후보 = r.후보.filter(function (c) { return c.갈래 !== "빠짐" && c.갈래 !== "더들어감"; });
@@ -554,7 +568,7 @@ async function 한쪽(모델, g, raw, 옵션) {
   for (const 판 of [["B", 기하들], ["C", [true]]]) {
     const 남은 = 낱.filter(function (c) { return !c.합의; });
     if (!합의 || !남은.length) break;
-    const 다시 = await 한번(A, 모델, 읽개, 기하얻기, raw, r.제목, true, 판[1]);
+    const 다시 = await 한번(A, 모델, 읽개, 기하얻기, raw, r.제목, true, 판[1], r.큰빼기);
     r.합의본.push(판[0]);
     if (다시[0].사유 || 다시[1].length !== 글자들.length) continue;
     남은.forEach(function (c) { c.합의 = 같은후보(c, 다시[0].후보); });
