@@ -493,7 +493,8 @@ function 같은후보(c, 들) {                                // 다른 자르�
 }
 
 // ── 한 쪽 (`대조.한쪽` · `_한번`) ──
-// 기하 후보: false = 자르는 기하 · true = 읽는 기하 · "끝띠" = 제본 그림자 띠를 지운 자르는 기하(권2 0003 — 전사문과 더 잘 맞을 때만).
+// 기하 후보: false = 자르는 기하 · true = 읽는 기하 · "끝띠" = 제본 그림자 띠를 지운 자르는 기하(권2 0003 — 전사문과 더 잘 맞을 때만)
+// · "판심" = 판심 걸러내기를 끈 읽는 기하(훈아진언 1894 PDF 58쪽 — 광곽에 붙은 끝 열을 판심으로 뗌).
 // 큰빼기: 큰 활자 틀(책 이름) 안 글자를 빼고 맞대기 — null 이면 그대로 해 보고, 잘 안 맞고 큰 활자 틀이 있으면 빼고도.
 async function 한번(A, 모델, 읽개, 기하얻기, raw, 제목, 경계, 기하들, 큰빼기) {
   const 시도 = (제목 === null || 제목 === undefined) ? [false, true] : [제목];
@@ -505,19 +506,22 @@ async function 한번(A, 모델, 읽개, 기하얻기, raw, 제목, 경계, 기�
     if (빼기 && (큰빼기 === null || 큰빼기 === undefined) && (!큰있음 || (best && (best[0].일치 || 0) >= 다시볼일치))) break;
     for (const 판 of 기하들) {
       if (best && (best[0].일치 || 0) >= 다시볼일치) break;     // 자르는 기하로 잘 맞았으면 그만
-      const 읽기 = 판 === true, 끝띠 = 판 === "끝띠";
+      const 판심 = 판 === "판심", 읽기 = 판 === true || 판심, 끝띠 = 판 === "끝띠";
       if (끝띠 && !("자르기" in 본열)) { const g0 = 기하얻기(false, false); 본열.자르기 = g0 ? g0.cols : null; }
-      const geo = 기하얻기(읽기, 끝띠);
+      if (판심 && !("읽기" in 본열)) { const g0 = 기하얻기(true, false); 본열.읽기 = g0 ? g0.cols : null; }
+      const geo = 기하얻기(읽기, 끝띠, 판심);
       if (!geo) continue;
       if (끝띠 && JSON.stringify(geo.cols) === JSON.stringify(본열.자르기)) continue;   // 띠가 없는 쪽 — 자르는 기하와 같음
+      if (판심 && JSON.stringify(geo.cols) === JSON.stringify(본열.읽기)) continue;     // 뗀 판심 열이 없는 쪽 — 읽는 기하와 같음
       if (!읽기 && !끝띠) 본열.자르기 = geo.cols;
+      if (읽기 && !판심) 본열.읽기 = geo.cols;
       let 이전 = null;
       for (const kh of 시도) {
         const 글자들 = 인쇄글자(raw, kh, 빼기);
         if (이전 !== null && 글자들.length === 이전) continue;   // 제목이 없는 쪽 — 같은 것을 두 번 안 함
         이전 = 글자들.length;
         const r = await 맞대기(A, 모델, 읽개, geo, 글자들, 3, 경계);
-        r.기하 = 끝띠 ? "끝띠" : (읽기 ? "읽기" : "자르기");
+        r.기하 = 판심 ? "판심" : (끝띠 ? "끝띠" : (읽기 ? "읽기" : "자르기"));
         r.제목 = kh;
         r.큰빼기 = 빼기;
         if (best === null || (r.일치 || -1) > (best[0].일치 || -1)) best = [r, 글자들];
@@ -539,12 +543,13 @@ async function 한쪽(모델, g, raw, 옵션) {
   const A = 전역.옛한글읽기;
   const s = 옵션.문헌설정 || null;
   const 합의 = 옵션.합의 !== false, 밀림 = !!옵션.밀림;
-  const 기하들 = 옵션.기하들 || [false, true, "끝띠"];
+  const 기하들 = 옵션.기하들 || [false, true, "끝띠", "판심"];
   const 읽개 = 읽개만들기(모델, g);
   let 쪽자간 = undefined;
   const 보관 = {};
-  const 기하얻기 = function (읽기, 끝띠) {                 // `대조.기하` — 가장자리 후보 열 없이(끝띠 = 제본 그림자 띠를 지우고)
-    const 열쇠 = (읽기 ? "읽기" : "자르기") + (끝띠 ? "끝띠" : "");
+  const 기하얻기 = function (읽기, 끝띠, 판심) {           // `대조.기하` — 가장자리 후보 열 없이(끝띠 = 제본 그림자 띠를 지우고 · 판심 = 판심 걸러내기 끔)
+    const 열쇠 = (읽기 ? "읽기" : "자르기") + (끝띠 ? "끝띠" : "") + (판심 ? "판심" : "");
+    const 판 = 판심 ? false : undefined;
     if (열쇠 in 보관) return 보관[열쇠];
     let geo;
     if (s) {
@@ -554,10 +559,10 @@ async function 한쪽(모델, g, raw, 옵션) {
         r = 쪽자간;
       }
       const 표준 = (읽기 && s.판짜임) ? s.판짜임.자간 : null;
-      geo = A.쪽기하(g, r, s.단 || 1, 읽기, 표준, false, !!끝띠);
+      geo = A.쪽기하(g, r, s.단 || 1, 읽기, 표준, false, !!끝띠, 판);
     } else {
       if (쪽자간 === undefined) 쪽자간 = A.쪽자간비(g, 1);
-      geo = A.쪽기하(g, 쪽자간, 1, 읽기, null, false, !!끝띠);
+      geo = A.쪽기하(g, 쪽자간, 1, 읽기, null, false, !!끝띠, 판);
     }
     return (보관[열쇠] = geo);
   };
@@ -569,7 +574,7 @@ async function 한쪽(모델, g, raw, 옵션) {
   const 낱 = r.후보.filter(function (c) { return 낱갈래.indexOf(c.갈래) >= 0; });
   r.후보.forEach(function (c) { c.합의 = 낱갈래.indexOf(c.갈래) < 0 || !합의; });
   // 다르게 한 번 더 잘라서 남는 것만 펼쳐 보임 — B: 배운 경계 검출기를 섞은 자르기, C: 읽는 기하 + 검출기
-  for (const 판 of [["B", 기하들], ["C", [true]]]) {
+  for (const 판 of [["B", 기하들], ["C", [true, "판심"]]]) {
     const 남은 = 낱.filter(function (c) { return !c.합의; });
     if (!합의 || !남은.length) break;
     const 다시 = await 한번(A, 모델, 읽개, 기하얻기, raw, r.제목, true, 판[1], r.큰빼기);

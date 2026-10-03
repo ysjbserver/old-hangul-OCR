@@ -934,12 +934,12 @@ function 열가르기(sp, y0, y1, n, cands, lam) {
  * `scan.page_geometry` — 쪽 그림 → 열·글자 구간·세로 자간. 못 읽으면 null.
  * 무거운 계산은 여기 한 번뿐이고 뒤 단계는 이 결과를 돌려쓴다.
  */
-function 쪽기하(g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠) {
+function 쪽기하(g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, 판심) {
   ratio = ratio || YX_RATIO;
   if (Array.isArray(단)) return 가름판기하(g, ratio, 단);   // 가름줄 판형
   단 = 단 || 1;
   const 후보 = !!읽기 && 단 === 1 && 가장자리 !== false;   // 가장자리=false — 후보 열 없이(`전사대조.js` 가 씀)
-  const 찾 = 열찾기(g, !후보, 읽기 ? 표준자간 : null, 끝띠);
+  const 찾 = 열찾기(g, 판심 === undefined || 판심 === null ? !후보 : !!판심, 읽기 ? 표준자간 : null, 끝띠);   // 판심=false — 판심 걸러내기만 끔(전사대조 후보)
   const xpitch = 찾.자간;
   let cols0 = 찾.열;
   if (!cols0.length || !xpitch) return null;
