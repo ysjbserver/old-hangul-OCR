@@ -548,7 +548,11 @@ async function 한쪽(모델, g, raw, 옵션) {
     if (열쇠 in 보관) return 보관[열쇠];
     let geo;
     if (s) {
-      const r = (읽기 && s.읽기자간비) || s.자간비 || null;
+      let r = (읽기 && s.읽기자간비) || s.자간비 || null;
+      if (!r) {                                          // 판형만 정하고 자간비는 못 잰 파일 — 이 쪽 그림으로
+        if (쪽자간 === undefined) 쪽자간 = A.쪽자간비(g, s.단 || 1);
+        r = 쪽자간;
+      }
       const 표준 = (읽기 && s.판짜임) ? s.판짜임.자간 : null;
       geo = A.쪽기하(g, r, s.단 || 1, 읽기, 표준, false, !!끝띠);
     } else {
@@ -965,7 +969,7 @@ function 준비() {
 }
 
 // 스캔 — OCR 소도구와 같은 방법(⚠ 여러 쪽 파일은 API 가 너비를 무시함 → 주소를 한 번 받아 `/page{쪽}-1920px-` 만 갈아 끼움)
-var 주소틀 = {};
+var 주소틀 = {}, 쪽수 = {};
 function 주소틀얻기(파일) {
   var 너비 = (설정 && 설정.스캔너비) || 1920;
   return 주소틀[파일] ? Promise.resolve(주소틀[파일]) : new mw.Api().get({
@@ -978,6 +982,7 @@ function 주소틀얻기(파일) {
     if (!ii || !ii.thumburl) throw new Error("스캔 주소를 못 받았습니다. 파일 이름이 맞는지 보세요: " + 파일);
     var u = ii.thumburl.split("?")[0];
     if (!/\/page\d+-\d+px-/.test(u)) throw new Error("이 파일은 여러 쪽짜리(PDF·DjVu)가 아닌 것 같습니다: " + 파일);
+    쪽수[파일] = ii.pagecount || 0;                    // 판형 살필 쪽 고르기에 씀
     return (주소틀[파일] = u.replace(/\/page\d+-\d+px-/, "/page{N}-" + 너비 + "px-"));
   });
 }
@@ -1002,13 +1007,17 @@ function 스캔가져오기(파일, 쪽) {
   });
 }
 
-// OCR 소도구가 이 파일을 살펴 기억해 둔 판형 · 자간비 · 판짜임(`판형판` 3)이 있으면 그것, 없으면 이 쪽 그림으로 잼
-function 파일설정(파일) {
-  try {
-    var 적힌 = JSON.parse(localStorage.getItem("옛한글OCR:판형:" + 파일));
-    if (적힌 && 적힌.판 === 3 && 적힌.값) return 적힌.값;
-  } catch (e) { /* 저장소를 못 쓰면 이 쪽으로 잼 */ }
-  return null;
+// 이 파일의 판형 · 자간비 · 판짜임 — OCR 소도구와 **같은** 셈 · 같은 기억 칸(`읽기.js` 의 `판형살피기`, 2026-10-03).
+// 소도구로 먼저 연 파일이면 기억한 값, 처음이면 쪽 몇 장을 받아 정함(처음 한 번 1~3분)
+function 판형살피기(파일) {
+  if (!window.옛한글읽기.판형살피기) {          // 브라우저가 옛 읽기.js 를 기억하는 중(jsDelivr 최대 7일)
+    return Promise.reject(new Error("읽기.js 가 옛 판입니다 — 편집 창을 Ctrl+Shift+R 로 새로 고쳐 주세요."));
+  }
+  return window.옛한글읽기.판형살피기(파일, {
+    쪽수: function () { return 주소틀얻기(파일).then(function () { return 쪽수[파일] || 0; }); },
+    받기: function (p) { return 스캔가져오기(파일, p); },
+    알림: 알림,
+  });
 }
 
 /** 상자 i 와 같은 열의 앞뒤 글자까지 오려 빨간 테를 두른 그림(data: 주소) — `대조.조각그림` */
@@ -1037,12 +1046,13 @@ async function 시작() {
   try {
     var 본문 = 상자.value;
     await 준비();
+    var 살핀 = await 판형살피기(쪽.파일);
     알림("스캔을 받는 중…");
     var im = await 스캔가져오기(쪽.파일, 쪽.쪽);
     var g = window.옛한글읽기.그림읽기(im);
     알림("스캔과 맞대는 중… (화면이 잠깐 멎을 수 있습니다)");
     await new Promise(function (ok) { setTimeout(ok, 30); });   // 알림이 먼저 그려지게
-    var 답 = await 셈.한쪽(모델, g, 본문, { 문헌설정: 파일설정(쪽.파일) });
+    var 답 = await 셈.한쪽(모델, g, 본문, { 문헌설정: 살핀 });
     if (답.사유) throw new Error(답.사유);
     if (상자.value !== 본문) throw new Error("맞대는 사이에 편집 상자가 바뀌었습니다 — 다시 눌러 주세요.");
     답.초 = ((performance.now() - t0) / 1000).toFixed(1);

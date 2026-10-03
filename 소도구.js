@@ -138,68 +138,19 @@ function 준비() {
 }
 
 /**
- * 파일마다 처음 한 번 — 판형(1 · 2 · 가름줄 높이 목록) · 자간비 · 판짜임을 쪽 몇 장으로 정하기.
+ * 파일마다 처음 한 번 — 판형 · 자간비 · 판짜임. 셈은 `읽기.js` 의 `판형살피기`(전사대조와 같은 것)
  * ★ 모든 파일을 스스로 잼 — `설정.json` 에 문헌 표를 두지 않음(2026-10-01, 작업자 결정)
- * 고르게 12쪽(가름줄)·8쪽(가운데 줄 · 자간비)을 받고, 판짜임은 받은 쪽 모두로. 정한 것은 브라우저에 기억.
- * → {단, 자간비, 판짜임} — `읽기.js` 의 `한쪽` 이 받는 문헌 설정 그대로(못 잰 것은 빠짐 = 기본값)
- * ⚠ 판정 규칙을 바꾸면 `판형판` 을 올릴 것 — 안 올리면 기억한 옛 판정을 씀
- * ⚠ 자간비·판짜임 없이 읽으면 떼어 둔 쪽 평균 2.4 → 4.3%(2026-10-01) — 판 2 부터 잼
- * 판 3 — 자간비 두 배 착각 막기(`RATIO_HALF`, 2026-10-02)
+ * ⚠ 판정 규칙을 바꾸면 `읽기.js` 의 `판형판` 을 올릴 것
  */
-var 판형판 = 3;
-var 판형기억 = {};
-
-function 고르게(n, k) {             // 1…n 쪽에서 고르게 k 개
-  var 쪽들 = [];
-  for (var i = 1; i <= n; i++) 쪽들.push(i);
-  if (k <= 0 || n <= k) return 쪽들;
-  var step = Math.max(1, Math.floor(n / k)), out = [];
-  for (var j = 0; j < n && out.length < k; j += step) out.push(쪽들[j]);
-  return out;
-}
-
-async function 판형살피기(파일) {
-  if (판형기억[파일] !== undefined) return 판형기억[파일];
-  var 키 = "옛한글OCR:판형:" + 파일;
-  try {
-    var 적힌 = JSON.parse(localStorage.getItem(키));
-    if (적힌 && 적힌.판 === 판형판) return (판형기억[파일] = 적힌.값);
-  } catch (e) { /* 저장소를 못 쓰면 매번 살핌 */ }
-  await 주소틀얻기(파일);
-  var n = 쪽수[파일] || 0;
-  if (!n) return (판형기억[파일] = { 단: 1 });   // 쪽 수를 모르면 한 단 · 기본 자간
-  var 가름쪽 = 고르게(n, 12), 단쪽 = 고르게(n, 8);
-  var 모두 = 가름쪽.concat(단쪽.filter(function (p) { return 가름쪽.indexOf(p) < 0; }));
-  var A = window.옛한글읽기, 가름 = {}, 단 = {}, 그림 = {}, 짜임 = [];
-  for (var i = 0; i < 모두.length; i++) {
-    알림("이 파일의 판형·자간을 살피는 중… (" + (i + 1) + "/" + 모두.length
-         + "쪽, 이 파일은 처음 한 번만)");
-    var p = 모두[i];
-    try {
-      var g = A.그림읽기(await 스캔가져오기(파일, p));
-      if (가름쪽.indexOf(p) >= 0) 가름[p] = A.가름줄측정(g);
-      if (단쪽.indexOf(p) >= 0) { 단[p] = A.단측정(g); 그림[p] = g; }   // 자간비는 판형을 정한 뒤에
-      var 찾 = A.열찾기(g);
-      짜임.push(찾.열.length && 찾.자간 ? [찾.자간, 찾.열.length] : null);
-    } catch (e) {
-      console.warn("판형 살피기 — " + p + "쪽을 못 받았습니다", e);
-      가름[p] = null; 단[p] = null;           // 못 잰 쪽
-    }
+function 판형살피기(파일) {
+  if (!window.옛한글읽기.판형살피기) {          // 브라우저가 옛 읽기.js 를 기억하는 중(jsDelivr 최대 7일)
+    return Promise.reject(new Error("읽기.js 가 옛 판입니다 — 편집 창을 Ctrl+Shift+R 로 새로 고쳐 주세요."));
   }
-  var 판형 = A.판형정하기(가름쪽.map(function (p) { return 가름[p] || null; }),
-                         단쪽.map(function (p) { return 단[p] || null; }));
-  알림("이 파일의 자간을 재는 중…");
-  var 자간 = A.문헌자간비(단쪽.map(function (p) {
-    try { return 그림[p] ? A.쪽자간비(그림[p], 판형) : null; }
-    catch (e) { console.warn("자간 재기 — " + p + "쪽", e); return null; }
-  }));
-  var 값 = { 단: 판형 };
-  if (자간) 값.자간비 = 자간;
-  var 판짜임 = A.판짜임정하기(짜임);
-  if (판짜임) 값.판짜임 = 판짜임;
-  판형기억[파일] = 값;
-  try { localStorage.setItem(키, JSON.stringify({ 판: 판형판, 값: 값 })); } catch (e) { }
-  return 값;
+  return window.옛한글읽기.판형살피기(파일, {
+    쪽수: function () { return 주소틀얻기(파일).then(function () { return 쪽수[파일] || 0; }); },
+    받기: function (p) { return 스캔가져오기(파일, p); },
+    알림: 알림,
+  });
 }
 
 function 판형글(값) {
