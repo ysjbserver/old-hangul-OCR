@@ -144,7 +144,9 @@ function 준비() {
  */
 function 판형살피기(파일) {
   if (!window.옛한글읽기.판형살피기) {          // 브라우저가 옛 읽기.js 를 기억하는 중(jsDelivr 최대 7일)
-    return Promise.reject(new Error("읽기.js 가 옛 판입니다 — 편집 창을 Ctrl+Shift+R 로 새로 고쳐 주세요."));
+    var 오류 = new Error("읽기.js 가 옛 판입니다 — 편집 창을 Ctrl+Shift+R 로 새로 고쳐 주세요.");
+    오류.name = "OldReadJsVersionError";
+    return Promise.reject(오류);
   }
   return window.옛한글읽기.판형살피기(파일, {
     쪽수: function () { return 주소틀얻기(파일).then(function () { return 쪽수[파일] || 0; }); },
@@ -204,7 +206,9 @@ async function 읽기시작() {
          + " · " + r.상자수 + "상자 " + 초 + "초(" + 실행기[0] + ")"
          + (r.판정.까닭.length ? " · " + r.판정.까닭.join(" · ") : ""));
   } catch (e) {
-    알림("멈췄습니다: " + e.message);
+    알림(e && e.name === "OldReadJsVersionError"
+      ? e.message
+      : "멈췄습니다: " + e.message);
     console.error(e);
   } finally {
     단추.disabled = false;

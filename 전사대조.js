@@ -1016,7 +1016,9 @@ function 스캔가져오기(파일, 쪽) {
 // 소도구로 먼저 연 파일이면 기억한 값, 처음이면 쪽 몇 장을 받아 정함(처음 한 번 1~3분)
 function 판형살피기(파일) {
   if (!window.옛한글읽기.판형살피기) {          // 브라우저가 옛 읽기.js 를 기억하는 중(jsDelivr 최대 7일)
-    return Promise.reject(new Error("읽기.js 가 옛 판입니다 — 편집 창을 Ctrl+Shift+R 로 새로 고쳐 주세요."));
+    var 오류 = new Error("읽기.js 가 옛 판입니다 — 편집 창을 Ctrl+Shift+R 로 새로 고쳐 주세요.");
+    오류.name = "OldReadJsVersionError";
+    return Promise.reject(오류);
   }
   return window.옛한글읽기.판형살피기(파일, {
     쪽수: function () { return 주소틀얻기(파일).then(function () { return 쪽수[파일] || 0; }); },
@@ -1073,7 +1075,8 @@ async function 시작() {
     알림("볼 곳 " + 후보들.filter(확실).length + "곳" + (칠함 ? "" : " — 구문 강조가 켜져 있어 편집 상자에는 칠하지 못했습니다(끄면 칠합니다)"));
   } catch (e) {
     console.error(e);
-    알림("✗ " + (e && e.message ? e.message : e));
+    var 메시지 = e && e.message ? e.message : e;
+    알림(e && e.name === "OldReadJsVersionError" ? 메시지 : "✗ " + 메시지);
   } finally {
     단추.disabled = false;
   }
