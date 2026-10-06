@@ -948,6 +948,30 @@ var 자료 = window.옛한글OCR자료 || "";
 if (자료 && 자료.charAt(자료.length - 1) !== "/") 자료 += "/";
 var 설정 = null, 모델 = null, 준비중 = null;
 
+// Toolforge 서버(`툴포지/app.py`, 2026-10-07) — 있으면 맞대기를 서버에 맡김(파이썬 `대조.한쪽` — 답의 꼴이 `셈.한쪽` 과 같음).
+// 서버가 내주는 이 파일의 맨 앞 줄이 채움. OCR 소도구와 같은 서버 · 같은 판형 살피기
+var 서버 = window.옛한글OCR서버 || "";
+if (서버 && 서버.charAt(서버.length - 1) !== "/") 서버 += "/";
+
+async function 서버살피기(파일) {
+  for (;;) {
+    var 답 = await (await fetch(서버 + "api/inspect?file=" + encodeURIComponent(파일))).json();
+    if (답.상태 === "끝") return 답.값;
+    if (답.상태 === "오류" || 답.오류) throw new Error(답.오류 || "서버가 판형을 못 살폈습니다");
+    알림("이 파일의 판형·자간을 서버에서 살피는 중… (" + 답.진행 + ", 이 파일은 처음 한 번만)");
+    await new Promise(function (ok) { setTimeout(ok, 2000); });
+  }
+}
+
+async function 서버로(경로, 몸) {
+  var res = await fetch(서버 + 경로, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(몸),
+  });
+  var 답 = await res.json();
+  if (!res.ok || 답.오류) throw new Error(답.오류 || ("서버 오류 " + res.status));
+  return 답;
+}
+
 function 스크립트(url) {
   return new Promise(function (ok, no) {
     var s = document.createElement("script");
@@ -1055,20 +1079,27 @@ async function 시작() {
   var t0 = performance.now();
   try {
     var 본문 = 상자.value;
-    await 준비();
-    var 살핀 = await 판형살피기(쪽.파일);
-    알림("스캔 파일을 받는 중…");
-    var im = await 스캔가져오기(쪽.파일, 쪽.쪽);
-    알림("문자를 대조하는 중… (화면이 잠깐 멎을 수 있습니다)");
-    await new Promise(function (ok) { setTimeout(ok, 30); });   // 알림이 먼저 그려지게
-    var g = window.옛한글읽기.그림읽기(im);
-    var 답 = await 셈.한쪽(모델, g, 본문, { 문헌설정: 살핀 });
+    var 답, im = null;
+    if (서버) {                                         // 후보 그림(data: 주소)까지 서버가 붙여 줌
+      await 서버살피기(쪽.파일);
+      알림("서버에서 문자를 대조하는 중…");
+      답 = await 서버로("api/compare", { file: 쪽.파일, page: 쪽.쪽, text: 본문 });
+    } else {
+      await 준비();
+      var 살핀 = await 판형살피기(쪽.파일);
+      알림("스캔 파일을 받는 중…");
+      im = await 스캔가져오기(쪽.파일, 쪽.쪽);
+      알림("문자를 대조하는 중… (화면이 잠깐 멎을 수 있습니다)");
+      await new Promise(function (ok) { setTimeout(ok, 30); });   // 알림이 먼저 그려지게
+      var g = window.옛한글읽기.그림읽기(im);
+      답 = await 셈.한쪽(모델, g, 본문, { 문헌설정: 살핀 });
+    }
     if (답.사유) throw new Error(답.사유);
     if (상자.value !== 본문) throw new Error("맞대는 사이에 편집 상자가 바뀌었습니다 — 다시 눌러 주세요.");
     답.초 = ((performance.now() - t0) / 1000).toFixed(1);
     후보들 = 답.후보.map(function (c) {
       c.원문 = 본문.slice(c.시작, c.끝);
-      if (c.상자번호 >= 0) c.그림 = 조각그림(im, 답.상자, c.상자번호, (c.갈래 === "빠짐" || c.갈래 === "더들어감") ? 2 : 1);
+      if (im && c.상자번호 >= 0) c.그림 = 조각그림(im, 답.상자, c.상자번호, (c.갈래 === "빠짐" || c.갈래 === "더들어감") ? 2 : 1);
       return c;
     });
     기준글 = 본문;

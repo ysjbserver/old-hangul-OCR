@@ -1,70 +1,120 @@
-# 옛한글 OCR — 위키문헌 소도구
+# 옛한글 OCR — Toolforge 판
 
-한국어 위키문헌(ko.wikisource.org)의 페이지 이름공간 편집 창에서 작동하는 OCR 도구입니다.
-19~20세기 한글 인쇄본을 대상으로 합니다. 그 이전의 옛한글, 한자, 숫자 등의 특수기호는 인식하지 못합니다.
-브라우저 안에서 모두 작동되게 설계되어 있습니다. (스캔 파일을 서버로 보내거나 하는 과정을 거치지 않습니다. 대신 느립니다)
+위키문헌(ko.wikisource.org)의 옛한글 스캔을 읽는 도구를 [Toolforge](https://wikitech.wikimedia.org/wiki/Help:Toolforge)에서 돌리는 묶음입니다.
+모델(ONNX, CPU)은 **서버에서** 돌고, 위키문헌 편집 창의 소도구와 영역 지정 화면이 서버에 묻습니다.
 
-## 설치
+| 도구 | 무엇 | 주소 |
+|---|---|---|
+| OCR 소도구 | 「페이지:」 편집 창에서 그 쪽 스캔을 읽어 편집 상자에 넣음 | `ocr.js` |
+| 전사대조 소도구 | 이미 전사된 글을 스캔과 맞대어 틀렸을 만한 글자를 짚음 | `compare.js` |
+| 영역 지정 | 스캔 위에 상자를 쳐서 그 열 · 글자만 읽음 | `region/` |
 
-[특수:내사용자문서/common.js](https://ko.wikisource.org/wiki/Special:MyPage/common.js) 에 두 줄을 넣고 저장한 뒤 새로 고침하세요.
+이 폴더는 프로젝트의 `python 툴포지/만들기.py` 가 만든 것입니다. **손으로 고치지 마세요.**
 
-```javascript
-window.옛한글OCR자료 = "https://cdn.jsdelivr.net/gh/ysjbserver/old-hangul-OCR@v4/";
-mw.loader.load(window.옛한글OCR자료 + "소도구.js");
+---
+
+## 올리는 차례
+
+### 처음 한 번만
+
+1. **도구 만들기** — <https://toolsadmin.wikimedia.org/> 에 로그인 → 'Tools' → 'Create new tool'.
+   이름은 **`old-hangul-ocr`**(GitHub 저장소 `old-hangul-OCR` 과 맞춤 — 만든 뒤에는 못 바꿉니다). 도구 주소가 `https://old-hangul-ocr.toolforge.org/` 가 됩니다.
+2. **SSH 열쇠 등록** — PowerShell 에서 한 줄씩:
+   ```
+   ssh-keygen -t ed25519
+   ```
+   ```
+   Get-Content $HOME\.ssh\id_ed25519.pub
+   ```
+   나온 한 줄(`ssh-ed25519 …`)을 toolsadmin 의 내 설정 → 'SSH keys' 에 붙여 넣습니다.
+3. **GitHub 브랜치 만들기** — 브라우저판과 같은 공개 저장소(`ysjbserver/old-hangul-OCR`)에 **`toolforge-test` 브랜치**를 하나 만듭니다.
+   GitHub Desktop 에서 'Current branch' → 'New branch' → 이름 `toolforge-test`. 이 브랜치에는 Toolforge 묶음만 둡니다
+   (브라우저판 파일은 지움 — `main` · `beta-test` 의 브라우저판 · jsDelivr 주소는 그대로).
+   Toolforge 판이 자리 잡으면 이 내용을 `main` 으로 옮깁니다 — 그 뒤로는 `main` 에 올리고 빌드 명령의 `--ref …` 를 뺍니다.
+   ⚠ 그때도 태그 `v1`~`v3.2` 는 지우지 마세요(그 주소로 브라우저판을 쓰는 사람이 있을 수 있음).
+   Toolforge 의 빌드 서비스는 공개 저장소에서만 받아 갑니다.
+
+### 올릴 때마다
+
+1. 프로젝트 폴더에서:
+   ```
+   python 툴포지/만들기.py
+   ```
+   (`python 브라우저판/내보내기.py` 를 돌렸다면 이미 저절로 돌았습니다.)
+2. GitHub Desktop 에서 **`toolforge-test` 브랜치로 바꾼 뒤**, `old-hangul-ocr-toolforge/` 의 파일을 **전부** 저장소 폴더에 복사하고
+   (같은 이름은 덮어쓰기) 커밋 · 푸시. ⚠ 다른 브랜치(`beta-test` 등)에 올리지 않게 브랜치 이름을 먼저 확인하세요.
+3. Toolforge 에 들어가기 — PowerShell 에서(`<내 이름>` 은 toolsadmin 의 'Shell username'):
+   ```
+   ssh <내 이름>@login.toolforge.org
+   ```
+   ```
+   become old-hangul-ocr
+   ```
+4. 빌드 — 몇 분 걸립니다:
+   ```
+   toolforge build start https://github.com/ysjbserver/old-hangul-OCR --ref toolforge-test
+   ```
+   끝났는지 보기(`ok` 가 나오면 됨):
+   ```
+   toolforge build show
+   ```
+5. 웹서비스 켜기 — **처음에는** start, **그다음부터는** restart:
+   ```
+   toolforge webservice buildservice start --mount=none
+   ```
+   ```
+   toolforge webservice restart
+   ```
+6. 브라우저로 `https://old-hangul-ocr.toolforge.org/` 를 열어 첫 화면과 맨 아래 '판' 줄(모델 지문)이 새것인지 봅니다.
+
+막혔을 때 기록 보기:
+```
+toolforge webservice buildservice logs -f
+```
+```
+toolforge build logs
 ```
 
-## 쓰는 법
+### 위키문헌에서 쓰기
 
-1. `페이지:…` 문서를 편집으로 엽니다.
-2. 편집 상자 위의 "옛한글 OCR 로 읽기" 를 누릅니다.
-3. 읽은 글이 편집 상자에 들어갑니다. 확신이 낮은 글자는 색으로 칠해 보여 줍니다
-   (구문 강조를 켜 두었으면 편집 상자 위에 따로).
-4. 인식한 글자가 맞는지 한 번 읽으며 점검한 후 저장해 주세요.
-
-## 알아 두실 것
-
-- **꼭 눈으로 확인한 뒤 저장하세요.** 색칠되지 않은 자리에도 오류가 글자 100개에 1개 안팎 남습니다. 열 끝의 글자가 빠지는 일도 있습니다.
-- 한 쪽에 5~10초 가량 소요됩니다 (사용 환경에 따라 다름).
-- 처음 한 번은 모델 두 개(글자 읽기 2.4 MB · 글자 경계 0.4 MB)를 받느라 조금 더 걸립니다.
-- 파일마다 처음 한 번은 판형(몇 단 구성인지)과 글자 간격을 재기 위해 여러 쪽을 한 번에 받아서 판정합니다. 이 때 시간이 다소 소요됩니다(1~3분). 잰 값은 브라우저에 기억해 두고 다음부터는 바로 읽습니다.
-- 모델과 스크립트는 jsDelivr(cdn.jsdelivr.net)에서 받습니다. 받을 때 사용자의 IP 주소가 jsDelivr에 전달됩니다. 스캔 그림과 읽은 글은 전달되지 않습니다.
-
-## 전사대조 (따로 켜는 도구)
-
-이미 전사되어 있는 쪽에 OCR을 따로 돌려, 둘이 서로 일치하지 않는 글자를 짚어 줍니다. 교정용입니다.
-
-쓰려면 위 두 줄 아래에 한 줄을 더 넣으세요.
-
-```javascript
-mw.loader.load(window.옛한글OCR자료 + "전사대조.js");
+`사용자:(내 이름)/common.js` 에 두 줄(첫 화면에도 같은 줄이 나옵니다):
 ```
+mw.loader.load("https://old-hangul-ocr.toolforge.org/ocr.js");
+mw.loader.load("https://old-hangul-ocr.toolforge.org/compare.js");
+```
+⚠ 브라우저판(jsDelivr)의 OCR 소도구 줄과 **함께 두지 마세요** — 단추가 둘 생깁니다. 하나만 남기세요.
 
-1. 이미 전사문이 있는 `페이지:…` 문서를 편집으로 엽니다.
-2. 편집 상자 위의 "스캔과 맞대기 (전사대조)" 를 누릅니다.
-3. 의심 자리가 편집 상자 안에 칠해지고, 아래 목록에 스캔 조각이 나옵니다. "바꾸기" 는 그 글자만 바꾸고(Ctrl+Z 로 되돌림), "넘기기" 는 목록 아래로 접습니다.
-4. OCR 결과가 틀리는 경우가 종종 있습니다. 왼쪽에 같이 표시되는 스캔 조각이나 원본 파일을 반드시 같이 보면서 골라 주세요.
+---
 
-- 틀(`{{절}}` · `{{u}}` 등)과 서식은 건드리지 않고 인쇄된 글자만 봅니다. 한자 · 숫자는 보지 않습니다.
-- 한 쪽에 길게는 수십 초 가량 걸릴 수 있습니다.
+## 알아 둘 것
 
-## 학습 자료
+- **자원** — 기본 0.5코어 · 512MB 로 돕니다(모델 메모리 약 70MB). 한 쪽에 몇 초~열몇 초. 쓰는 사람이 늘어 느리면:
+  ```
+  toolforge webservice stop
+  ```
+  ```
+  toolforge webservice buildservice start --mount=none --cpu 1 --mem 1Gi
+  ```
+- **처음 보는 파일** — 판형 · 자간을 정하려고 쪽 열몇 장을 받아 봅니다(1~3분, 파일마다 처음 한 번).
+  받은 스캔과 정한 값은 컨테이너의 임시 폴더에 두므로 **웹서비스를 다시 켜면 처음부터** 다시 살핍니다.
+- **스캔** — 서버가 위키미디어 공용에서 1920px 썸네일을 받습니다(User-Agent 에 연락처, `step1_collect.py` 의 `CONTACT`).
+- **개인정보** — 편집 상자의 글(전사대조)은 맞대는 데만 쓰고 남기지 않습니다. 접속 기록도 따로 남기지 않습니다.
+- **결과** — 저장하지 않습니다. 소도구는 편집 상자에 넣기만 하고, 저장은 사람이 눈으로 보고 합니다.
 
-OCR 모델(`옛한글모델.onnx` · `경계검출.onnx`)은 아래 자료로 학습했습니다.
-이 저장소에는 학습된 모델만 있고, 학습 자료(그림·글자)는 들어 있지 않습니다.
+## 학습 자료와 사용권
 
-- 과학기술정보통신부 및 한국지능정보사회진흥원이 작성한 [AI 허브](https://aihub.or.kr)에 있는 데이터 중 다음
-  - [옛한글 문자인식(OCR) 인공지능 학습용 데이터](https://www.aihub.or.kr/aihubdata/data/view.do?currMenu=115&topMenu=100&dataSetSn=504) (2021)
-  - [OCR 데이터(옛한글)](https://www.aihub.or.kr/aihubdata/data/view.do?currMenu=115&topMenu=100&dataSetSn=71295) (2022)
-- 국립중앙도서관 공유서재 중 저작권이 만료된 근대 잡지(1914~1940)의 스캔과 글자 자료
-- 한국어 위키문헌 내의 전사된 문서
+- 코드와 모델: MIT (LICENSE).
+- 모델 학습에 한국지능정보사회진흥원(AI 허브)의 「옛한글 OCR」 데이터를 썼습니다 — 이 모델을 다시 나눌 때는 출처를 밝혀 주세요.
 
-## 사용권
+## 묶음 안
 
-모델과 스크립트는 [MIT](LICENSE) 라이선스로 공개합니다. 저작권 표시와 사용권 문구만 함께 남겨 주시면 자유롭게 쓰셔도 됩니다.
-(v4 까지의 판은 CC0 1.0 으로 공개했고, 그 판들은 지금도 CC0 그대로입니다.)
+| 자리 | 무엇 |
+|---|---|
+| `app.py` | 서버(WSGI). gunicorn 이 `app:app` 을 띄움(`Procfile`) |
+| `부품/` · `전사대조/대조.py` · `step1_collect.py` | 프로젝트의 파이썬 셈 그대로(정본) |
+| `부품/onnx모델.py` | torch 대신 ONNX 로 읽는 부분 — 같은 답(확신값 차이 0.0004 미만) |
+| `모델/` | `옛한글모델.onnx` · `경계검출.onnx` · `설정.json` (브라우저판과 같은 파일) |
+| `정적/` | 첫 화면 · 소도구 두 개 · 영역 지정 화면 |
+| `판.json` | 만든 날 · 모델 지문 — 첫 화면 맨 아래에 나옴 |
 
-- 위 학습 자료 중 'AI 허브' 내 자료는 재사용 시 해당 자료를 사용하였음을 밝혀야 합니다. 저 쪽의 이용약관입니다. 이 모델을 가져가실 때에는 참고해 주세요.
-- 실행할 때 받아 오는 [onnxruntime-web](https://github.com/microsoft/onnxruntime)은 이 저장소에 들어 있지 않으며 MIT 사용권을 따릅니다.
-
-## 문의
-[사용자:Aspere](https://ko.wikisource.org/wiki/사용자:Aspere) — aspere.kowiki@gmail.com
+내 컴퓨터에서 먼저 돌려 보기: `python old-hangul-ocr-toolforge/app.py` → <http://localhost:8761/>

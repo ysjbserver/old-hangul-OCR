@@ -19,6 +19,10 @@ var 실행기 = (window.옛한글OCR실행기 === "webgpu") ? ["webgpu", "wasm"]
 var 자료 = window.옛한글OCR자료 || "";
 if (자료 && 자료.charAt(자료.length - 1) !== "/") 자료 += "/";
 
+// Toolforge 서버(`툴포지/app.py`, 2026-10-07) — 있으면 모델 · 판형 살피기를 서버에 맡김. 서버가 내주는 이 파일의 맨 앞 줄이 채움
+var 서버 = window.옛한글OCR서버 || "";
+if (서버 && 서버.charAt(서버.length - 1) !== "/") 서버 += "/";
+
 var 상태, 단추, 모델 = null, 설정 = null;
 
 // ── 작은 도우미 ──────────────────────────────────────────────────────
@@ -155,6 +159,27 @@ function 판형살피기(파일) {
   });
 }
 
+// ── 서버 모드 ────────────────────────────────────────────────────────
+/** 서버에 판형 살피기를 맡기고 끝날 때까지 되물음(처음 보는 파일은 1~3분) */
+async function 서버살피기(파일) {
+  for (;;) {
+    var 답 = await (await fetch(서버 + "api/inspect?file=" + encodeURIComponent(파일))).json();
+    if (답.상태 === "끝") return 답.값;
+    if (답.상태 === "오류" || 답.오류) throw new Error(답.오류 || "서버가 판형을 못 살폈습니다");
+    알림("이 파일의 판형·자간을 서버에서 살피는 중… (" + 답.진행 + ", 이 파일은 처음 한 번만)");
+    await new Promise(function (ok) { setTimeout(ok, 2000); });
+  }
+}
+
+async function 서버로(경로, 몸) {
+  var res = await fetch(서버 + 경로, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(몸),
+  });
+  var 답 = await res.json();
+  if (!res.ok || 답.오류) throw new Error(답.오류 || ("서버 오류 " + res.status));
+  return 답;
+}
+
 function 판형글(값) {
   return Array.isArray(값) ? (값.length + 1) + "단(가로줄로 가름)" : 값 + "단";
 }
@@ -172,17 +197,28 @@ async function 읽기시작() {
   if (!상자 || !쪽) { 알림("편집 창을 못 찾았습니다."); return; }
   단추.disabled = true;
   try {
-    await 준비();
-    var 살핀 = await 판형살피기(쪽.파일);
-    알림("스캔 파일을 받는 중…");
-    var im = await 스캔가져오기(쪽.파일, 쪽.쪽);
+    var 살핀, r, 초, 실행;
+    if (서버) {                                  // 모델은 서버에서 — 결과 꼴은 아래 `한쪽` 과 같음
+      살핀 = await 서버살피기(쪽.파일);
+      알림("서버에서 문자를 인식하는 중…");
+      var t1 = performance.now();
+      r = await 서버로("api/read", { file: 쪽.파일, page: 쪽.쪽 });
+      초 = ((performance.now() - t1) / 1000).toFixed(1);
+      실행 = "서버";
+    } else {
+      await 준비();
+      살핀 = await 판형살피기(쪽.파일);
+      알림("스캔 파일을 받는 중…");
+      var im = await 스캔가져오기(쪽.파일, 쪽.쪽);
 
-    알림("문자를 인식하는 중… (5~10초 걸립니다)");
-    await new Promise(function (ok) { setTimeout(ok, 30); });   // 안내가 먼저 화면에 그려지게
-    var g = window.옛한글읽기.그림읽기(im);
-    var t0 = performance.now();
-    var r = await window.옛한글읽기.한쪽(모델, g, null, { 문헌설정: 살핀 });
-    var 초 = ((performance.now() - t0) / 1000).toFixed(1);
+      알림("문자를 인식하는 중… (5~10초 걸립니다)");
+      await new Promise(function (ok) { setTimeout(ok, 30); });   // 안내가 먼저 화면에 그려지게
+      var g = window.옛한글읽기.그림읽기(im);
+      var t0 = performance.now();
+      r = await window.옛한글읽기.한쪽(모델, g, null, { 문헌설정: 살핀 });
+      초 = ((performance.now() - t0) / 1000).toFixed(1);
+      실행 = 실행기[0];
+    }
 
     if (!r.글월) {
       알림("판정: " + r.판정.등급 + " — " + (r.판정.까닭.join(" · ") || "열을 못 찾았습니다")
@@ -204,7 +240,7 @@ async function 읽기시작() {
          + (칠함 ? " · 노란 자리가 확신 낮은 글자입니다(고치면 칠이 사라지고, 칠은 저장되지 않습니다)" : "")
          + " · " + 살핀글(살핀)
          + " · 확신 낮은 글자 " + (r.표시비 * 100).toFixed(0) + "%"
-         + " · " + r.상자수 + "상자 " + 초 + "초(" + 실행기[0] + ")"
+         + " · " + r.상자수 + (서버 ? "자 " : "상자 ") + 초 + "초(" + 실행 + ")"
          + (r.판정.까닭.length ? " · " + r.판정.까닭.join(" · ") : ""));
   } catch (e) {
     알림(e && e.name === "OldReadJsVersionError"
@@ -433,11 +469,6 @@ function 세우기() {
   줄.appendChild(상태);
   var 상자 = 편집상자();
   상자.parentNode.insertBefore(줄, 상자);
-
-  var 안내 = document.createElement("div");
-  안내.style.cssText = "font-size:12px;color:#72777d;flex-basis:100%";
-  안내.textContent = "결과를 편집 상자에 넣기만 합니다. 저장은 반드시 눈으로 보고 직접 누르세요.";
-  줄.appendChild(안내);
 }
 
 if (window.mw && mw.loader) {

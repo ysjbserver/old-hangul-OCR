@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>옛한글 OCR</title>
+<style>
+:root { --bg: #f6f6f4; --fg: #1d1d1b; --muted: #5f5f5a; --line: #d6d5cf; --panel: #fff; --accent: #2f5fb3; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1b1b1a; --fg: #ecebe6; --muted: #a3a29b; --line: #3a3a37; --panel: #252523; --accent: #7aa2ec; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.7 "Noto Sans KR", "Malgun Gothic", sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 24px; margin: 0 0 4px; }
+h2 { font-size: 17px; margin: 28px 0 8px; }
+p, li { color: var(--fg); }
+.muted { color: var(--muted); }
+pre { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; overflow-x: auto; font-size: 13px; }
+a { color: var(--accent); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; margin: 10px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>옛한글 OCR</h1>
+  <p class="muted">위키문헌의 옛한글 스캔을 읽는 도구입니다. 모델은 이 서버에서 돕니다.</p>
+
+  <h2>1. 위키문헌 편집 창에서 쓰기</h2>
+  <p>위키문헌의 <code>사용자:(내 이름)/common.js</code> 에 아래 줄을 넣고 저장한 뒤, 「페이지:」 문서를 편집하면
+     편집 상자 위에 단추가 생깁니다.</p>
+  <pre id="줄"></pre>
+  <div class="card">
+    <b>옛한글 OCR 로 읽기</b> — 그 쪽 스캔을 읽어 편집 상자에 넣습니다. 확신이 낮은 글자는 노랗게 칠합니다(칠은 저장되지 않음).<br>
+    <b>스캔과 맞대기 (전사대조)</b> — 이미 전사된 글을 스캔과 맞대어 틀렸을 만한 글자를 짚습니다.<br>
+    <span class="muted">저장은 하지 않습니다. 결과를 눈으로 보고 직접 저장하세요. 파일마다 처음 한 번은 판형을 살피느라 1~3분 걸립니다.</span>
+  </div>
+
+  <h2>2. 영역 지정 — 상자를 쳐서 읽기</h2>
+  <p>자동으로 잘 못 읽는 열이나 글자에 직접 상자를 쳐서 그 자리만 읽습니다.
+     <a id="영역" href="region/">영역 지정 화면 열기</a></p>
+
+  <h2>알아 둘 것</h2>
+  <ul>
+    <li>19~20세기 한글 활자본을 위해 만든 도구입니다. 목판본 · 필사본 · 한자는 잘 읽지 못합니다.</li>
+    <li>이 서버는 스캔 그림을 잠깐 받아 두고, 편집 상자의 글(전사대조)은 맞대는 데만 쓰고 남기지 않습니다.</li>
+    <li>모델 학습에 한국지능정보사회진흥원(AI 허브)의 「옛한글 OCR」 데이터를 썼습니다.</li>
+  </ul>
+  <p class="muted" id="판"></p>
+</main>
+<script>
+const 바탕 = location.origin + location.pathname.replace(/[^/]*$/, "");
+document.getElementById("줄").textContent =
+  'mw.loader.load("' + 바탕 + 'ocr.js");\nmw.loader.load("' + 바탕 + 'compare.js");';
+fetch("api/health").then(r => r.json()).then(v => {
+  const m = v.모델 || {};
+  document.getElementById("판").textContent = "판: " + (m.만든날 || "?") + " · 글자 모델 " + (m.글자모델 || "?") + " · 경계 검출기 " + (m.경계검출 || "?");
+}).catch(() => {});
+</script>
+</body>
+</html>
