@@ -174,11 +174,12 @@ async function 읽기시작() {
   try {
     await 준비();
     var 살핀 = await 판형살피기(쪽.파일);
-    알림("스캔을 받는 중…");
+    알림("스캔 파일을 받는 중…");
     var im = await 스캔가져오기(쪽.파일, 쪽.쪽);
-    var g = window.옛한글읽기.그림읽기(im);
 
-    알림("읽는 중… 5~10초 걸립니다 (화면이 잠깐 멎을 수 있습니다)");
+    알림("문자를 인식하는 중… (5~10초 걸립니다)");
+    await new Promise(function (ok) { setTimeout(ok, 30); });   // 안내가 먼저 화면에 그려지게
+    var g = window.옛한글읽기.그림읽기(im);
     var t0 = performance.now();
     var r = await window.옛한글읽기.한쪽(모델, g, null, { 문헌설정: 살핀 });
     var 초 = ((performance.now() - t0) / 1000).toFixed(1);

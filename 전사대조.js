@@ -123,6 +123,8 @@ function 인쇄글자(raw, 제목, 큰빼기) {
     [t, pos] = 걷어내기(t, pos, [{ s: m.index, e: m.index + m[0].length }], function () { return 남길; });
   }
   [t, pos] = 걷어내기(t, pos, 찾기(제목꼴, t), function (m) { return 제목 ? [m.묶음] : []; });
+  [t, pos] = 걷어내기(t, pos, 찾기(/^[ \t]*:+/gm, t), function () { return []; });   // 줄 머리 `:` 들여쓰기 (2026-10-06)
+  [t, pos] = 걷어내기(t, pos, 찾기(/'{2,}/g, t), function () { return []; });   // `''` · `'''` 굵게 · 기울임 (2026-10-06)
   [t, pos] = 걷어내기(t, pos, 찾기(/\[\[[^|\]]*\|([^\]]*)\]\]/gd, t), function (m) { return [m.묶음]; });
   [t, pos] = 걷어내기(t, pos, 찾기(/\[\[([^\]]*)\]\]/gd, t), function (m) { return [m.묶음]; });
   [t, pos] = 걷어내기(t, pos, 표구간(t, 표), function (m) { return m.남길; });
@@ -146,7 +148,8 @@ function 인쇄글자(raw, 제목, 큰빼기) {
 }
 
 // ── 글자 → 모델 번호 (`wikitext.decompose` · `ocr.Model.codes`) ──
-const 특수 = { "ㅣ": ["ᅟ", "ᅵ", ""], "○": ["○", "ᅠ", ""], "〇": ["○", "ᅠ", ""], "々": ["々", "ᅠ", ""] };
+const 특수 = { "ㅣ": ["ᅟ", "ᅵ", ""], "○": ["○", "ᅠ", ""], "〇": ["○", "ᅠ", ""], "々": ["々", "ᅠ", ""], "ㅅ": ["ᄉ", "ᅠ", ""],
+  ",": [",", "ᅠ", ""], ".": [".", "ᅠ", ""] };
 function 가르기(cl) {
   if (특수[cl]) return 특수[cl];
   const cps = Array.from(cl);
@@ -197,14 +200,14 @@ function 읽개만들기(모델, g) {
     return k;
   }
   return {
-    채우기: async function (boxes) {
+    채우기: async function (boxes, geo) {
       const 새 = [], 새열쇠 = new Set();
       for (const b of boxes) {
         const k = 열쇠(b);
         if (!본.has(k) && !새열쇠.has(k)) { 새열쇠.add(k); 새.push(b); }
       }
       if (!새.length) return;
-      const r = await 모델.확률(g, 새);
+      const r = await 모델.확률(g, geo ? 전역.옛한글읽기.맞춤상자(g, 새, geo) : 새);   // 행간 넓은 쪽은 글자 크기 상자로(`align._맞춤상자`, 2026-10-06)
       새.forEach(function (b, i) {
         const L = r.L.slice(i * nL, (i + 1) * nL), V = r.V.slice(i * nV, (i + 1) * nV), T = r.T.slice(i * nT, (i + 1) * nT);
         const kL = 큰것(L), kV = 큰것(V), kT = 큰것(T);
@@ -319,7 +322,7 @@ async function 정답지자르기(A, 모델, 읽개, geo, letters, r, span, 경�
     const lo = mins.reduce(function (s, v) { return s + v; }, 0) - (mins.length ? Math.max.apply(null, mins) : 0);
     if (!(lo <= N && N <= hi)) { why = "글자 수를 맞추지 못함 (그림은 " + lo + "~" + hi + "칸, 전사문은 " + N + "자)"; continue; }
 
-    await 읽개.채우기(flat);
+    await 읽개.채우기(flat, geo);
     const nb = flat.length;
     const pL = new Int32Array(nb), pV = new Int32Array(nb), pT = new Int32Array(nb);
     const cf = new Float64Array(nb), logc = new Float64Array(nb);
@@ -1054,11 +1057,11 @@ async function 시작() {
     var 본문 = 상자.value;
     await 준비();
     var 살핀 = await 판형살피기(쪽.파일);
-    알림("스캔을 받는 중…");
+    알림("스캔 파일을 받는 중…");
     var im = await 스캔가져오기(쪽.파일, 쪽.쪽);
-    var g = window.옛한글읽기.그림읽기(im);
-    알림("스캔과 맞대는 중… (화면이 잠깐 멎을 수 있습니다)");
+    알림("문자를 대조하는 중… (화면이 잠깐 멎을 수 있습니다)");
     await new Promise(function (ok) { setTimeout(ok, 30); });   // 알림이 먼저 그려지게
+    var g = window.옛한글읽기.그림읽기(im);
     var 답 = await 셈.한쪽(모델, g, 본문, { 문헌설정: 살핀 });
     if (답.사유) throw new Error(답.사유);
     if (상자.value !== 본문) throw new Error("맞대는 사이에 편집 상자가 바뀌었습니다 — 다시 눌러 주세요.");
