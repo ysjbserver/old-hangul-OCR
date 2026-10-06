@@ -137,66 +137,32 @@ function 준비() {
   return 준비중;
 }
 
-/** 파일 이름으로 문헌 설정 찾기. 모르는 문헌이면 빈 것 */
-function 문헌설정(파일) {
-  var 표 = (설정 && 설정.문헌) || {};
-  for (var k in 표) if (표[k].파일 === 파일) return { 슬러그: k, 값: 표[k] };
-  return { 슬러그: null, 값: {} };
-}
-
 /**
- * 처음 보는 파일의 판형(1 · 2 · 가름줄 높이 목록)을 쪽 몇 장으로 정하기 — `읽기.js` 의 `판형정하기`.
- * 고르게 12쪽(가름줄)·8쪽(가운데 줄)을 받고, 정한 것은 브라우저에 기억.
- * ⚠ 판정 규칙을 바꾸면 `판형판` 을 올릴 것 — 안 올리면 기억한 옛 판정을 씀
- * ⚠ 자간비는 재지 않음(기본값)
+ * 파일마다 처음 한 번 — 판형 · 자간비 · 판짜임. 셈은 `읽기.js` 의 `판형살피기`(전사대조와 같은 것)
+ * ★ 모든 파일을 스스로 잼 — `설정.json` 에 문헌 표를 두지 않음(2026-10-01, 작업자 결정)
+ * ⚠ 판정 규칙을 바꾸면 `읽기.js` 의 `판형판` 을 올릴 것
  */
-var 판형판 = 1;
-var 판형기억 = {};
-
-function 고르게(n, k) {             // 1…n 쪽에서 고르게 k 개
-  var 쪽들 = [];
-  for (var i = 1; i <= n; i++) 쪽들.push(i);
-  if (k <= 0 || n <= k) return 쪽들;
-  var step = Math.max(1, Math.floor(n / k)), out = [];
-  for (var j = 0; j < n && out.length < k; j += step) out.push(쪽들[j]);
-  return out;
-}
-
-async function 판형살피기(파일) {
-  if (판형기억[파일] !== undefined) return 판형기억[파일];
-  var 키 = "옛한글OCR:판형:" + 파일;
-  try {
-    var 적힌 = JSON.parse(localStorage.getItem(키));
-    if (적힌 && 적힌.판 === 판형판) return (판형기억[파일] = 적힌.값);
-  } catch (e) { /* 저장소를 못 쓰면 매번 살핌 */ }
-  await 주소틀얻기(파일);
-  var n = 쪽수[파일] || 0;
-  if (!n) return (판형기억[파일] = 1);          // 쪽 수를 모르면 한 단
-  var 가름쪽 = 고르게(n, 12), 단쪽 = 고르게(n, 8);
-  var 모두 = 가름쪽.concat(단쪽.filter(function (p) { return 가름쪽.indexOf(p) < 0; }));
-  var A = window.옛한글읽기, 가름 = {}, 단 = {};
-  for (var i = 0; i < 모두.length; i++) {
-    알림("처음 보는 문헌이라 판형을 살피는 중… (" + (i + 1) + "/" + 모두.length
-         + "쪽, 이 파일은 처음 한 번만)");
-    var p = 모두[i];
-    try {
-      var g = A.그림읽기(await 스캔가져오기(파일, p));
-      if (가름쪽.indexOf(p) >= 0) 가름[p] = A.가름줄측정(g);
-      if (단쪽.indexOf(p) >= 0) 단[p] = A.단측정(g);
-    } catch (e) {
-      console.warn("판형 살피기 — " + p + "쪽을 못 받았습니다", e);
-      가름[p] = null; 단[p] = null;           // 못 잰 쪽
-    }
+function 판형살피기(파일) {
+  if (!window.옛한글읽기.판형살피기) {          // 브라우저가 옛 읽기.js 를 기억하는 중(jsDelivr 최대 7일)
+    var 오류 = new Error("읽기.js 가 옛 판입니다 — 편집 창을 Ctrl+Shift+R 로 새로 고쳐 주세요.");
+    오류.name = "OldReadJsVersionError";
+    return Promise.reject(오류);
   }
-  var 값 = A.판형정하기(가름쪽.map(function (p) { return 가름[p] || null; }),
-                       단쪽.map(function (p) { return 단[p] || null; }));
-  판형기억[파일] = 값;
-  try { localStorage.setItem(키, JSON.stringify({ 판: 판형판, 값: 값 })); } catch (e) { }
-  return 값;
+  return window.옛한글읽기.판형살피기(파일, {
+    쪽수: function () { return 주소틀얻기(파일).then(function () { return 쪽수[파일] || 0; }); },
+    받기: function (p) { return 스캔가져오기(파일, p); },
+    알림: 알림,
+  });
 }
 
 function 판형글(값) {
   return Array.isArray(값) ? (값.length + 1) + "단(가로줄로 가름)" : 값 + "단";
+}
+
+function 살핀글(살핀) {
+  return "쪽을 살펴 " + 판형글(살핀.단)
+       + (살핀.자간비 ? " · 자간비 " + 살핀.자간비.toFixed(3) : " · 자간은 기본값")
+       + "으로 정했습니다";
 }
 
 // ── 단추를 눌렀을 때 ─────────────────────────────────────────────────
@@ -207,16 +173,15 @@ async function 읽기시작() {
   단추.disabled = true;
   try {
     await 준비();
-    var 문 = 문헌설정(쪽.파일);
-    var 살핀판형 = 문.슬러그 ? null : await 판형살피기(쪽.파일);
-    알림("스캔을 받는 중…");
+    var 살핀 = await 판형살피기(쪽.파일);
+    알림("스캔 파일을 받는 중…");
     var im = await 스캔가져오기(쪽.파일, 쪽.쪽);
-    var g = window.옛한글읽기.그림읽기(im);
 
-    알림("읽는 중… 5~10초 걸립니다 (화면이 잠깐 멎을 수 있습니다)");
+    알림("문자를 인식하는 중… (5~10초 걸립니다)");
+    await new Promise(function (ok) { setTimeout(ok, 30); });   // 안내가 먼저 화면에 그려지게
+    var g = window.옛한글읽기.그림읽기(im);
     var t0 = performance.now();
-    var r = await window.옛한글읽기.한쪽(모델, g, 문.슬러그,
-      살핀판형 === null ? {} : { 문헌설정: { 단: 살핀판형 } });
+    var r = await window.옛한글읽기.한쪽(모델, g, null, { 문헌설정: 살핀 });
     var 초 = ((performance.now() - t0) / 1000).toFixed(1);
 
     if (!r.글월) {
@@ -237,13 +202,14 @@ async function 읽기시작() {
     알림((r.판정.등급 === "못씀" ? "판정: 못씀 — 넣지 않았습니다. 처음부터 치는 편이 빠릅니다"
                               : "판정: " + r.판정.등급)
          + (칠함 ? " · 노란 자리가 확신 낮은 글자입니다(고치면 칠이 사라지고, 칠은 저장되지 않습니다)" : "")
-         + (문.슬러그 ? "" : " · 처음 보는 문헌 — 판형은 쪽을 살펴 " + 판형글(살핀판형)
-                           + "으로 정했고 자간은 기본값입니다")
+         + " · " + 살핀글(살핀)
          + " · 확신 낮은 글자 " + (r.표시비 * 100).toFixed(0) + "%"
          + " · " + r.상자수 + "상자 " + 초 + "초(" + 실행기[0] + ")"
          + (r.판정.까닭.length ? " · " + r.판정.까닭.join(" · ") : ""));
   } catch (e) {
-    알림("멈췄습니다: " + e.message);
+    알림(e && e.name === "OldReadJsVersionError"
+      ? e.message
+      : "멈췄습니다: " + e.message);
     console.error(e);
   } finally {
     단추.disabled = false;
