@@ -1981,7 +1981,7 @@ function 모델만들기(설정, 세션, ort, 경계세션) {
     },
     /** 상자들 → {초, 중, 종, 확신}. 확신은 세 머리 최댓값의 **최솟값**. */
     읽기: async function (g, boxes, 뭉치, 알림) {
-      뭉치 = 뭉치 || 256;
+      뭉치 = Math.min(뭉치 || 설정.뭉치 || 64, 설정.뭉치 || 64);   // 설정 '뭉치' 를 넘지 않게 — 서버판 `onnx모델._머리들` 과 같음
       const n = boxes.length;
       const 초 = new Int32Array(n), 중 = new Int32Array(n);
       const 종 = new Int32Array(n), 확신 = new Float64Array(n);
@@ -2030,7 +2030,7 @@ function 모델만들기(설정, 세션, ort, 경계세션) {
      * 반환 {L, V, T}: 상자 i 의 초성 확률은 L[i·nL … (i+1)·nL). 같은 상자는 한 번만 읽음.
      */
     확률: async function (g, boxes, 뭉치) {
-      뭉치 = 뭉치 || 256;
+      뭉치 = Math.min(뭉치 || 설정.뭉치 || 64, 설정.뭉치 || 64);
       const n = boxes.length;
       const nL = 설정.초성.length, nV = 설정.중성.length, nT = 설정.종성.length;
       const L = new Float64Array(n * nL), V = new Float64Array(n * nV), T = new Float64Array(n * nT);

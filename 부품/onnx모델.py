@@ -48,7 +48,7 @@ class 모델:
         self.iL = {c: i for i, c in enumerate(self.Ls)}
         self.iV = {c: i for i, c in enumerate(self.Vs)}
         self.iT = {c: i for i, c in enumerate(self.Ts)}
-        self.뭉치 = 뭉치
+        self.뭉치 = v.get("뭉치", 뭉치)          # 설정.json '뭉치' — 브라우저판 `읽기.js` 와 같은 값
         self.세션 = _세션(os.path.join(폴더, "옛한글모델.onnx"), 스레드)
         self.폴더 = 폴더
         self.dev = "onnx"
@@ -62,6 +62,9 @@ class 모델:
         return (X / 255 - 0.5) / 0.5
 
     def _머리들(self, im, boxes, batch):
+        # 뭉치는 self.뭉치 를 넘지 않게 — `대조.확률읽기` 가 512 를 넘기면 ORT 중간값이 한꺼번에 올라 400MB 넘게 씀
+        # (Toolforge 512MB 에서 전사대조 도중 프로세스가 죽음, 2026-10-07). 뭉치 크기는 결과를 바꾸지 않음.
+        batch = min(batch, self.뭉치)
         # 같은 상자는 한 번만 — 칸수를 est±3 으로 일곱 번 잘라 보면 같은 상자가 되풀이됨(서로 다른 것 22~25%, 브라우저판 `모델.읽기` 와 같은 꾀)
         자리, 고유, 본 = [], [], {}
         for b in boxes:
