@@ -9,22 +9,14 @@
 [특수:내사용자문서/common.js](https://ko.wikisource.org/wiki/Special:MyPage/common.js) 에 두 줄을 넣고 저장한 뒤 새로 고침하세요.
 
 ```javascript
-<<<<<<< Updated upstream
-window.옛한글OCR자료 = "https://cdn.jsdelivr.net/gh/ysjbserver/old-hangul-OCR@v4/";
-=======
 window.옛한글OCR자료 = "https://cdn.jsdelivr.net/gh/ysjbserver/old-hangul-OCR@beta-test/";
->>>>>>> Stashed changes
 mw.loader.load(window.옛한글OCR자료 + "소도구.js");
 ```
 
 ## 쓰는 법
 
 1. `페이지:…` 문서를 편집으로 엽니다.
-<<<<<<< Updated upstream
-2. 편집 상자 위의 "옛한글 OCR 로 읽기" 를 누릅니다.
-=======
 2. 편집 상자 위의 "인식 (전사)" 를 누릅니다.
->>>>>>> Stashed changes
 3. 읽은 글이 편집 상자에 들어갑니다. 확신이 낮은 글자는 색으로 칠해 보여 줍니다
    (구문 강조를 켜 두었으면 편집 상자 위에 따로).
 4. 인식한 글자가 맞는지 한 번 읽으며 점검한 후 저장해 주세요.
@@ -48,11 +40,7 @@ mw.loader.load(window.옛한글OCR자료 + "전사대조.js");
 ```
 
 1. 이미 전사문이 있는 `페이지:…` 문서를 편집으로 엽니다.
-<<<<<<< Updated upstream
-2. 편집 상자 위의 "스캔과 맞대기 (전사대조)" 를 누릅니다.
-=======
 2. 편집 상자 위의 "교정 (전사대조)" 를 누릅니다.
->>>>>>> Stashed changes
 3. 의심 자리가 편집 상자 안에 칠해지고, 아래 목록에 스캔 조각이 나옵니다. "바꾸기" 는 그 글자만 바꾸고(Ctrl+Z 로 되돌림), "넘기기" 는 목록 아래로 접습니다.
 4. OCR 결과가 틀리는 경우가 종종 있습니다. 왼쪽에 같이 표시되는 스캔 조각이나 원본 파일을 반드시 같이 보면서 골라 주세요.
 

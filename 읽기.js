@@ -86,8 +86,8 @@ let FRAME_LOCAL = true, FRAME_LOCAL_FILL = 0.6, FRAME_LOCAL_REACH = 0.35, FRAME_
 let YX_RATIO = 0.867;   // 세로 자간 ÷ 가로 자간 (기본값)
 
 let FRAME_SEG = 300, FRAME_FILL = 0.85, FRAME_AGREE = 0.6;   // scan.py 와 같은 값
-let FRAME_GUTTER = 0.6;   // scan.FRAME_GUTTER — (읽을 때) 옛 광곽 줄은 옆 고랑의 이 몫 넘게 찬 것만 (2026-10-02, null = 끔)
-let FRAME_ONESIDE = true;   // scan.FRAME_ONESIDE — (읽을 때) 위 · 아래 광곽을 둘 다 못 찾은 쪽은 한쪽씩 다시(2026-10-06)
+let FRAME_GUTTER = 0.6;   // scan.FRAME_GUTTER — (읽을 때) 옛 광곽 줄은 옆 고랑의 이 몫 넘게 찬 것만 (null = 끔)
+let FRAME_ONESIDE = true;   // scan.FRAME_ONESIDE — (읽을 때) 위 · 아래 광곽을 둘 다 못 찾은 쪽은 한쪽씩 다시
 let FRAME_GUTTER_CUT = 0.6;   // scan.FRAME_GUTTER_CUT — 자르는 경로의 같은 규칙(대조용 — 브라우저는 읽기만 함)
 
 /**
@@ -263,8 +263,8 @@ function 판심떼기(cols, ratio) {
  * ⚠ 문턱을 두 번 시험하는 것이 핵심 (흐린 쪽에서는 첫 문턱이 너무 높음)
  */
 let PITCH_OFF = 0.15, PITCH_ON = 0.12, PITCH_USE = true;   // scan.py · page.py 와 같은 값
-let PITCH_MORE = 1.5;   // 간격이 가까워도 다른 문턱이 열을 이 배 넘게 더 찾으면 바꿈(처음 보는 문헌의 흐린 쪽, 2026-10-01)
-let INK_EDGE = 0.0, EDGE_ZONE = 0.03, STRIP_FILL = 0.6;   // scan.INK_EDGE · EDGE_ZONE · STRIP_FILL — 스캔 끝의 제본 그림자 띠(자르는 경로만, 2026-10-02).
+let PITCH_MORE = 1.5;   // 간격이 가까워도 다른 문턱이 열을 이 배 넘게 더 찾으면 바꿈
+let INK_EDGE = 0.0, EDGE_ZONE = 0.03, STRIP_FILL = 0.6;   // scan.INK_EDGE · EDGE_ZONE · STRIP_FILL — 스캔 끝의 제본 그림자 띠(자르는 경로만).
                                                          // 기본 끔 — `전사대조.js` 가 `쪽기하(…, 끝띠=true)` 로 후보 하나만 만듦
 
 /** `scan._끝띠지우기` — 양 끝 `몫` 에 걸친 진한 띠(높이의 STRIP_FILL 넘게 잉크)와 그 바깥을 0 으로 */
@@ -299,7 +299,7 @@ function 열찾기(g, 판심뗌, 표준자간, 끝띠) {
     const o = y * W;
     for (let x = 0; x < W; x++) if (v[o + x] < INK) ink[x]++;
   }
-  // 스캔 끝의 제본 그림자 띠 — 자르는 경로(판심뗌)만. 읽는 경로는 `가장자리다듬기` 가 가림 (권2 0003)
+  // 스캔 끝의 제본 그림자 띠 — 자르는 경로(판심뗌)만. 읽는 경로는 `가장자리다듬기` 가 가림
   const 몫 = 끝띠 === undefined || 끝띠 === null ? INK_EDGE : (끝띠 ? EDGE_ZONE : 0.0);
   if (몫 && 판심뗌) ink = 끝띠지우기(ink, y1 - y0, W, 몫);
   let mx = 0;
@@ -485,7 +485,7 @@ function 광곽(g, cols, 읽기) {
     T = 자름(중앙값(got.map(function (f) { return f[0]; })));
     B = 자름(중앙값(got.map(function (f) { return f[1]; })));
     const 문턱 = 읽기 ? FRAME_GUTTER : FRAME_GUTTER_CUT;
-    if (문턱) {                             // 옆 고랑까지 찬 줄만 광곽 — 굵은 글자 획 거르기 (봉황대 0009 · 권2 0653)
+    if (문턱) {                             // 옆 고랑까지 찬 줄만 광곽 — 굵은 글자 획 거르기
       const 순 = cols.slice().sort(function (p, q) { return p[0] - q[0] || p[1] - q[1]; });
       const 위 = [], 아래 = [];
       for (let i = 0; i < cols.length; i++) {
@@ -499,7 +499,7 @@ function 광곽(g, cols, 읽기) {
       T기본 = 위.length < 2; B기본 = 아래.length < 2;
     }
   }
-  if (읽기 && FRAME_ONESIDE && FRAME_GUTTER && T기본 && B기본) {   // 광곽 없는 근대 책 — 쪽 머리 가로줄 · 쪽 번호 줄표만 (2026-10-06)
+  if (읽기 && FRAME_ONESIDE && FRAME_GUTTER && T기본 && B기본) {   // 광곽 없는 근대 책 — 쪽 머리 가로줄 · 쪽 번호 줄표만
     const 순 = cols.slice().sort(function (p, q) { return p[0] - q[0] || p[1] - q[1]; });
     const 위 = [], 아래 = [];
     for (let i = 0; i < cols.length; i++) {
@@ -510,7 +510,7 @@ function 광곽(g, cols, 읽기) {
     if (위.length >= 2) T = 자름(중앙값(위));
     if (아래.length >= 2) B = 자름(중앙값(아래));
   }
-  if (읽기 && FRAME_GUTTER_LINE) {        // 쌍줄 광곽의 가는 안쪽 줄 — 옆 고랑까지 건너는 줄(2026-10-06)
+  if (읽기 && FRAME_GUTTER_LINE) {        // 쌍줄 광곽의 가는 안쪽 줄 — 옆 고랑까지 건너는 줄
     const ga = 고랑줄(g, cols, FRAME_GUTTER_LINE);
     if (ga[0] !== null && T < ga[0] && ga[0] < T + H * 0.1) T = ga[0];
     if (ga[1] !== null && B - H * 0.1 < ga[1] && ga[1] < B) B = ga[1];
@@ -1078,7 +1078,7 @@ function 쪽기하(g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, �
     });
   };
   let crop_cols = 자를열(), 맞춤 = null, 글자폭 = null;
-  if (CROP_FIT) {                          // 행간이 넓은 근대 책 — 글자 크기로 오리기(`scan.CROP_FIT`, 2026-10-06)
+  if (CROP_FIT) {                          // 행간이 넓은 근대 책 — 글자 크기로 오리기(`scan.CROP_FIT`)
     글자폭 = 글자폭몫(g, crop_cols, spans);
     if (글자폭 !== null && 글자폭 < CROP_FIT && ratio < CROP_FIT_RATIO) {
       half = half * 글자폭 / CROP_FIT_TO;
@@ -1096,8 +1096,7 @@ function 쪽기하(g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, �
   return out;
 }
 
-// ── 처음 보는 파일의 자간·판짜임 (2026-10-01) ─────────────────────────
-// 없으면 기본 자간비 0.867 · 판짜임 없음으로 읽어 떼어 둔 쪽 평균 2.4 → 4.3%(권2 4.1 → 14.7 · 시편촬요 5.2 → 9.3)
+// ── 처음 보는 파일의 자간·판짜임 ─────────────────────────
 
 /** `scan._fold_contrast` — period 간격으로 접었을 때 글자 자리와 사이가 갈리는 또렷함 */
 function 접어또렷함(prof, y0, y1, period) {
@@ -1115,8 +1114,8 @@ function 접어또렷함(prof, y0, y1, period) {
   return Math.sqrt(v / P) / Math.max(1e-6, 평);
 }
 
-let RATIO_FIT = [1.0, 1.7], RATIO_FIT_OVER = 2.0;   // scan.RATIO_FIT · RATIO_FIT_OVER — 행간 넓은 책의 두세 글자 주기 착각 막기(2026-10-06, null = 끔)
-let RATIO_HALF = 0.9;   // scan.RATIO_HALF — 고른 t 의 절반으로 접어도 최고 점수의 이 몫 넘게 또렷하면 t/2 (봉황대 1.446 → 0.725, 2026-10-02). null = 끔
+let RATIO_FIT = [1.0, 1.7], RATIO_FIT_OVER = 2.0;   // scan.RATIO_FIT · RATIO_FIT_OVER — 행간 넓은 책의 두세 글자 주기 착각 막기(null = 끔)
+let RATIO_HALF = 0.9;   // scan.RATIO_HALF — 고른 t 의 절반으로 접어도 최고 점수의 이 몫 넘게 또렷하면 t/2. null = 끔
 
 /** `scan.page_ratio` — 이 쪽의 세로 자간 ÷ 가로 자간(그림만 보고). 못 재면 null */
 function 쪽자간비(g, 단) {
@@ -1140,7 +1139,7 @@ function 쪽자간비(g, 단) {
       const sc = 접어또렷함(p, y0, y1, xpitch * t);
       if (sc > best) { best = sc; bt = t; }
     }
-    if (gw && bt && bt > gw * RATIO_FIT_OVER) {   // 글자 폭에 견줘 있을 수 없는 주기 — 글자 폭 범위 안에서 다시(2026-10-06)
+    if (gw && bt && bt > gw * RATIO_FIT_OVER) {   // 글자 폭에 견줘 있을 수 없는 주기 — 글자 폭 범위 안에서 다시
       const a = gw * RATIO_FIT[0], b = gw * RATIO_FIT[1], st = (b - a) / (steps - 1);
       best = -1.0; bt = null;
       for (let s = 0; s < steps; s++) {
@@ -1171,13 +1170,11 @@ function 판짜임정하기(잰것들) {
 
 /**
  * 파일마다 처음 한 번 — 판형(1 · 2 · 가름줄 높이 목록) · 자간비 · 판짜임을 쪽 몇 장으로 정하기.
- * OCR 소도구 · 전사대조가 **같은 이것**을 부름(2026-10-03 `소도구.js` 에서 옮김 — 두 벌이 어긋나지 않게).
+ * OCR 소도구 · 전사대조가 **같은 이것**을 부름.
  * 고르게 12쪽(가름줄)·8쪽(가운데 줄 · 자간비)을 받고, 판짜임은 받은 쪽 모두로. 정한 것은 브라우저에 기억.
  * 손: {쪽수: async () → 전체 쪽 수, 받기: async 쪽 → Image, 알림: 글 → 화면}
  * → {단, 자간비, 판짜임} — `한쪽` 이 받는 문헌 설정 그대로(못 잰 것은 빠짐 = 기본값)
  * ⚠ 판정 규칙을 바꾸면 `판형판` 을 올릴 것 — 안 올리면 기억한 옛 판정을 씀
- * 판 2 — 자간비·판짜임도 잼(2026-10-01) · 판 3 — 자간비 두 배 착각 막기(`RATIO_HALF`, 2026-10-02)
- * · 판 4 — 행간 넓은 책의 자간비(글자 폭으로 좁혀 다시 찾기 `RATIO_FIT`, 2026-10-06)
  */
 const 판형판 = 4;
 const 판형기억 = {};               // 파일 → 값 또는 살피는 중인 Promise(두 소도구가 함께 눌러도 한 번만)
@@ -1277,7 +1274,7 @@ function 쪽건강(geo, 표준) {
 
 /**
  * `page.테두리열버리기` — 광곽 선이 열로 잡힌 것 버리기.
- * ⚠ 지금은 안 씀(파이썬도) — 진짜 본문 열을 버렸음. 대조·실험용
+ * ⚠ 지금은 안 씀(파이썬도) — 대조용
  * ⚠ 첫 열·끝 열만 봄. 두 단 판형에서는 부르지 않음
  */
 function 테두리열버리기(geo, 배수) {
@@ -1369,7 +1366,7 @@ function 자를계획(geo, centers, span, 빈열허용, 그림자) {
 
 /**
  * `align.read_page` — 전사문 없이 쪽 읽기. 열마다 여러 칸수로 잘라 보고 모델이 가장 자신 있어 한 것을 고름
- * ⚠ 점수는 로그 기하평균, 모델 확신도만 — 다른 묶기·벌점은 전부 나빠짐
+ * ⚠ 점수는 로그 기하평균, 모델 확신도만
  * `geo.가장자리` 면 양 끝 열을 `가장자리다듬기` 로 가림
  */
 async function 쪽읽기(모델, geo, span) {
@@ -1413,7 +1410,7 @@ async function 쪽읽기(모델, geo, span) {
 }
 let PUNCT_DROP = [",", "."];   // align.PUNCT_DROP — 결과에서 뺄 문장부호(설정 `부호빼기`)
 
-// ── 띄어쓰기 (`align.띄울자리`, 2026-09-29) ─────────────────────────
+// ── 띄어쓰기 (`align.띄울자리`) ─────────────────────────
 // 한 열 안 이웃 글자의 잉크 빈틈 ÷ 칸 높이 중앙값 − 모양 고침 > 쪽마다 오츠 문턱이면 띄움. 열 끝은 못 봄
 // ⚠ 합은 앞에서부터 차례로 — 파이썬도 그렇게 짬(numpy 합은 차례가 달라 안 씀)
 let SPACE = true, SPACE_ROW = 0.03, SPACE_ETA = 0.5, SPACE_LOW = 0.2;
@@ -1674,7 +1671,7 @@ async function 구간읽기(모델, geo, i, y0, y1, span) {
 }
 
 /**
- * `align.큰제목읽기` — 두 열에 걸친 큰 활자 편 제목(시편촬요 「뎨팔편」)을 넓은 칸으로 다시 읽기. 열들을 제자리에서 고침
+ * `align.큰제목읽기` — 두 열에 걸친 큰 활자 편 제목을 넓은 칸으로 다시 읽기. 열들을 제자리에서 고침
  * ⚠ 차례: 큰 제목 → 오른쪽 열 나머지 → 왼쪽 열 나머지. 열 점수는 그대로(가장자리다듬기 판단을 안 바꾸려고)
  */
 async function 큰제목읽기(모델, geo, 열들, span) {
@@ -1755,7 +1752,7 @@ function 가장자리다듬기(geo, 열들, δ, 최대, 겹침, 안δ) {
   if (안δ === undefined) 안δ = EDGE_DROP_IN;
   const 점 = function (i) { return 열들[i] === null ? -9.0 : 열들[i].점수; };
   // EDGE_MEDIAN — 바로 바깥 이웃(j)이 광곽 세로줄 열('ㅣ' 막대)이고 본문만큼 길고(글자 수 ≥ 열 중앙값 × 몫) 남은 칸의
-  //   낮은 칸(확신 < 0.5)이 EDGE_MEDIAN_LOW 이하인 열은 확신으로 떼지 않음(2026-10-06 증남포 — 판심 글씨 열은 안 걸리게)
+  //   낮은 칸(확신 < 0.5)이 EDGE_MEDIAN_LOW 이하인 열은 확신으로 떼지 않음(판심 글씨 열은 안 걸리게)
   let 보호 = function () { return false; };
   if (EDGE_MEDIAN) {
     const 길이 = 열들.filter(function (o) { return o !== null; }).map(function (o) { return o.글자.length; })
@@ -1791,7 +1788,7 @@ function 가장자리다듬기(geo, 열들, δ, 최대, 겹침, 안δ) {
     let T = Infinity, B = -Infinity;
     속.forEach(function (s) { T = Math.min(T, s[0]); B = Math.max(B, s[1]); });
     const 줄 = function (i, j) { return 세로줄있나(geo.그림, 가(i), 가(j), T, B); };
-    // 계선 판 — 떼일 열들이 본문 같으면(절반 이상 확신 ≥ 기준 − δ · 안쪽 열까지 자간 간격) 안 뗌 (2026-10-01)
+    // 계선 판 — 떼일 열들이 본문 같으면(절반 이상 확신 ≥ 기준 − δ · 안쪽 열까지 자간 간격) 안 뗌
     const 본문같음 = function (떼일, 안쪽) {
       if (EDGE_GUIDE === null || 떼일.length < 2) return false;   // 광곽 밖 한 열만 떼는 것은 그대로(여백 장 제목)
       let 좋음 = 0;
@@ -1835,7 +1832,7 @@ function 가장자리다듬기(geo, 열들, δ, 최대, 겹침, 안δ) {
 // ════════════════════════════════════════════════════════════════════
 
 /**
- * ★ Pillow `Resample.c` 그대로(10.2) — `precompute_coeffs` + `normalize_coeffs_8bpc`. 8비트 그림은 가중치를
+ * Pillow `Resample.c` 그대로(10.2) — `precompute_coeffs` + `normalize_coeffs_8bpc`. 8비트 그림은 가중치를
  * 2^22 배 정수로 바꿔 더한다(PRECISION_BITS 22 · 처음값 2^21 · 오른쪽 옮김 · 0~255 자름). `오리기` ·
  * `경계띠` 가 씀. ⚠ 실수 계산으로 흉내 내면 픽셀이 가끔 1/255 달라 경계 검출기의 자를 후보가 바뀜.
  */
@@ -1981,14 +1978,14 @@ function 모델만들기(설정, 세션, ort, 경계세션) {
     },
     /** 상자들 → {초, 중, 종, 확신}. 확신은 세 머리 최댓값의 **최솟값**. */
     읽기: async function (g, boxes, 뭉치, 알림) {
-      뭉치 = 뭉치 || 256;
+      뭉치 = Math.min(뭉치 || 설정.뭉치 || 64, 설정.뭉치 || 64);   // 설정 '뭉치' 를 넘지 않게 — 서버판 `onnx모델._머리들` 과 같음
       const n = boxes.length;
       const 초 = new Int32Array(n), 중 = new Int32Array(n);
       const 종 = new Int32Array(n), 확신 = new Float64Array(n);
       if (!n) return { 초: 초, 중: 중, 종: 종, 확신: 확신 };
       const nL = 설정.초성.length, nV = 설정.중성.length, nT = 설정.종성.length;
-      // ★ 같은 상자는 한 번만(2026-09-29) — 칸수를 est±폭으로 여러 번 자르면 같은 자리 상자가 되풀이됨
-      //   (서로 다른 것 22~25%). WASM 은 뭉치가 달라도 상자마다 답이 같음 — 파이썬(CUDA)은 아님(1e-4)
+      // 같은 상자는 한 번만 — 칸수를 est±폭으로 여러 번 자르면 같은 자리 상자가 되풀이됨
+      //   WASM 은 뭉치가 달라도 상자마다 답이 같음 — 파이썬(CUDA)은 아님(1e-4)
       const 자리 = new Int32Array(n), 읽을 = [];
       if (this.중복빼기 === false) {
         for (let i = 0; i < n; i++) { 자리[i] = i; 읽을.push(boxes[i]); }
@@ -2030,7 +2027,7 @@ function 모델만들기(설정, 세션, ort, 경계세션) {
      * 반환 {L, V, T}: 상자 i 의 초성 확률은 L[i·nL … (i+1)·nL). 같은 상자는 한 번만 읽음.
      */
     확률: async function (g, boxes, 뭉치) {
-      뭉치 = 뭉치 || 256;
+      뭉치 = Math.min(뭉치 || 설정.뭉치 || 64, 설정.뭉치 || 64);
       const n = boxes.length;
       const nL = 설정.초성.length, nV = 설정.중성.length, nT = 설정.종성.length;
       const L = new Float64Array(n * nL), V = new Float64Array(n * nV), T = new Float64Array(n * nT);
