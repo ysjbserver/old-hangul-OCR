@@ -7,17 +7,17 @@
  *   mw.loader.load(window.옛한글OCR자료 + "전사대조.js");    ← 이 줄을 더하면 켜짐
  *
  * 셈은 모두 브라우저 안에서(모델 · `읽기.js` 는 OCR 과 같은 것).
- * 파이썬 짝: `전사대조/대조.py`(인쇄글자 · 맞대기 · 한쪽) · `부품/align.py`(to_text) · `부품/wikitext.py`(printed_text)
+ * 파이썬 짝: `부품/대조.py`(인쇄글자 · 맞대기 · 한쪽) · `부품/align.py`(to_text) · `부품/wikitext.py`(printed_text)
  */
 (function (전역) {
 "use strict";
 
 // ════════════════════════════════════════════════════════════════════
-//  셈 — 파이썬 `전사대조/대조.py` 를 옮긴 것
+//  셈 — 파이썬 `부품/대조.py` 를 옮긴 것
 // ════════════════════════════════════════════════════════════════════
 
 // `대조.py` 의 문턱 (재기.py 로 고름)
-const P_TR_MAX = 0.05, TOP_MIN = 0.80, 일치문턱 = 0.75, 다시볼일치 = 0.9, 열문턱 = 0.75, 받침잘림높이 = 0.8;
+const P_TR_MAX = 0.05, TOP_MIN = 0.80, 일치문턱 = 0.75, 다시볼일치 = 0.9, 쪽자간차이 = 0.02, 열문턱 = 0.75, 받침잘림높이 = 0.8;
 const MIN_LETTERS = 50;                                  // page.MIN_LETTERS
 // `align.py` 의 무게
 const W_L = 0.40, W_V = 0.40, W_T = 0.20, W_ALL = 0.20, UNKNOWN = 0.45;
@@ -123,8 +123,8 @@ function 인쇄글자(raw, 제목, 큰빼기) {
     [t, pos] = 걷어내기(t, pos, [{ s: m.index, e: m.index + m[0].length }], function () { return 남길; });
   }
   [t, pos] = 걷어내기(t, pos, 찾기(제목꼴, t), function (m) { return 제목 ? [m.묶음] : []; });
-  [t, pos] = 걷어내기(t, pos, 찾기(/^[ \t]*:+/gm, t), function () { return []; });   // 줄 머리 `:` 들여쓰기 (2026-10-06)
-  [t, pos] = 걷어내기(t, pos, 찾기(/'{2,}/g, t), function () { return []; });   // `''` · `'''` 굵게 · 기울임 (2026-10-06)
+  [t, pos] = 걷어내기(t, pos, 찾기(/^[ \t]*:+/gm, t), function () { return []; });   // 줄 머리 `:` 들여쓰기
+  [t, pos] = 걷어내기(t, pos, 찾기(/'{2,}/g, t), function () { return []; });   // `''` · `'''` 굵게 · 기울임
   [t, pos] = 걷어내기(t, pos, 찾기(/\[\[[^|\]]*\|([^\]]*)\]\]/gd, t), function (m) { return [m.묶음]; });
   [t, pos] = 걷어내기(t, pos, 찾기(/\[\[([^\]]*)\]\]/gd, t), function (m) { return [m.묶음]; });
   [t, pos] = 걷어내기(t, pos, 표구간(t, 표), function (m) { return m.남길; });
@@ -207,7 +207,7 @@ function 읽개만들기(모델, g) {
         if (!본.has(k) && !새열쇠.has(k)) { 새열쇠.add(k); 새.push(b); }
       }
       if (!새.length) return;
-      const r = await 모델.확률(g, geo ? 전역.옛한글읽기.맞춤상자(g, 새, geo) : 새);   // 행간 넓은 쪽은 글자 크기 상자로(`align._맞춤상자`, 2026-10-06)
+      const r = await 모델.확률(g, geo ? 전역.옛한글읽기.맞춤상자(g, 새, geo) : 새);   // 행간 넓은 쪽은 글자 크기 상자로(`align._맞춤상자`)
       새.forEach(function (b, i) {
         const L = r.L.slice(i * nL, (i + 1) * nL), V = r.V.slice(i * nV, (i + 1) * nV), T = r.T.slice(i * nT, (i + 1) * nT);
         const kL = 큰것(L), kV = 큰것(V), kT = 큰것(T);
@@ -308,6 +308,7 @@ async function 정답지자르기(A, 모델, 읽개, geo, letters, r, span, 경�
   const rL = r.rL, rV = r.rV, rT = r.rT;
   const 그림자 = 경계 ? await A.경계프로파일(모델, geo) : null;
   let why = "글자 수를 맞추지 못함";
+  let 결과 = null;
   for (const tr of tries) {
     const bp = A.자를계획(geo, tr[0], tr[1], true, 그림자);
     const plans = bp.계획, flat = bp.상자;
@@ -366,9 +367,9 @@ async function 정답지자르기(A, 모델, 읽개, geo, letters, r, span, 경�
     if (best === null) continue;
     best.일치 = best.hit / Math.max(1, best.known);
     best.사유 = null;
-    return best;
+    if (결과 === null || best.hit > 결과.hit) 결과 = best;   // 넓게 다시 자른 판도 풀어 보고 더 맞은 쪽
   }
-  return { 사유: why };
+  return 결과 !== null ? 결과 : { 사유: why };
 }
 
 // ── 맞대기 (`대조.맞대기`) ──
@@ -496,8 +497,9 @@ function 같은후보(c, 들) {                                // 다른 자르�
 }
 
 // ── 한 쪽 (`대조.한쪽` · `_한번`) ──
-// 기하 후보: false = 자르는 기하 · true = 읽는 기하 · "끝띠" = 제본 그림자 띠를 지운 자르는 기하(권2 0003 — 전사문과 더 잘 맞을 때만)
-// · "판심" = 판심 걸러내기를 끈 읽는 기하(훈아진언 1894 PDF 58쪽 — 광곽에 붙은 끝 열을 판심으로 뗌).
+// 기하 후보: false = 자르는 기하 · true = 읽는 기하 · "끝띠" = 제본 그림자 띠를 지운 자르는 기하(전사문과 더 잘 맞을 때만)
+// · "판심" = 판심 걸러내기를 끈 읽는 기하(광곽에 붙은 끝 열을 판심으로 뗀 쪽용).
+// · "쪽자간" = 이 쪽 그림으로 잰 자간비로 자른 끝띠 기하(`대조.쪽자간기하` — 파일 자간비와 2% 넘게 다를 때만).
 // 큰빼기: 큰 활자 틀(책 이름) 안 글자를 빼고 맞대기 — null 이면 그대로 해 보고, 잘 안 맞고 큰 활자 틀이 있으면 빼고도.
 async function 한번(A, 모델, 읽개, 기하얻기, raw, 제목, 경계, 기하들, 큰빼기) {
   const 시도 = (제목 === null || 제목 === undefined) ? [false, true] : [제목];
@@ -509,6 +511,20 @@ async function 한번(A, 모델, 읽개, 기하얻기, raw, 제목, 경계, 기�
     if (빼기 && (큰빼기 === null || 큰빼기 === undefined) && (!큰있음 || (best && (best[0].일치 || 0) >= 다시볼일치))) break;
     for (const 판 of 기하들) {
       if (best && (best[0].일치 || 0) >= 다시볼일치) break;     // 자르는 기하로 잘 맞았으면 그만
+      if (판 === "쪽자간") {
+        const geo = 기하얻기(false, true, false, true);
+        if (!geo) continue;
+        let 이전 = null;
+        for (const kh of 시도) {
+          const 글자들 = 인쇄글자(raw, kh, 빼기);
+          if (이전 !== null && 글자들.length === 이전) continue;
+          이전 = 글자들.length;
+          const r = await 맞대기(A, 모델, 읽개, geo, 글자들, 3, 경계);
+          r.기하 = "쪽자간"; r.제목 = kh; r.큰빼기 = 빼기;
+          if (best === null || (r.일치 || -1) > (best[0].일치 || -1)) best = [r, 글자들];
+        }
+        continue;
+      }
       const 판심 = 판 === "판심", 읽기 = 판 === true || 판심, 끝띠 = 판 === "끝띠";
       if (끝띠 && !("자르기" in 본열)) { const g0 = 기하얻기(false, false); 본열.자르기 = g0 ? g0.cols : null; }
       if (판심 && !("읽기" in 본열)) { const g0 = 기하얻기(true, false); 본열.읽기 = g0 ? g0.cols : null; }
@@ -539,23 +555,30 @@ async function 한번(A, 모델, 읽개, 기하얻기, raw, 제목, 경계, 기�
  * 위키 원문 한 쪽을 그 쪽 스캔(그림 g — `읽기.js` 의 `그림읽기`)과 맞댐.
  * 옵션: 문헌설정 {자간비, 읽기자간비, 단, 판짜임} (없으면 이 쪽 그림으로 자간을 재고 한 단으로 봄 — 파이썬의 '모르는 문헌'),
  *       제목(편·장 제목이 종이에 찍히나 — 없으면 둘 다 해 보고 잘 맞는 쪽), 합의(기본 켬), 밀림(기본 끔).
- * 반환은 서버판(`전사대조/서버.py`)의 답과 같은 꼴 — 후보마다 원문 자리(시작 · 끝, UTF-16)와 앞뒤 글자.
+ * 반환은 서버판(`툴포지/app.py`)의 답과 같은 꼴 — 후보마다 원문 자리(시작 · 끝, UTF-16)와 앞뒤 글자.
  */
 async function 한쪽(모델, g, raw, 옵션) {
   옵션 = 옵션 || {};
   const A = 전역.옛한글읽기;
   const s = 옵션.문헌설정 || null;
   const 합의 = 옵션.합의 !== false, 밀림 = !!옵션.밀림;
-  const 기하들 = 옵션.기하들 || [false, true, "끝띠", "판심"];
+  const 기하들 = 옵션.기하들 || [false, true, "끝띠", "판심", "쪽자간"];
   const 읽개 = 읽개만들기(모델, g);
   let 쪽자간 = undefined;
   const 보관 = {};
-  const 기하얻기 = function (읽기, 끝띠, 판심) {           // `대조.기하` — 가장자리 후보 열 없이(끝띠 = 제본 그림자 띠를 지우고 · 판심 = 판심 걸러내기 끔)
-    const 열쇠 = (읽기 ? "읽기" : "자르기") + (끝띠 ? "끝띠" : "") + (판심 ? "판심" : "");
+  const 기하얻기 = function (읽기, 끝띠, 판심, 쪽만) {           // `대조.기하` — 가장자리 후보 열 없이(끝띠 = 제본 그림자 띠를 지우고 · 판심 = 판심 걸러내기 끔)
+    const 열쇠 = (읽기 ? "읽기" : "자르기") + (끝띠 ? "끝띠" : "") + (판심 ? "판심" : "") + (쪽만 ? "쪽자간" : "");
     const 판 = 판심 ? false : undefined;
     if (열쇠 in 보관) return 보관[열쇠];
     let geo;
-    if (s) {
+    if (쪽만) {                                          // `대조.쪽자간기하` — 이 쪽 그림으로 잰 자간비(파일 값과 2% 넘게 다를 때만)
+      geo = null;
+      if (s && s.자간비) {
+        if (쪽자간 === undefined) 쪽자간 = A.쪽자간비(g, s.단 || 1);
+        if (쪽자간 && Math.abs(쪽자간 - s.자간비) > s.자간비 * 쪽자간차이)
+          geo = A.쪽기하(g, 쪽자간, s.단 || 1, false, null, false, true, undefined);
+      }
+    } else if (s) {
       let r = (읽기 && s.읽기자간비) || s.자간비 || null;
       if (!r) {                                          // 판형만 정하고 자간비는 못 잰 파일 — 이 쪽 그림으로
         if (쪽자간 === undefined) 쪽자간 = A.쪽자간비(g, s.단 || 1);
@@ -819,7 +842,7 @@ function 목록그리기() {
   var 몸 = 판.querySelector(".전사대조-목록");
   if (!몸) return;
   몸.textContent = "";
-  // 넘기거나 바꾼 곳은 목록에서 빼고 맨 아래 한 줄로 접는다(작업자 요청 — 흐리게만 두면 자리를 먹음)
+  // 넘기거나 바꾼 곳은 목록에서 빼고 맨 아래 한 줄로 접는다
   var 남은것 = [], 끝난것 = [];
   후보들.forEach(function (c, k) {
     if (보일것(c)) (c.끝남 ? 끝난것 : 남은것).push([c, k]);
@@ -962,7 +985,7 @@ var 자료 = window.옛한글OCR자료 || "";
 if (자료 && 자료.charAt(자료.length - 1) !== "/") 자료 += "/";
 var 설정 = null, 모델 = null, 준비중 = null;
 
-// Toolforge 서버(`툴포지/app.py`, 2026-10-07) — 있으면 맞대기를 서버에 맡김(파이썬 `대조.한쪽` — 답의 꼴이 `셈.한쪽` 과 같음).
+// Toolforge 서버(`툴포지/app.py`) — 있으면 맞대기를 서버에 맡김(파이썬 `대조.한쪽` — 답의 꼴이 `셈.한쪽` 과 같음).
 // 서버가 내주는 이 파일의 맨 앞 줄이 채움. OCR 소도구와 같은 서버 · 같은 판형 살피기
 var 서버 = window.옛한글OCR서버 || "";
 if (서버 && 서버.charAt(서버.length - 1) !== "/") 서버 += "/";
@@ -1053,7 +1076,7 @@ function 스캔가져오기(파일, 쪽) {
   });
 }
 
-// 이 파일의 판형 · 자간비 · 판짜임 — OCR 소도구와 **같은** 셈 · 같은 기억 칸(`읽기.js` 의 `판형살피기`, 2026-10-03).
+// 이 파일의 판형 · 자간비 · 판짜임 — OCR 소도구와 **같은** 셈 · 같은 기억 칸(`읽기.js` 의 `판형살피기`).
 // 소도구로 먼저 연 파일이면 기억한 값, 처음이면 쪽 몇 장을 받아 정함(처음 한 번 1~3분)
 function 판형살피기(파일) {
   if (!window.옛한글읽기.판형살피기) {          // 브라우저가 옛 읽기.js 를 기억하는 중(jsDelivr 최대 7일)

@@ -18,7 +18,7 @@ var 실행기 = (window.옛한글OCR실행기 === "webgpu") ? ["webgpu", "wasm"]
 var 자료 = window.옛한글OCR자료 || "";
 if (자료 && 자료.charAt(자료.length - 1) !== "/") 자료 += "/";
 
-// Toolforge 서버(`툴포지/app.py`, 2026-10-07) — 있으면 모델 · 판형 살피기를 서버에 맡김. 서버가 내주는 이 파일의 맨 앞 줄이 채움
+// Toolforge 서버(`툴포지/app.py`) — 있으면 모델 · 판형 살피기를 서버에 맡김. 서버가 내주는 이 파일의 맨 앞 줄이 채움
 var 서버 = window.옛한글OCR서버 || "";
 if (서버 && 서버.charAt(서버.length - 1) !== "/") 서버 += "/";
 
@@ -149,7 +149,7 @@ function 준비() {
     ort.env.wasm.numThreads = 1;
     var 세션 = await ort.InferenceSession.create(자료 + "옛한글모델.onnx",
                     { executionProviders: 실행기 });
-    // 글자 경계 검출기(0.4MB) — 자를 자리를 고를 때 씀(`align.CUT_LEARN`, 2026-09-28)
+    // 글자 경계 검출기(0.4MB) — 자를 자리를 고를 때 씀(`align.CUT_LEARN`)
     var 경계세션 = 설정.경계 ? await ort.InferenceSession.create(자료 + "경계검출.onnx",
                     { executionProviders: 실행기 }) : null;
     모델 = window.옛한글읽기.모델만들기(설정, 세션, ort, 경계세션);
@@ -159,7 +159,7 @@ function 준비() {
 
 /**
  * 파일마다 처음 한 번 — 판형 · 자간비 · 판짜임. 셈은 `읽기.js` 의 `판형살피기`(전사대조와 같은 것)
- * ★ 모든 파일을 스스로 잼 — `설정.json` 에 문헌 표를 두지 않음(2026-10-01, 작업자 결정)
+ * 모든 파일을 스스로 잼 — `설정.json` 에 문헌 표 없음
  * ⚠ 판정 규칙을 바꾸면 `읽기.js` 의 `판형판` 을 올릴 것
  */
 function 판형살피기(파일) {

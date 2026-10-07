@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-1단계 — 이미 전사된 페이지를 모아 온다.  (v4: 해상도 검사 추가)
+1단계 — 이미 전사된 페이지를 모아 온다.
 
 사용법:
     python 근원/부품/step1_collect.py "신약젼셔 (1904년).pdf"
@@ -80,8 +80,7 @@ def list_pages(pdf):
 
 def url_pattern(pdf):
     """
-    썸네일 주소를 문헌당 딱 한 번만 물어보고, 쪽번호만 갈아 끼울 틀을 만든다.
-    (v2 는 쪽마다 한 번씩 물어보느라 요청이 두 배였습니다.)
+    썸네일 주소를 문헌당 한 번만 물어보고, 쪽번호 · 폭만 갈아 끼울 틀을 만든다.
     """
     r = api(action="query", prop="imageinfo", titles="File:" + pdf,
             iiprop="url", iiurlwidth=500, iiurlparam="page1-500px")
@@ -100,9 +99,7 @@ def _width_of(path):
         return 0
 
 def fetch_one(pat, n, path):
-    # 이미 있어도 해상도가 다르면 다시 받는다.
-    # (v2 는 위키미디어 API 가 요청을 무시하고 500px 을 돌려주는 바람에
-    #  작은 이미지를 받아 두는 문제가 있었습니다.)
+    # 이미 있어도 해상도가 다르면 다시 받는다(API 는 요청한 너비를 무시하고 500px 을 줄 수 있음).
     if os.path.exists(path):
         if _width_of(path) == WIDTH:
             return "skip"
