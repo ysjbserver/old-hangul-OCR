@@ -3,7 +3,6 @@
  *
  * 페이지 이름공간 편집 창에 단추를 놓고, 누르면 그 쪽 스캔을 브라우저 안에서 읽어 편집 상자에 넣음.
  * 읽는 셈은 `읽기.js`, 이 파일은 화면과 그림 가져오기만.
- * ⚠ 저장은 하지 않음 — 사람이 확인하고 누름
  */
 (function () {
 "use strict";
@@ -37,11 +36,25 @@ function 스크립트(url) {
 /**
  * 편집 중인 쪽의 파일 이름과 쪽 번호. "페이지:셩경젼셔 신약.pdf/393" → {파일, 쪽: 393}
  * ⚠ 이름공간 이름은 언어마다 달라 `wgCanonicalNamespace` 로 확인
+ * ⚠ 순서대로 편집(`prp_editinsequence`)은 쪽을 옮겨도 `mw.config` 를 안 바꾸고 `location.hash` 에
+ *   "페이지:파일/쪽" 만 적음 → 그때는 hash 를 먼저 봄
  */
+function 순서편집제목() {
+  if (!/[?&]prp_editinsequence=(1|true|yes|on)(&|$)/i.test(location.search)) return null;
+  var h;
+  try { h = decodeURIComponent(location.hash.slice(1)); } catch (e) { return null; }
+  var i = h.indexOf(":");
+  if (i < 0) return null;
+  var 앞 = h.slice(0, i).replace(/_/g, " ");
+  var 이름공간 = (mw.config.get("wgFormattedNamespaces") || {})[mw.config.get("wgNamespaceNumber")];
+  if (앞 !== "Page" && 앞 !== 이름공간) return null;
+  return h.slice(i + 1).replace(/_/g, " ");
+}
+
 function 지금쪽() {
   var cfg = mw.config.get(["wgCanonicalNamespace", "wgTitle", "wgAction"]);
   if (cfg.wgCanonicalNamespace !== "Page") return null;
-  var m = /^(.*)\/(\d+)$/.exec(cfg.wgTitle);
+  var m = /^(.*)\/(\d+)$/.exec(순서편집제목() || cfg.wgTitle);
   if (!m) return null;
   return { 파일: m[1], 쪽: parseInt(m[2], 10) };
 }
@@ -184,8 +197,15 @@ async function 읽기시작() {
     var r = await window.옛한글읽기.한쪽(모델, g, null, { 문헌설정: 살핀 });
     var 초 = ((performance.now() - t0) / 1000).toFixed(1);
 
+    // 순서대로 편집에서 읽는 사이 쪽을 옮겼으면 넣지 않음 — 다른 쪽 글을 덮게 됨
+    var 뒤쪽 = 지금쪽();
+    if (!뒤쪽 || 뒤쪽.파일 !== 쪽.파일 || 뒤쪽.쪽 !== 쪽.쪽) {
+      알림("읽는 사이에 쪽이 바뀌어(" + 쪽.쪽 + "쪽 → " + (뒤쪽 ? 뒤쪽.쪽 + "쪽" : "?")
+           + ") 넣지 않았습니다. 다시 눌러 주세요.");
+      return;
+    }
     if (!r.글월) {
-      알림("판정: " + r.판정.등급 + " — " + (r.판정.까닭.join(" · ") || "열을 못 찾았습니다")
+      알림(쪽.쪽 + "쪽 판정: " + r.판정.등급 + " — " + (r.판정.까닭.join(" · ") || "열을 못 찾았습니다")
            + ". 넣지 않았습니다.");
       return;
     }
@@ -199,7 +219,7 @@ async function 읽기시작() {
     // 칠했으면 위쪽 칸은 치움. 못 칠했을 때만(못씀 · 구문 강조) 띄움
     if (칠함) 교정칸치우기();
     else 보이기(r, r.판정.등급 === "못씀" ? 상자 : null);
-    알림((r.판정.등급 === "못씀" ? "판정: 못씀 — 넣지 않았습니다. 처음부터 치는 편이 빠릅니다"
+    알림(쪽.쪽 + "쪽 " + (r.판정.등급 === "못씀" ? "판정: 못씀 — 넣지 않았습니다. 처음부터 치는 편이 빠릅니다"
                               : "판정: " + r.판정.등급)
          + (칠함 ? " · 노란 자리가 확신 낮은 글자입니다(고치면 칠이 사라지고, 칠은 저장되지 않습니다)" : "")
          + " · " + 살핀글(살핀)
@@ -424,7 +444,7 @@ function 세우기() {
   단추 = document.createElement("button");
   단추.type = "button";
   단추.className = "cdx-button";
-  단추.textContent = "옛한글 OCR 로 읽기";
+  단추.textContent = "인식 (전사)";
   단추.addEventListener("click", 읽기시작);
   상태 = document.createElement("span");
   상태.style.cssText = "font-size:13px;color:#54595d";
@@ -433,11 +453,22 @@ function 세우기() {
   줄.appendChild(상태);
   var 상자 = 편집상자();
   상자.parentNode.insertBefore(줄, 상자);
+<<<<<<< Updated upstream
 
   var 안내 = document.createElement("div");
   안내.style.cssText = "font-size:12px;color:#72777d;flex-basis:100%";
   안내.textContent = "결과를 편집 상자에 넣기만 합니다. 저장은 반드시 눈으로 보고 직접 누르세요.";
   줄.appendChild(안내);
+=======
+  // 순서대로 편집으로 쪽을 옮기면 앞 쪽의 칠 · 교정 칸 · 알림을 걷음
+  if (/[?&]prp_editinsequence=/i.test(location.search)) {
+    window.addEventListener("hashchange", function () {
+      표시걷기();
+      교정칸치우기();
+      if (!단추.disabled) 알림("");
+    });
+  }
+>>>>>>> Stashed changes
 }
 
 if (window.mw && mw.loader) {

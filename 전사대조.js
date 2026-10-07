@@ -6,7 +6,7 @@
  *   mw.loader.load(window.옛한글OCR자료 + "소도구.js");      ← OCR (있던 줄)
  *   mw.loader.load(window.옛한글OCR자료 + "전사대조.js");    ← 이 줄을 더하면 켜짐
  *
- * 셈은 모두 브라우저 안에서(모델 · `읽기.js` 는 OCR 과 같은 것). 저장은 하지 않음 — 사람이 확인하고 누름.
+ * 셈은 모두 브라우저 안에서(모델 · `읽기.js` 는 OCR 과 같은 것).
  * 파이썬 짝: `전사대조/대조.py`(인쇄글자 · 맞대기 · 한쪽) · `부품/align.py`(to_text) · `부품/wikitext.py`(printed_text)
  */
 (function (전역) {
@@ -618,11 +618,25 @@ var 색 = { "바뀜": "rgba(255,80,80,.40)", "모르는자모": "rgba(255,160,0,
 
 function 알림(t) { if (상태) 상태.textContent = t; }
 
+// ⚠ 순서대로 편집(`prp_editinsequence`)은 쪽을 옮겨도 `mw.config` 를 안 바꾸고 `location.hash` 에
+//   "페이지:파일/쪽" 만 적음 → 그때는 hash 를 먼저 봄 (OCR 소도구 `순서편집제목` 과 같음)
+function 순서편집제목() {
+  if (!/[?&]prp_editinsequence=(1|true|yes|on)(&|$)/i.test(location.search)) return null;
+  var h;
+  try { h = decodeURIComponent(location.hash.slice(1)); } catch (e) { return null; }
+  var i = h.indexOf(":");
+  if (i < 0) return null;
+  var 앞 = h.slice(0, i).replace(/_/g, " ");
+  var 이름공간 = (mw.config.get("wgFormattedNamespaces") || {})[mw.config.get("wgNamespaceNumber")];
+  if (앞 !== "Page" && 앞 !== 이름공간) return null;
+  return h.slice(i + 1).replace(/_/g, " ");
+}
+
 function 지금쪽() {
   var cfg = mw.config.get(["wgCanonicalNamespace", "wgTitle", "wgAction"]);
   if (cfg.wgCanonicalNamespace !== "Page") return null;
   if (cfg.wgAction !== "edit" && cfg.wgAction !== "submit") return null;
-  var m = /^(.*)\/(\d+)$/.exec(cfg.wgTitle);
+  var m = /^(.*)\/(\d+)$/.exec(순서편집제목() || cfg.wgTitle);
   return m ? { 파일: m[1], 쪽: parseInt(m[2], 10) } : null;
 }
 
@@ -1064,6 +1078,8 @@ async function 시작() {
     var g = window.옛한글읽기.그림읽기(im);
     var 답 = await 셈.한쪽(모델, g, 본문, { 문헌설정: 살핀 });
     if (답.사유) throw new Error(답.사유);
+    var 뒤쪽 = 지금쪽();
+    if (!뒤쪽 || 뒤쪽.파일 !== 쪽.파일 || 뒤쪽.쪽 !== 쪽.쪽) throw new Error("맞대는 사이에 쪽이 바뀌었습니다 — 다시 눌러 주세요.");
     if (상자.value !== 본문) throw new Error("맞대는 사이에 편집 상자가 바뀌었습니다 — 다시 눌러 주세요.");
     답.초 = ((performance.now() - t0) / 1000).toFixed(1);
     후보들 = 답.후보.map(function (c) {
@@ -1094,7 +1110,7 @@ function 세우기() {
   단추 = document.createElement("button");
   단추.type = "button";
   단추.className = "cdx-button";
-  단추.textContent = "스캔과 맞대기 (전사대조)";
+  단추.textContent = "교정 (전사대조)";
   단추.title = "지금 편집 상자의 전사문을 이 쪽 스캔과 맞대어 틀렸을 만한 글자를 짚습니다";
   단추.addEventListener("click", 시작);
   상태 = document.createElement("span");
@@ -1103,6 +1119,15 @@ function 세우기() {
   줄.appendChild(상태);
   var 상자 = 편집상자();
   상자.parentNode.insertBefore(줄, 상자);
+  // 순서대로 편집으로 쪽을 옮기면 앞 쪽의 칠 · 후보 목록을 걷음
+  if (/[?&]prp_editinsequence=/i.test(location.search)) {
+    window.addEventListener("hashchange", function () {
+      걷기();
+      if (판) { 판.remove(); 판 = null; }
+      후보들 = []; 기준글 = null; 고른것 = null;
+      if (!단추.disabled) 알림("");
+    });
+  }
 }
 
 window.전사대조 = { 시작: 시작, 후보: function () { return 후보들; } };   // 시험용
