@@ -671,6 +671,118 @@ function 보이나(상자) {
   return 상자.isConnected && 상자.offsetParent !== null && getComputedStyle(상자).visibility !== "hidden";
 }
 
+// ── 디버그 로그 — 잘 안 맞은 쪽을 알릴 때 복사해 붙일 글(마지막 한 번만). OCR 소도구 `로그단추` 와 같은 모양 ──
+var 로그 = { 글: "", 칸: null };
+
+function 시각글(d) {
+  function p(n) { return String(n).padStart(2, "0"); }
+  var 차 = -d.getTimezoneOffset();
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " "
+       + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds())
+       + " (UTC" + (차 >= 0 ? "+" : "-") + p(Math.floor(Math.abs(차) / 60)) + ":" + p(Math.abs(차) % 60) + ")";
+}
+
+function 로그머리(쪽, 언제) {
+  var c = mw.config.get(["wgServer", "wgArticlePath", "wgFormattedNamespaces", "wgNamespaceNumber", "wgCurRevisionId"]);
+  var 제목 = 쪽 ? ((c.wgFormattedNamespaces || {})[c.wgNamespaceNumber] || "페이지") + ":" + 쪽.파일 + "/" + 쪽.쪽 : "(못 찾음)";
+  var A = 전역.옛한글읽기;
+  return [
+    ["도구", "교정 (전사대조)"],
+    ["시각", 시각글(언제)],
+    ["문서", 제목],
+    ["주소", 쪽 ? (c.wgServer || location.origin) + (c.wgArticlePath || "/wiki/$1").replace("$1", encodeURIComponent(제목.replace(/ /g, "_")).replace(/%2F/g, "/").replace(/%3A/g, ":")) : ""],
+    ["판", c.wgCurRevisionId || "(새 문서)"],
+    ["실행", 서버 ? "서버 " + 서버 : "wasm · 자료 " + (자료 || "(없음)")],
+    ["읽기.js", A ? "판형판 " + A.판형판 : (서버 ? "(서버 모드 — 안 받음)" : "(아직 안 받음)")],
+    ["구문 강조", 편집상자() && !보이나(편집상자()) ? "켜짐" : "꺼짐"],
+    ["브라우저", navigator.userAgent],
+  ];
+}
+
+function 로그쓰기(줄들) {
+  로그.글 = "[옛한글 OCR 디버그 로그]\n" + 줄들
+    .filter(function (v) { return v[1] !== undefined && v[1] !== null && v[1] !== ""; })
+    .map(function (v) { return v[0] + ": " + v[1]; }).join("\n");
+  if (로그.칸) 로그.칸.글.value = 로그.글;
+}
+
+function 초글(ms) { return (ms / 1000).toFixed(1) + "초"; }
+
+/** 단추 줄 오른쪽 끝의 작은 '디버그 로그' — 누르면 줄 아래에 펼침 */
+function 로그단추(줄) {
+  var 고리 = document.createElement("a");
+  고리.href = "#";
+  고리.setAttribute("role", "button");
+  고리.textContent = "디버그 로그";
+  고리.title = "마지막으로 맞댄 쪽의 기록(쪽 · 시간 · 일치율 …) — 잘 안 맞은 쪽을 알릴 때 복사해 붙여 주세요";
+  고리.style.cssText = "margin-left:auto;font-size:11px;color:#a2a9b1;text-decoration:none";
+  var 칸 = document.createElement("div");
+  칸.style.cssText = "flex-basis:100%;display:none;font-size:12px;color:#54595d";
+  var 글 = document.createElement("textarea");
+  글.readOnly = true;
+  글.rows = 12;
+  글.style.cssText = "width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;"
+                  + "white-space:pre-wrap;word-break:break-all;height:18em;resize:vertical;"
+                  + "background:#f8f9fa;border:1px solid #c8ccd1;padding:4px 6px";
+  var 아래 = document.createElement("div");
+  아래.style.cssText = "display:flex;gap:8px;align-items:center;margin-top:4px";
+  var 복사 = document.createElement("button");
+  복사.type = "button";
+  복사.className = "cdx-button";
+  복사.style.cssText = "font-size:12px;min-height:0;padding:2px 8px";
+  복사.textContent = "복사";
+  var 알림말 = document.createElement("span");
+  복사.addEventListener("click", function () {
+    var 됨 = function () { 알림말.textContent = "복사했습니다."; };
+    var 손으로 = function () {
+      글.focus(); 글.select();
+      try { document.execCommand("copy"); 됨(); } catch (e) { 알림말.textContent = "Ctrl+C 로 복사해 주세요(골라 두었습니다)."; }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(글.value).then(됨, 손으로);
+    else 손으로();
+  });
+  아래.appendChild(복사);
+  아래.appendChild(알림말);
+  칸.appendChild(글);
+  칸.appendChild(아래);
+  고리.addEventListener("click", function (e) {
+    e.preventDefault();
+    var 열림 = 칸.style.display === "none";
+    칸.style.display = 열림 ? "block" : "none";
+    고리.textContent = 열림 ? "디버그 로그 닫기" : "디버그 로그";
+    글.value = 로그.글 || "아직 기록이 없습니다 — '교정 (전사대조)' 를 한 번 누른 뒤에 보세요.";
+    알림말.textContent = "";
+  });
+  줄.appendChild(고리);
+  줄.appendChild(칸);              // 줄이 flex-wrap 이라 폭 100% 로 다음 줄에 펼쳐짐
+  로그.칸 = { 글: 글 };
+}
+
+/** 맞댄 결과 · 걸린 시간 */
+function 로그본문(살핀, 답, 때, 처음) {
+  var 줄 = [];
+  if (살핀) 줄.push(["판형 살핀 값", (Array.isArray(살핀.단) ? (살핀.단.length + 1) + "단(가로줄)" : (살핀.단 || 1) + "단")
+                       + (살핀.자간비 ? " · 자간비 " + 살핀.자간비.toFixed(3) : " · 자간비 없음(기본값)")
+                       + (살핀.판짜임 ? " · 판짜임 " + JSON.stringify(살핀.판짜임) : "")]);
+  if (답 && !답.사유) {
+    var 셈 = {};
+    (답.후보 || []).forEach(function (c) {
+      var k = (이름[c.갈래] || c.갈래) + (c.합의 === false ? "(접힘)" : "");
+      셈[k] = (셈[k] || 0) + 1;
+    });
+    줄.push(["일치율", (답.일치 * 100).toFixed(1) + "%" + (답.흔들림 ? " — 흔들림(맞대기가 잘 안 됨)" : "")]);
+    줄.push(["맞대기", "고른 기하 " + (답.기하 || "?") + " · 편 제목 " + (답.제목 ? "본문에 찍힘" : "안 찍힘")
+             + (답.큰빼기 ? " · 큰 활자 뺌" : "") + (답.합의본 && 답.합의본.length ? " · 다시 자른 판 " + 답.합의본.join(",") : "")]);
+    줄.push(["글자 · 열", (답.글자수 || "?") + "자 · 열 " + (답.열수 || "?") + "개 · 흔들린 열 " + (답.흔들린열 || 0)]);
+    줄.push(["후보", Object.keys(셈).length ? Object.keys(셈).map(function (k) { return k + " " + 셈[k]; }).join(" · ") : "없음"]);
+    줄.push(["문헌 설정", 답.아는문헌 === false ? "없음 — 이 쪽 그림으로 자간을 잼" : "파일마다 잰 값"]);
+  }
+  var 시간 = Object.keys(때).map(function (k) { return k + " " + 초글(때[k]); });
+  시간.push("전체 " + 초글(performance.now() - 처음));
+  줄.push(["걸린 시간", 시간.join(" · ")]);
+  return 줄;
+}
+
 // ── 편집 상자에 칠하기 (브라우저판 `표시깔기` 와 같은 방법 — 상자 뒤에 같은 글꼴의 판을 깔고 바탕만 칠함) ──
 var 베낄모양 = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
   "fontFamily", "fontSize", "fontWeight", "fontStyle", "fontVariant", "fontStretch",
@@ -1114,22 +1226,39 @@ async function 시작() {
   단추.disabled = true;
   걷기();
   var t0 = performance.now();
+  var 언제 = new Date(), 때 = {}, 결과 = [], 살핀 = null, 답 = null, t;
+  var 재기 = function (이름, t) { 때[이름] = performance.now() - t; };
   try {
     var 본문 = 상자.value;
-    var 답, im = null;
+    var im = null;
+    결과.push(["편집 상자", 본문.length + "글자(UTF-16)"]);
     if (서버) {                                         // 후보 그림(data: 주소)까지 서버가 붙여 줌
-      await 서버살피기(쪽.파일);
+      t = performance.now();
+      살핀 = await 서버살피기(쪽.파일);
+      재기("판형 살피기", t);
       알림("서버에서 문자를 대조하는 중…");
+      t = performance.now();
       답 = await 서버로("api/compare", { file: 쪽.파일, page: 쪽.쪽, text: 본문 });
+      재기("대조(서버 왕복)", t);
+      if (답.초 !== undefined) 때["└ 서버 셈"] = 답.초 * 1000;
     } else {
+      t = performance.now();
       await 준비();
-      var 살핀 = await 판형살피기(쪽.파일);
+      재기("도구 · 모델 준비", t);
+      t = performance.now();
+      살핀 = await 판형살피기(쪽.파일);
+      재기("판형 살피기", t);
       알림("스캔 파일을 받는 중…");
+      t = performance.now();
       im = await 스캔가져오기(쪽.파일, 쪽.쪽);
+      재기("스캔 받기", t);
+      결과.push(["스캔", im.src + " (" + im.naturalWidth + "×" + im.naturalHeight + ")"]);
       알림("문자를 대조하는 중… (화면이 잠깐 멎을 수 있습니다)");
       await new Promise(function (ok) { setTimeout(ok, 30); });   // 알림이 먼저 그려지게
       var g = window.옛한글읽기.그림읽기(im);
+      t = performance.now();
       답 = await 셈.한쪽(모델, g, 본문, { 문헌설정: 살핀 });
+      재기("대조", t);
     }
     if (답.사유) throw new Error(답.사유);
     var 뒤쪽 = 지금쪽();
@@ -1150,8 +1279,12 @@ async function 시작() {
     console.error(e);
     var 메시지 = e && e.message ? e.message : e;
     알림(e && e.name === "OldReadJsVersionError" ? 메시지 : "✗ " + 메시지);
+    결과.push(["오류", String(메시지)]);
+    if (e && e.stack) 결과.push(["오류 자리", "\n  " + String(e.stack).split("\n").slice(0, 6).join("\n  ")]);
   } finally {
     단추.disabled = false;
+    try { 로그쓰기(로그머리(쪽, 언제).concat(결과, 로그본문(살핀, 답, 때, t0))); }
+    catch (e2) { console.error(e2); }
   }
 }
 
@@ -1171,6 +1304,7 @@ function 세우기() {
   상태.style.cssText = "font-size:13px;color:#54595d";
   줄.appendChild(단추);
   줄.appendChild(상태);
+  로그단추(줄);
   var 상자 = 편집상자();
   상자.parentNode.insertBefore(줄, 상자);
   // 순서대로 편집으로 쪽을 옮기면 앞 쪽의 칠 · 후보 목록을 걷음
