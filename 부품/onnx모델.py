@@ -11,6 +11,7 @@ ONNX 로 읽는 모델 — torch 없이 도는 곳(Toolforge 서버, `툴포지/
 ⚠ 그림 오리기는 `ocr.Model.crops` · `경계검출.띠` 와 **같은 PIL 셈**이어야 함(고치면 셋 다). torch(CPU FP32)와 차이는 1e-5 언저리.
 ⚠ `enable_cpu_mem_arena=False` — 켜 두면 뭉치 256 에서 메모리가 600MB 를 넘음(Toolforge 기본 512MB). 끄면 70MB, 속도 같음.
 """
+import hashlib
 import json
 import os
 
@@ -52,6 +53,7 @@ class 모델:
         self.세션 = _세션(os.path.join(폴더, "옛한글모델.onnx"), 스레드)
         self.폴더 = 폴더
         self.dev = "onnx"
+        self._기억 = (None, {})               # (그림 열쇠, {상자: (초, 중, 종 확률)}) — 마지막 그림 하나만
 
     def crops(self, im, boxes):
         """`ocr.Model.crops` 와 같은 셈 — numpy (n, 1, size, size) float32"""
@@ -65,22 +67,22 @@ class 모델:
         # 뭉치는 self.뭉치 를 넘지 않게 — `대조.확률읽기` 가 512 를 넘기면 ORT 중간값이 한꺼번에 올라 400MB 넘게 씀
         # (Toolforge 512MB 에서 전사대조 도중 프로세스가 죽음, 2026-10-07). 뭉치 크기는 결과를 바꾸지 않음.
         batch = min(batch, self.뭉치)
-        # 같은 상자는 한 번만 — 칸수를 est±3 으로 일곱 번 잘라 보면 같은 상자가 되풀이됨(서로 다른 것 22~25%, 브라우저판 `모델.읽기` 와 같은 꾀)
-        자리, 고유, 본 = [], [], {}
-        for b in boxes:
-            열쇠 = tuple(int(v) for v in b)
-            j = 본.get(열쇠)
-            if j is None:
-                j = 본[열쇠] = len(고유)
-                고유.append(열쇠)
-            자리.append(j)
-        out = [[], [], []]
-        for i in range(0, len(고유), batch):
-            x = self.crops(im, 고유[i:i + batch])
-            for k, z in enumerate(self.세션.run(None, {"x": x})):
-                out[k].append(_펴기(z))
-        자리 = np.array(자리)
-        return [np.concatenate(o)[자리] for o in out]
+        # 같은 상자는 한 번만 — 칸수를 est±3 으로 일곱 번 잘라 보면 같은 상자가 되풀이됨(서로 다른 것 22~25%, 브라우저판 `모델.읽기` 와 같은 꾀).
+        # 부름 사이에도 기억함(2026-10-07): 전사대조 한 쪽은 기하 · 합의(B · C)마다 같은 그림을 다시 잘라 읽어, 부름을 넘는 중복을 빼면
+        # 모델 셈이 32~68% 줄어듦. 결과는 그대로(같은 상자 → 같은 오린 그림 → 같은 답). 그림 내용으로 열쇠를 삼고 마지막 그림 하나만 둠.
+        열쇠그림 = (im.size, im.mode, hashlib.blake2b(im.tobytes(), digest_size=16).digest())
+        if self._기억[0] != 열쇠그림:
+            self._기억 = (열쇠그림, {})
+        기억 = self._기억[1]
+        열쇠들 = [tuple(int(v) for v in b) for b in boxes]
+        새것 = list(dict.fromkeys(k for k in 열쇠들 if k not in 기억))
+        for i in range(0, len(새것), batch):
+            덩이 = 새것[i:i + batch]
+            x = self.crops(im, 덩이)
+            sL, sV, sT = (_펴기(z) for z in self.세션.run(None, {"x": x}))
+            for j, k in enumerate(덩이):
+                기억[k] = (sL[j], sV[j], sT[j])
+        return [np.stack([기억[k][m] for k in 열쇠들]) for m in range(3)]
 
     def read(self, im, boxes, batch=None):
         if not boxes:

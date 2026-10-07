@@ -15,7 +15,7 @@
   /                       첫 화면(쓰는 법)
   /ocr.js  /소도구.js       OCR 소도구 — 위키문헌 common.js 에서 불러옴(서버 주소를 스스로 채움)
   /compare.js /전사대조.js  전사대조 소도구
-  /region/ /영역지정/        영역 지정 화면
+  /area/ /영역지정/          영역 지정 화면 (옛 주소 /region/ 은 /area/ 로 넘김)
   GET  /api/inspect?file=     파일의 판형 · 자간비 · 판짜임 (처음 한 번 쪽 열몇 장을 받아 잼 — 뒤에서 돌고, 부르는 쪽은 되물음)
   POST /api/read            {file, page}            → OCR 결과(브라우저판 `한쪽` 과 같은 꼴)
   POST /api/compare         {file, page, text}      → 전사대조 결과(`전사대조/서버.py` 의 답과 같은 꼴)
@@ -350,7 +350,8 @@ def _json기본(o):
 
 # 바깥 주소 → 정적 파일(앞에 서버 주소를 붙여 줄 소도구는 따로)
 소도구들 = {"/ocr.js": "소도구.js", "/소도구.js": "소도구.js", "/compare.js": "전사대조.js", "/전사대조.js": "전사대조.js"}
-영역길 = ("/region/", "/영역지정/")
+영역길 = ("/area/", "/영역지정/")
+옛영역길 = "/region"                 # 2026-10-07 이름을 area 로 바꿈 — 옛 주소로 들어오면 넘겨 줌(쪽 · 파일 물음표 뒤도 그대로)
 
 
 def _바탕주소(env):
@@ -425,6 +426,11 @@ def app(env, start):
         if 경로 in 소도구들:
             앞 = f'window.옛한글OCR서버 = window.옛한글OCR서버 || "{_바탕주소(env)}";\n'.encode("utf-8")
             return _정적(start, 소도구들[경로], 앞)
+        if 경로 == 옛영역길 or 경로.startswith(옛영역길 + "/"):
+            새 = "/area/" + 경로[len(옛영역길):].lstrip("/")
+            qs = env.get("QUERY_STRING", "")
+            start("301 Moved Permanently", [("Location", urllib.parse.quote(새) + ("?" + qs if qs else ""))])
+            return [b""]
         for 길 in 영역길:
             if 경로 == 길.rstrip("/"):
                 start("301 Moved Permanently", [("Location", 길)])
