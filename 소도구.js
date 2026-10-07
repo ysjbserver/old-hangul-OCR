@@ -30,6 +30,95 @@ var 상태, 단추, 모델 = null, 설정 = null;
 // ── 작은 도우미 ──────────────────────────────────────────────────────
 function 알림(t) { if (상태) 상태.textContent = t; }
 
+// ── 디버그 로그 — 잘 안 읽힌 쪽을 알릴 때 복사해 붙일 글(마지막 한 번만) ──
+var 로그 = { 글: "", 칸: null };
+
+function 시각글(d) {
+  function p(n) { return String(n).padStart(2, "0"); }
+  var 차 = -d.getTimezoneOffset();
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " "
+       + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds())
+       + " (UTC" + (차 >= 0 ? "+" : "-") + p(Math.floor(Math.abs(차) / 60)) + ":" + p(Math.abs(차) % 60) + ")";
+}
+
+/** 문서 이름 · 주소 · 실행 환경 — 쪽과 상관없이 늘 적는 것 */
+function 로그머리(쪽, 언제) {
+  var c = mw.config.get(["wgServer", "wgArticlePath", "wgFormattedNamespaces", "wgNamespaceNumber", "wgCurRevisionId"]);
+  var 제목 = 쪽 ? ((c.wgFormattedNamespaces || {})[c.wgNamespaceNumber] || "페이지") + ":" + 쪽.파일 + "/" + 쪽.쪽 : "(못 찾음)";
+  var A = window.옛한글읽기;
+  return [
+    ["도구", "인식 (전사)"],
+    ["시각", 시각글(언제)],
+    ["문서", 제목],
+    ["주소", 쪽 ? (c.wgServer || location.origin) + (c.wgArticlePath || "/wiki/$1").replace("$1", encodeURIComponent(제목.replace(/ /g, "_")).replace(/%2F/g, "/").replace(/%3A/g, ":")) : ""],
+    ["판", c.wgCurRevisionId || "(새 문서)"],
+    ["실행", 서버 ? "서버 " + 서버 : 실행기.join(",") + " · 자료 " + (자료 || "(없음)")],
+    ["읽기.js", A ? "판형판 " + A.판형판 : (서버 ? "(서버 모드 — 안 받음)" : "(아직 안 받음)")],
+    ["표시문턱", 설정 ? 설정.표시문턱 : ""],
+    ["구문 강조", 편집상자() && !보이나(편집상자()) ? "켜짐" : "꺼짐"],
+    ["브라우저", navigator.userAgent],
+  ];
+}
+
+function 로그쓰기(줄들) {
+  로그.글 = "[옛한글 OCR 디버그 로그]\n" + 줄들
+    .filter(function (v) { return v[1] !== undefined && v[1] !== null && v[1] !== ""; })
+    .map(function (v) { return v[0] + ": " + v[1]; }).join("\n");
+  if (로그.칸) 로그.칸.글.value = 로그.글;
+}
+
+function 초글(ms) { return (ms / 1000).toFixed(1) + "초"; }
+
+/** 단추 줄 오른쪽 끝의 작은 '디버그 로그' — 누르면 줄 아래에 펼침 */
+function 로그단추(줄) {
+  var 고리 = document.createElement("a");
+  고리.href = "#";
+  고리.setAttribute("role", "button");
+  고리.textContent = "디버그 로그";
+  고리.title = "마지막으로 읽은 쪽의 기록(쪽 · 시간 · 판정 …) — 잘 안 읽힌 쪽을 알릴 때 복사해 붙여 주세요";
+  고리.style.cssText = "margin-left:auto;font-size:11px;color:#a2a9b1;text-decoration:none";
+  var 칸 = document.createElement("div");
+  칸.style.cssText = "flex-basis:100%;display:none;font-size:12px;color:#54595d";
+  var 글 = document.createElement("textarea");
+  글.readOnly = true;
+  글.rows = 12;
+  글.style.cssText = "width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;"
+                  + "white-space:pre-wrap;word-break:break-all;height:18em;resize:vertical;"
+                  + "background:#f8f9fa;border:1px solid #c8ccd1;padding:4px 6px";
+  var 아래 = document.createElement("div");
+  아래.style.cssText = "display:flex;gap:8px;align-items:center;margin-top:4px";
+  var 복사 = document.createElement("button");
+  복사.type = "button";
+  복사.className = "cdx-button";
+  복사.style.cssText = "font-size:12px;min-height:0;padding:2px 8px";
+  복사.textContent = "복사";
+  var 알림말 = document.createElement("span");
+  복사.addEventListener("click", function () {
+    var 됨 = function () { 알림말.textContent = "복사했습니다."; };
+    var 손으로 = function () {
+      글.focus(); 글.select();
+      try { document.execCommand("copy"); 됨(); } catch (e) { 알림말.textContent = "Ctrl+C 로 복사해 주세요(골라 두었습니다)."; }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(글.value).then(됨, 손으로);
+    else 손으로();
+  });
+  아래.appendChild(복사);
+  아래.appendChild(알림말);
+  칸.appendChild(글);
+  칸.appendChild(아래);
+  고리.addEventListener("click", function (e) {
+    e.preventDefault();
+    var 열림 = 칸.style.display === "none";
+    칸.style.display = 열림 ? "block" : "none";
+    고리.textContent = 열림 ? "디버그 로그 닫기" : "디버그 로그";
+    글.value = 로그.글 || "아직 기록이 없습니다 — '인식 (전사)' 를 한 번 누른 뒤에 보세요.";
+    알림말.textContent = "";
+  });
+  줄.appendChild(고리);
+  줄.appendChild(칸);              // 줄이 flex-wrap 이라 폭 100% 로 다음 줄에 펼쳐짐
+  로그.칸 = { 글: 글 };
+}
+
 function 스크립트(url) {
   return new Promise(function (ok, no) {
     var s = document.createElement("script");
@@ -212,40 +301,57 @@ async function 읽기시작() {
   var 쪽 = 지금쪽();
   if (!상자 || !쪽) { 알림("편집 창을 못 찾았습니다."); return; }
   단추.disabled = true;
+  var 언제 = new Date(), 처음 = performance.now(), 때 = {}, 결과 = [], 살핀, r;
+  var 재기 = function (이름, t) { 때[이름] = performance.now() - t; };
   try {
-    var 살핀, r, 초, 실행;
+    var 초, 실행, t;
     if (서버) {                                  // 모델은 서버에서 — 결과 꼴은 아래 `한쪽` 과 같음
+      t = performance.now();
       살핀 = await 서버살피기(쪽.파일);
+      재기("판형 살피기", t);
       알림("서버에서 문자를 인식하는 중…");
       var t1 = performance.now();
       r = await 서버로("api/read", { file: 쪽.파일, page: 쪽.쪽 });
+      재기("인식(서버 왕복)", t1);
+      if (r.초 !== undefined) 때["└ 서버 셈"] = r.초 * 1000;
       초 = ((performance.now() - t1) / 1000).toFixed(1);
       실행 = "서버";
     } else {
+      t = performance.now();
       await 준비();
+      재기("도구 · 모델 준비", t);
+      t = performance.now();
       살핀 = await 판형살피기(쪽.파일);
+      재기("판형 살피기", t);
       알림("스캔 파일을 받는 중…");
+      t = performance.now();
       var im = await 스캔가져오기(쪽.파일, 쪽.쪽);
+      재기("스캔 받기", t);
+      결과.push(["스캔", im.src + " (" + im.naturalWidth + "×" + im.naturalHeight + ")"]);
 
       알림("문자를 인식하는 중… (5~10초 걸립니다)");
       await new Promise(function (ok) { setTimeout(ok, 30); });   // 안내가 먼저 화면에 그려지게
       var g = window.옛한글읽기.그림읽기(im);
       var t0 = performance.now();
       r = await window.옛한글읽기.한쪽(모델, g, null, { 문헌설정: 살핀 });
+      재기("인식", t0);
       초 = ((performance.now() - t0) / 1000).toFixed(1);
       실행 = 실행기[0];
     }
+    결과.push(["판정", r.판정.등급 + (r.판정.까닭.length ? " — " + r.판정.까닭.join(" · ") : "")]);
 
     // 순서대로 편집에서 읽는 사이 쪽을 옮겼으면 넣지 않음 — 다른 쪽 글을 덮게 됨
     var 뒤쪽 = 지금쪽();
     if (!뒤쪽 || 뒤쪽.파일 !== 쪽.파일 || 뒤쪽.쪽 !== 쪽.쪽) {
       알림("읽는 사이에 쪽이 바뀌어(" + 쪽.쪽 + "쪽 → " + (뒤쪽 ? 뒤쪽.쪽 + "쪽" : "?")
            + ") 넣지 않았습니다. 다시 눌러 주세요.");
+      결과.push(["넣음", "아니오 — 읽는 사이에 쪽이 바뀜"]);
       return;
     }
     if (!r.글월) {
       알림(쪽.쪽 + "쪽 판정: " + r.판정.등급 + " — " + (r.판정.까닭.join(" · ") || "열을 못 찾았습니다")
            + ". 넣지 않았습니다.");
+      결과.push(["넣음", "아니오 — 읽은 글이 없음"]);
       return;
     }
     // ⚠ '못씀' 이면 넣지 않음 — 지우고 다시 치게 되므로. 아래에 보여 주고 넣을지는 사람이
@@ -258,6 +364,7 @@ async function 읽기시작() {
     // 칠했으면 위쪽 칸은 치움. 못 칠했을 때만(못씀 · 구문 강조) 띄움
     if (칠함) 교정칸치우기();
     else 보이기(r, r.판정.등급 === "못씀" ? 상자 : null);
+    결과.push(["넣음", r.판정.등급 === "못씀" ? "아니오 — 못씀" : "예" + (칠함 ? " · 칠함" : " · 칠 못함(위쪽 칸)")]);
     알림(쪽.쪽 + "쪽 " + (r.판정.등급 === "못씀" ? "판정: 못씀 — 넣지 않았습니다. 처음부터 치는 편이 빠릅니다"
                               : "판정: " + r.판정.등급)
          + (칠함 ? " · 노란 자리가 확신 낮은 글자입니다(고치면 칠이 사라지고, 칠은 저장되지 않습니다)" : "")
@@ -270,9 +377,32 @@ async function 읽기시작() {
       ? e.message
       : "멈췄습니다: " + e.message);
     console.error(e);
+    결과.push(["오류", (e && e.message) || String(e)]);
+    if (e && e.stack) 결과.push(["오류 자리", "\n  " + String(e.stack).split("\n").slice(0, 6).join("\n  ")]);
   } finally {
     단추.disabled = false;
+    try { 로그쓰기(로그머리(쪽, 언제).concat(결과, 로그본문(살핀, r, 때, 처음))); }
+    catch (e2) { console.error(e2); }
   }
+}
+
+/** 판형 · 읽은 결과 · 걸린 시간 */
+function 로그본문(살핀, r, 때, 처음) {
+  var 줄 = [];
+  if (살핀) 줄.push(["판형 살핀 값", 판형글(살핀.단) + (살핀.자간비 ? " · 자간비 " + 살핀.자간비.toFixed(3) : " · 자간비 없음(기본값)")
+                       + (살핀.판짜임 ? " · 판짜임 " + JSON.stringify(살핀.판짜임) : "")]);
+  if (r) {
+    줄.push(["읽은 것", r.상자수 + (서버 ? "자" : "상자") + " · 표시 " + (r.표시비 * 100).toFixed(1) + "%"
+             + (r.글월 ? " · 줄 " + r.글월.split("\n").length : "")]);
+    if (r.글월) 줄.push(["줄마다 글자 수", r.글월.split("\n").map(function (l) { return l.replace(/\s/g, "").length; }).join(" ")]);
+    var g = r.기하;
+    if (g && g.cols) 줄.push(["기하", "열 " + g.cols.length + "개(가장자리 후보 포함) · 열 간격 " + (+g.xpitch).toFixed(1)
+                             + "px · 글자 높이 " + (+g.pitch).toFixed(1) + "px" + (g.맞춤 ? " · 상자 맞춤" : "")]);
+  }
+  var 시간 = Object.keys(때).map(function (k) { return k + " " + 초글(때[k]); });
+  시간.push("전체 " + 초글(performance.now() - 처음));
+  줄.push(["걸린 시간", 시간.join(" · ")]);
+  return 줄;
 }
 
 function 넣기(상자, 글) {
@@ -508,6 +638,7 @@ function 세우기() {
     줄.appendChild(영역단추);
   }
   줄.appendChild(상태);
+  로그단추(줄);
   var 상자 = 편집상자();
   상자.parentNode.insertBefore(줄, 상자);
   // 순서대로 편집으로 쪽을 옮기면 앞 쪽의 칠 · 교정 칸 · 알림을 걷음
