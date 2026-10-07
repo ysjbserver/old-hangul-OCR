@@ -131,7 +131,7 @@ function 스크립트(url) {
 }
 
 // ── 모델 ─────────────────────────────────────────────────────────────
-// ★ Toolforge(`툴포지/app.py`)에서 열면 `서버.js` 가 window.옛한글OCR서버 를 채움 → 모델 셈만 서버에(상자 · 경계 확률),
+// ★ Toolforge(`근원/툴포지/app.py`)에서 열면 `서버.js` 가 window.옛한글OCR서버 를 채움 → 모델 셈만 서버에(상자 · 경계 확률),
 //   열 찾기 · 칸 나누기는 여기 `읽기.js` 그대로. 서버가 같은 1920px 스캔을 받아 같은 셈(PIL)으로 오리므로 답이 같음
 //   (한 장짜리 그림은 늘리는 셈이 달라 조금 다를 수 있음)
 // 아니면(내 컴퓨터) ORT 는 이 폴더의 ort/ 에 있으면 그것을, 없으면 jsDelivr 에서
@@ -626,7 +626,12 @@ $("pageNo").addEventListener("keydown", e => { if (e.key === "Enter") 불러오�
 (() => {
   const q = new URLSearchParams(location.search);
   if (q.get("file")) {
-    $("src").value = (q.get("host") && q.get("host") !== "ko.wikisource.org" ? "https://" + q.get("host") + "/wiki/File:" : "") + q.get("file");
+    // 쪽 번호가 있으면 출발한 '페이지:파일/쪽' 주소 모양으로 보여 줌(`해석` 이 그대로 읽음)
+    const 쪽있음 = q.get("page") && /\.(pdf|djvu|tiff?)$/i.test(q.get("file"));
+    const 이름 = 쪽있음 ? "페이지:" + q.get("file") + "/" + q.get("page") : q.get("file");
+    $("src").value = q.get("host") && q.get("host") !== "ko.wikisource.org"
+      ? "https://" + q.get("host") + "/wiki/" + (쪽있음 ? "Page:" + q.get("file") + "/" + q.get("page") : "File:" + q.get("file"))
+      : 이름;
     if (q.get("page")) $("pageNo").value = q.get("page");
     불러오기();
   }

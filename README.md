@@ -9,7 +9,7 @@
 | 전사대조 소도구 | 이미 전사된 글을 스캔과 맞대어 틀렸을 만한 글자를 짚음 | `compare.js` |
 | 영역 지정 | 스캔 위에 상자를 쳐서 그 열 · 글자만 읽음 | `area/` |
 
-이 폴더는 프로젝트의 `python 툴포지/만들기.py` 가 만든 것입니다. **손으로 고치지 마세요.**
+이 폴더는 프로젝트의 `python 제작/만들기/툴포지판만들기.py` 가 만든 것입니다. **손으로 고치지 마세요.**
 
 ---
 
@@ -38,9 +38,9 @@
 
 1. 프로젝트 폴더에서:
    ```
-   python 툴포지/만들기.py
+   python 제작/만들기/툴포지판만들기.py
    ```
-   (`python 브라우저판/내보내기.py` 를 돌렸다면 이미 저절로 돌았습니다.)
+   (`python 제작/만들기/내보내기.py` 를 돌렸다면 이미 저절로 돌았습니다.)
 2. GitHub Desktop 에서 **`toolforge-test` 브랜치로 바꾼 뒤**, `old-hangul-ocr-toolforge/` 의 파일을 **전부** 저장소 폴더에 복사하고
    (같은 이름은 덮어쓰기) 커밋 · 푸시. ⚠ 다른 브랜치(`beta-test` 등)에 올리지 않게 브랜치 이름을 먼저 확인하세요.
 3. Toolforge 에 들어가기 — PowerShell 에서(`<내 이름>` 은 toolsadmin 의 'Shell username'):
@@ -111,7 +111,7 @@ mw.loader.load("https://old-hangul-ocr.toolforge.org/compare.js");
 | 자리 | 무엇 |
 |---|---|
 | `app.py` | 서버(WSGI). gunicorn 이 `app:app` 을 띄움(`Procfile`) |
-| `부품/` · `전사대조/대조.py` · `step1_collect.py` | 프로젝트의 파이썬 셈 그대로(정본) |
+| `부품/`(전사대조 `대조.py` · `step1_collect.py` 포함) | 프로젝트의 파이썬 셈 그대로(정본 — 원본은 프로젝트의 `근원/부품/`) |
 | `부품/onnx모델.py` | torch 대신 ONNX 로 읽는 부분 — 같은 답(확신값 차이 0.0004 미만) |
 | `모델/` | `옛한글모델.onnx` · `경계검출.onnx` · `설정.json` (브라우저판과 같은 파일) |
 | `정적/` | 첫 화면 · 소도구 두 개 · 영역 지정 화면 |

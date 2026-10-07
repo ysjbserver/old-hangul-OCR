@@ -22,6 +22,9 @@ if (자료 && 자료.charAt(자료.length - 1) !== "/") 자료 += "/";
 var 서버 = window.옛한글OCR서버 || "";
 if (서버 && 서버.charAt(서버.length - 1) !== "/") 서버 += "/";
 
+// 영역 지정 화면 주소 — 서버 모드면 그 서버의 area/. `window.옛한글OCR영역` 으로 바꿀 수 있음. 비면 단추 없음
+var 영역 = window.옛한글OCR영역 || (서버 ? 서버 + "area/" : "");
+
 var 상태, 단추, 모델 = null, 설정 = null;
 
 // ── 작은 도우미 ──────────────────────────────────────────────────────
@@ -486,6 +489,24 @@ function 세우기() {
   상태.style.cssText = "font-size:13px;color:#54595d";
   상태.textContent = "";
   줄.appendChild(단추);
+  // 영역 지정 화면을 새 창으로 — 지금 쪽(파일 · 쪽 번호)을 물음표 뒤에 실어 저절로 불러오게
+  if (영역) {
+    var 영역단추 = document.createElement("a");
+    영역단추.className = "cdx-button";
+    영역단추.target = "_blank";
+    영역단추.rel = "noopener";
+    영역단추.textContent = "영역 지정";
+    영역단추.title = "이 쪽 스캔을 영역 지정 도구에서 엽니다(상자를 쳐서 그 자리만 읽기)";
+    var 영역주소 = function () {
+      var 쪽 = 지금쪽();                       // 순서대로 편집으로 쪽을 옮겼을 수 있어 누를 때마다 새로
+      영역단추.href = 영역 + (쪽 ? "?" + new URLSearchParams({
+        host: location.host, file: 쪽.파일, page: String(쪽.쪽) }) : "");
+    };
+    영역주소();
+    영역단추.addEventListener("mousedown", 영역주소);   // 가운데 단추로 새 탭에 열 때도
+    영역단추.addEventListener("click", 영역주소);
+    줄.appendChild(영역단추);
+  }
   줄.appendChild(상태);
   var 상자 = 편집상자();
   상자.parentNode.insertBefore(줄, 상자);

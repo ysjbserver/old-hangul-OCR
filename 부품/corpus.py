@@ -10,7 +10,9 @@
 """
 import glob, json, os
 
-FIXDIR = "교정"
+import 경로
+
+FIXDIR = 경로.교정
 STATE = os.path.join(FIXDIR, "_확인.json")
 RATES = os.path.join(FIXDIR, "_일치.json")
 SCAN = os.path.join(FIXDIR, "_쪽목록.json")
@@ -19,11 +21,11 @@ RATIO = os.path.join(FIXDIR, "_자간.json")      # 문헌마다 세로/가로 �
 
 def documents(only=None):
     out = []
-    for idir in sorted(glob.glob(os.path.join("data", "*", "img"))):
+    for idir in sorted(glob.glob(os.path.join(경로.데이터, "*", "img"))):
         slug = os.path.basename(os.path.dirname(idir))
         if only and slug != only:
             continue
-        out.append((slug, idir, os.path.join("data", slug, "text")))
+        out.append((slug, idir, os.path.join(경로.데이터, slug, "text")))
     return out
 
 

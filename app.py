@@ -3,9 +3,9 @@
 옛한글 OCR — Toolforge 웹 도구 (2026-10-07)
 
 위키문헌 편집 창의 소도구(OCR · 전사대조)와 영역 지정 화면이 이 서버에 묻는다. 모델은 **서버에서** 돈다(ONNX · CPU).
-셈은 프로젝트의 파이썬 정본(`부품/` · `전사대조/대조.py`)을 그대로 쓰고, torch 대신 `부품/onnx모델.py` 만 끼운다.
+셈은 프로젝트의 파이썬 정본(`근원/부품/` — 전사대조는 그 안의 `대조.py`)을 그대로 쓰고, torch 대신 `근원/부품/onnx모델.py` 만 끼운다.
 
-  ⚠ 이 파일의 원본은 프로젝트의 `툴포지/app.py` — `old-hangul-ocr-toolforge/` 은 `python 툴포지/만들기.py` 가 만드는 사본이니 손으로 고치지 말 것.
+  ⚠ 이 파일의 원본은 프로젝트의 `근원/툴포지/app.py` — `old-hangul-ocr-toolforge/` 은 `python 제작/만들기/툴포지판만들기.py` 가 만드는 사본이니 손으로 고치지 말 것.
 
 돌리기
   · Toolforge(빌드 서비스) — `Procfile` 의 gunicorn 이 `app:app` 을 띄움(포트 8000)
@@ -18,7 +18,7 @@
   /area/ /영역지정/          영역 지정 화면 (옛 주소 /region/ 은 /area/ 로 넘김)
   GET  /api/inspect?file=     파일의 판형 · 자간비 · 판짜임 (처음 한 번 쪽 열몇 장을 받아 잼 — 뒤에서 돌고, 부르는 쪽은 되물음)
   POST /api/read            {file, page}            → OCR 결과(브라우저판 `한쪽` 과 같은 꼴)
-  POST /api/compare         {file, page, text}      → 전사대조 결과(`전사대조/서버.py` 의 답과 같은 꼴)
+  POST /api/compare         {file, page, text}      → 전사대조 결과(`제작/전사대조/서버.py` 의 답과 같은 꼴)
   POST /api/boxes           {file, page, boxes}     → 상자마다 글자(영역 지정 화면)
   POST /api/edge            {file, page, x0, x1}    → 열의 글자 경계 확률(영역 지정 화면)
   GET  /api/health          모델 · 판 정보
@@ -36,7 +36,7 @@ from collections import OrderedDict
 
 여기 = os.path.dirname(os.path.abspath(__file__))
 os.chdir(여기)
-for p in (여기, os.path.join(여기, "부품"), os.path.join(여기, "전사대조")):
+for p in (여기, os.path.join(여기, "부품")):      # 부품/ — 엔진 · 대조(전사대조) · step1_collect
     if p not in sys.path:
         sys.path.insert(0, p)
 try:
@@ -295,7 +295,7 @@ def 읽기(파일, 쪽, 문턱=표시문턱):
 
 
 def 맞대기(파일, 쪽, 본문):
-    """전사대조 한 쪽 — `전사대조/서버.py` 의 `맞대기` 와 같은 꼴(파일마다 잰 설정으로)."""
+    """전사대조 한 쪽 — `제작/전사대조/서버.py` 의 `맞대기` 와 같은 꼴(파일마다 잰 설정으로)."""
     s = 살핀값(파일)
     ip = 스캔(파일, 쪽)
     t0 = time.time()
