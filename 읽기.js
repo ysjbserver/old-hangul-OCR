@@ -215,14 +215,15 @@ function 열잉크(g, x0, x1) {
 }
 
 /** `scan._columns_at` — 한 문턱으로 잉크 덩어리를 잡아 [덩어리들, 자간]. */
-function 덩어리잡기(ink, W, th) {
-  const runs = [];
+function 덩어리잡기(ink, W, th, 얇음) {
+  let runs = [];
   let s = null;
   for (let x = 0; x < W; x++) {
     if (ink[x] > th && s === null) s = x;
     else if (ink[x] <= th && s !== null) { if (x - s > 10) runs.push([s, x]); s = null; }
   }
   if (s !== null && W - s > 10) runs.push([s, W]);
+  if (얇음) runs = runs.filter(function (r) { return r[1] - r[0] >= 얇음; });   // 점선 계선(`PITCH_THIN`)
   if (runs.length < 3) return null;
 
   const wmed = 중앙값(runs.map(function (r) { return r[1] - r[0]; }));
@@ -264,6 +265,26 @@ function 판심떼기(cols, ratio) {
  */
 let PITCH_OFF = 0.15, PITCH_ON = 0.12, PITCH_USE = true;   // scan.py · page.py 와 같은 값
 let PITCH_MORE = 1.5;   // 간격이 가까워도 다른 문턱이 열을 이 배 넘게 더 찾으면 바꿈
+let PITCH_SCAN = [0.2, 0.3, 0.4, 0.5], PITCH_THIN = 0.25;   // scan.PITCH_SCAN · PITCH_THIN — 그래도 벗어나면 가는 덩이 빼고 · 더 높은 문턱
+
+/** `scan._열수` — ③④ 를 거친 뒤의 열 수(후보 견주기용) */
+function 열수(runs, pitch) {
+  const merged = [runs[0].slice()];
+  for (let i = 1; i < runs.length; i++) {
+    const r = runs[i], last = merged[merged.length - 1];
+    if ((r[0] + r[1]) / 2 - (last[0] + last[1]) / 2 < pitch * 0.6) last[1] = r[1];
+    else merged.push(r.slice());
+  }
+  const cen = merged.map(function (r) { return (r[0] + r[1]) / 2; });
+  if (cen.length > 2) {
+    const d = [];
+    for (let i = 1; i < cen.length; i++) d.push(cen[i] - cen[i - 1]);
+    pitch = 중앙값(d);
+  }
+  let n = 1;
+  for (let i = 1; i < cen.length; i++) n += Math.max(1, 반올림((cen[i] - cen[i - 1]) / pitch));
+  return n;
+}
 let INK_EDGE = 0.0, EDGE_ZONE = 0.03, STRIP_FILL = 0.6;   // scan.INK_EDGE · EDGE_ZONE · STRIP_FILL — 스캔 끝의 제본 그림자 띠(자르는 경로만).
                                                          // 기본 끔 — `전사대조.js` 가 `쪽기하(…, 끝띠=true)` 로 후보 하나만 만듦
 
@@ -330,6 +351,20 @@ function 열찾기(g, 판심뗌, 표준자간, 끝띠) {
             && (멀다 || got[0].length >= n0 * PITCH_MORE)) {
           골랐 = got; break;
         }
+      }
+    }
+    if (PITCH_SCAN.length && Math.abs(골랐[1] - 표준자간) > 표준자간 * PITCH_OFF) {
+      const 얇 = 표준자간 * PITCH_THIN;
+      const 문턱2 = 문턱들.concat(PITCH_SCAN.map(function (f) { return mx * f; }));
+      const 시험 = [];
+      for (let t = 0; t < 2; t++) 시험.push([문턱2[t], 얇]);
+      for (let t = 2; t < 문턱2.length; t++) 시험.push([문턱2[t], 0]);
+      for (let t = 2; t < 문턱2.length; t++) 시험.push([문턱2[t], 얇]);
+      const 넓다 = 골랐[1] > 표준자간, n0 = 열수(골랐[0], 골랐[1]);
+      for (let t = 0; t < 시험.length; t++) {
+        const got = 덩어리잡기(ink, W, 시험[t][0], 시험[t][1]);
+        if (got !== null && Math.abs(got[1] - 표준자간) <= 표준자간 * PITCH_ON &&
+            !(넓다 && 열수(got[0], got[1]) < n0)) { 골랐 = got; break; }
       }
     }
   }
@@ -1566,6 +1601,7 @@ async function 열마다읽기(모델, geo, span) {
     열들.push({ 점수: bestv, 글자: 글, 확신: 확, 칸수: best.개수, 상자: 상 });
   }
   if (HEADING) await 큰제목읽기(모델, geo, 열들, span);
+  if (BUNJU) await 분주읽기(모델, geo, 열들);
   return { 열들: 열들, 상자수: bp.상자.length };
 }
 
@@ -1731,7 +1767,154 @@ async function 큰제목읽기(모델, geo, 열들, span) {
   }
 }
 
+let BUNJU = true, BUNJU_GAIN = 0.3, BUNJU_CONF = 0.5, BUNJU_H = [0.45, 0.55, 0.7, 0.85, 1.0];   // align.BUNJU …
+let BUNJU_MINC = 2, BUNJU_BAR = 0.25;                                                      // align.BUNJU_MINC · BUNJU_BAR
+let BUNJU_BAND = 0.25, BUNJU_WIDE = 1.25, BUNJU_MID = 0.3, BUNJU_GAP = 3, BUNJU_SIDE = 0.3, BUNJU_MIN = 0.6;   // scan.BUNJU_*
+
+/** `scan._가름자리` — occ 의 [m0, m1) 안 빈틈(BUNJU_GAP 넘는) 중 cx 에 가장 가까운 것의 가운데. 없으면 null */
+function 가름자리(occ, m0, m1, cx) {
+  let best = null, x = m0;
+  while (x < m1) {
+    if (occ[x]) { x++; continue; }
+    let e = x;
+    while (e < m1 && !occ[e]) e++;
+    if (e - x >= BUNJU_GAP) {
+      const c = (x + e) / 2;
+      if (best === null || Math.abs(c - cx) < Math.abs(best - cx)) best = c;
+    }
+    x = e;
+  }
+  return best;
+}
+
+/** `scan.분주후보` — 열 i 의 글자 구간 sp 에서 분주처럼 보이는 [[y0, y1, 왼끝, 가름 x, 오른끝]] */
+function 분주후보(g, cols, i, sp, pitch) {
+  const c0 = cols[i][0], c1 = cols[i][1], w = c1 - c0;
+  if (w < 8 || !sp) return [];
+  const cx = (c0 + c1) / 2;
+  let lo = cx - w * BUNJU_WIDE, hi = cx + w * BUNJU_WIDE;
+  [i - 1, i + 1].forEach(function (j) {          // 이웃 열과의 가운데를 넘지 않게
+    if (j < 0 || j >= cols.length) return;
+    const n = (cols[j][0] + cols[j][1]) / 2;
+    if (Math.abs(n - cx) < 1) return;
+    if (n > cx) hi = Math.min(hi, (cx + n) / 2); else lo = Math.max(lo, (cx + n) / 2);
+  });
+  lo = 자름(Math.max(0, lo)); hi = 자름(Math.min(g.너비, hi));
+  const y0 = sp[0], y1 = sp[1], 줄수 = y1 - y0, 폭 = hi - lo, W = g.너비, v = g.값;
+  if (폭 <= 0 || 줄수 <= 0) return [];
+  const c = cx - lo;
+  const m0 = 자름(Math.max(1, c - w * BUNJU_MID)), m1 = 자름(Math.min(폭 - 1, c + w * BUNJU_MID));
+  if (m1 - m0 < BUNJU_GAP) return [];
+  const h = Math.max(2, 자름(pitch * BUNJU_BAND));
+  const 상태 = [], 가름 = [];
+  for (let y = 0; y < 줄수; y += h) {
+    const occ = new Uint8Array(폭);
+    let 있 = false;
+    for (let yy = y; yy < Math.min(y + h, 줄수); yy++) {
+      const o = (y0 + yy) * W + lo;
+      for (let x = 0; x < 폭; x++) if (v[o + x] < INK) { occ[x] = 1; 있 = true; }
+    }
+    if (!있) { 상태.push(0); 가름.push(null); continue; }
+    const x = 가름자리(occ, m0, m1, c);
+    if (x === null) { 상태.push(-1); 가름.push(null); continue; }
+    const xi = 자름(x);
+    let 왼첫 = -1, 오끝 = -1;
+    for (let q = 0; q < xi; q++) if (occ[q]) { 왼첫 = q; break; }
+    for (let q = 폭 - 1; q > xi; q--) if (occ[q]) { 오끝 = q - (xi + 1); break; }
+    const wl = 왼첫 >= 0 ? x - 왼첫 : 0, wr = 오끝 >= 0 ? 오끝 + 1 : 0;
+    const ok = wl >= w * BUNJU_SIDE && wr >= w * BUNJU_SIDE;
+    상태.push(ok ? 1 : 0); 가름.push(ok ? x : null);
+  }
+  const out = [];
+  let k = 0;
+  while (k < 상태.length) {
+    if (상태[k] !== 1) { k++; continue; }
+    let e = k, n1 = 0;
+    while (e < 상태.length && 상태[e] !== -1) { if (상태[e] === 1) n1++; e++; }
+    while (e > k && 상태[e - 1] === 0) e--;
+    if (n1 >= 2 && (e - k) * h >= pitch * BUNJU_MIN) {
+      const xs = 가름.slice(k, e).filter(function (t) { return t !== null; });
+      out.push([y0 + k * h, y0 + Math.min(e * h, 줄수), lo, 반올림(lo + 중앙값(xs)), hi]);
+    }
+    k = Math.max(e, k + 1);
+  }
+  return out;
+}
+
+/** `align._줄읽기` — [x0, x1) × [y0, y1) 을 한 줄로 보고 칸 수를 모델 확신으로 골라 읽음. {합, 글, 확, 상} · 못 읽으면 null */
+async function 줄읽기(모델, geo, x0, x1, y0, y1) {
+  const g = geo.그림, W = g.너비, v = g.값;
+  const prof = new Float64Array(g.높이);
+  for (let y = 0; y < g.높이; y++) {
+    let s = 0;
+    const o = y * W;
+    for (let x = x0; x < x1; x++) if (v[o + x] < INK) s++;
+    prof[y] = s;
+  }
+  const sm = 고르기(prof, Math.max(2.0, geo.pitch / 9));
+  const r = 잉크범위(sm, y0, y1);
+  if (r === null || r[1] - r[0] < geo.pitch * 0.3) return null;
+  const a = r[0], b = r[1];
+  let 최고 = null;
+  for (let hi = 0; hi < BUNJU_H.length; hi++) {
+    const h = geo.pitch * BUNJU_H[hi];
+    const n = Math.max(1, 반올림((b - a) / h));
+    let cuts = 열가르기(sm, a, b, n, 자를후보(sm, a, b, h)).자리;
+    if (!cuts) {
+      cuts = [];
+      for (let k = 0; k <= n; k++) cuts.push(자름(a + (b - a) * k / n));
+    }
+    const bx = [];
+    for (let k = 0; k + 1 < cuts.length; k++) bx.push([x0, cuts[k], x1, cuts[k + 1]]);
+    const 읽 = await 모델.읽기(g, bx);
+    let s = 0;
+    for (let j = 0; j < bx.length; j++) s += Math.log(Math.max(읽.확신[j], 1e-6));
+    if (최고 === null || s / bx.length > 최고.합 / 최고.글.length) {
+      const 글 = [];
+      for (let j = 0; j < n; j++) 글.push(모델.글자(읽.초[j], 읽.중[j], 읽.종[j]));
+      최고 = { 합: s, 글: 글, 확: Array.from(읽.확신), 상: bx };
+    }
+  }
+  return 최고;
+}
+
+/**
+ * `align.분주읽기` — 열 안의 두 줄(분주 · 협주)을 오른쪽 줄 → 왼쪽 줄로 갈라 읽어 보고 모델이 뚜렷이 자신 있을 때만 바꿈.
+ * 열들을 제자리에서 고침 · 점수 · 칸수는 그대로
+ */
+async function 분주읽기(모델, geo, 열들) {
+  const g = geo.그림;
+  for (let i = 0; i < 열들.length; i++) {
+    if (열들[i] === null || !geo.spans[i]) continue;
+    const 후보 = 분주후보(g, geo.cols, i, geo.spans[i], geo.pitch);
+    for (let t = 0; t < 후보.length; t++) {
+      const y0 = 후보[t][0], y1 = 후보[t][1], lo = 후보[t][2], cx = 후보[t][3], hi = 후보[t][4];
+      const o = 열들[i];
+      const 안 = [];
+      o.상자.forEach(function (b, j) { const m = (b[1] + b[3]) / 2; if (y0 <= m && m < y1) 안.push(j); });
+      if (!안.length) continue;
+      const Y0 = Math.min(y0, o.상자[안[0]][1]), Y1 = Math.max(y1, o.상자[안[안.length - 1]][3]);
+      let 옛 = 0;
+      안.forEach(function (j) { 옛 += Math.log(Math.max(o.확신[j], 1e-6)); });
+      옛 /= 안.length;
+      const 오 = await 줄읽기(모델, geo, cx, hi, Y0, Y1);
+      const 왼 = await 줄읽기(모델, geo, lo, cx, Y0, Y1);
+      if (오 === null || 왼 === null) continue;
+      const 글 = 오.글.concat(왼.글), n = 글.length;
+      if (안.length < BUNJU_MINC || Math.min(오.글.length, 왼.글.length) < BUNJU_MINC ||
+          글.filter(function (c) { return c === "ㅣ"; }).length > n * BUNJU_BAR) continue;
+      const 새 = (오.합 + 왼.합) / n;
+      if (새 <= 옛 + BUNJU_GAIN || 새 < Math.log(BUNJU_CONF)) continue;
+      const a = 안[0], b = 안[안.length - 1] + 1;
+      열들[i] = { 점수: o.점수, 글자: o.글자.slice(0, a).concat(글, o.글자.slice(b)),
+                 확신: o.확신.slice(0, a).concat(오.확, 왼.확, o.확신.slice(b)), 칸수: o.칸수,
+                 상자: o.상자.slice(0, a).concat(오.상, 왼.상, o.상자.slice(b)) };
+    }
+  }
+}
+
 let EDGE_DROP = 0.3, EDGE_MAX = 3, EDGE_OVERLAP = 0.6, EDGE_DROP_IN = 0.7;   // align.py 와 같은 값
+let EDGE_BAR_RUN = 5;  // align.EDGE_BAR_RUN — 끝 열에 `ㅣ` 가 이만큼 넘게 연달아면 뗌 (null = 끔)
 let EDGE_BAR = 0.5;   // align.EDGE_BAR — 끝 열이 이 몫 넘게 `ㅣ` 면 광곽 세로줄로 보고 뗌 (null = 끔)
 let EDGE_GUIDE = 0.3;  // align.EDGE_GUIDE — 세로줄 너머 떼일 열들이 본문 같으면(확신 · 간격 자간 ±이 몫) 안 뗌 — 계선 판 (null = 끔)
 let NOTCHAR_CONF = 0.5, NOTCHAR_WIDTH = 0.5, NOTCHAR_ROW = 0.9, NOTCHAR_KEEP = ["ㅣ"];   // align.py 와 같은 값
@@ -1817,7 +2000,13 @@ function 가장자리다듬기(geo, 열들, δ, 최대, 겹침, 안δ) {
     for (const 자 of 열들[i].글자) if (자 === "ㅣ") n++;
     return n > EDGE_BAR * 열들[i].글자.length;
   };
-  const 나쁨 = function (i, d, j) { return 열들[i] === null || (점(i) < 기준 - d && !보호(i, j)) || 막대(i); };
+  const 막대줄 = function (i) {   // align.py 의 `막대줄`
+    if (EDGE_BAR_RUN === null || 열들[i] === null) return false;
+    let n = 0;
+    for (const 자 of 열들[i].글자) { n = 자 === "ㅣ" ? n + 1 : 0; if (n > EDGE_BAR_RUN) return true; }
+    return false;
+  };
+  const 나쁨 = function (i, d, j) { return 열들[i] === null || (점(i) < 기준 - d && !보호(i, j)) || 막대(i) || 막대줄(i); };
   for (let t = 0; t < 최대; t++) {
     if (남.length > 4 && 나쁨(남[0], d앞, 남[0] - 1)) 남.shift(); else break;
   }
@@ -2175,6 +2364,17 @@ const API = {
       EDGE_DROP = s.가장자리문턱; EDGE_MAX = s.가장자리최대; EDGE_OVERLAP = s.가장자리겹침;
     }
     if (s.가장자리막대 !== undefined) EDGE_BAR = s.가장자리막대;
+    if (s.가장자리막대줄 !== undefined) EDGE_BAR_RUN = s.가장자리막대줄;
+    if (s.열다시찾기 !== undefined) PITCH_SCAN = s.열다시찾기;
+    if (s.열가는덩이 !== undefined) PITCH_THIN = s.열가는덩이;
+    if (s.분주 !== undefined) {
+      BUNJU = s.분주[0]; BUNJU_GAIN = s.분주[1]; BUNJU_CONF = s.분주[2]; BUNJU_H = s.분주[3];
+      BUNJU_MINC = s.분주[4]; BUNJU_BAR = s.분주[5];
+    }
+    if (s.분주후보 !== undefined) {
+      BUNJU_BAND = s.분주후보[0]; BUNJU_WIDE = s.분주후보[1]; BUNJU_MID = s.분주후보[2];
+      BUNJU_GAP = s.분주후보[3]; BUNJU_SIDE = s.분주후보[4]; BUNJU_MIN = s.분주후보[5];
+    } else if (s.분주 === undefined) BUNJU = false;
     if (s.가장자리계선 !== undefined) EDGE_GUIDE = s.가장자리계선;
     if (s.자간절반 !== undefined) RATIO_HALF = s.자간절반;
     if (s.광곽고랑 !== undefined) FRAME_GUTTER = s.광곽고랑;
