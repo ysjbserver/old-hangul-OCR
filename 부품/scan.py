@@ -24,8 +24,9 @@ FRAME_LOCAL_REACH = 0.35  # 쪽 광곽 줄에서 세로 자간의 이만큼 안�
 FRAME_LOCAL_EDGE = 8      # 찬 줄에서 이 px 까지 흐린 줄(열 폭의 GLYPH 넘는 줄)도 광곽 줄로 친다
 
 # ── 열 찾기 ──────────────────────────────────────────────────────────
-def _columns_at(ink, W, th):
-    """한 문턱으로 잉크 덩어리를 잡아 (덩어리들, 자간). 쓸 만하지 않으면 None. `find_columns` 의 ①② 부분."""
+def _columns_at(ink, W, th, 얇음=0):
+    """한 문턱으로 잉크 덩어리를 잡아 (덩어리들, 자간). 쓸 만하지 않으면 None. `find_columns` 의 ①② 부분.
+    얇음: 이 폭(px) 안 되는 덩어리를 먼저 버림(점선 계선 — `PITCH_THIN`). 0 = 예전 그대로."""
     runs, s = [], None
     for x, v in enumerate(ink):
         if v > th and s is None:
@@ -34,6 +35,8 @@ def _columns_at(ink, W, th):
             if x - s > 10: runs.append([s, x])
             s = None
     if s is not None and W - s > 10: runs.append([s, W])
+    if 얇음:
+        runs = [r for r in runs if r[1] - r[0] >= 얇음]
     if len(runs) < 3: return None
 
     wmed = np.median([b - a for a, b in runs])          # ② 폭이 절반도 안 되면 여백
@@ -48,6 +51,11 @@ def _columns_at(ink, W, th):
 
 PITCH_OFF, PITCH_ON = 0.15, 0.12     # 표준 자간에서 이 몫 넘게 벗어나면 / 이 몫 안인 다른 문턱으로 바꿈(읽을 때만)
 PITCH_MORE = 1.5    # 간격이 표준 근처라도 다른 문턱이 열을 이 배 넘게 더 찾으면(간격은 PITCH_ON 안) 바꿈. 0 = 끔
+# (읽을 때만, 2026-10-09) 위 두 문턱으로도 표준에서 PITCH_OFF 넘게 벗어나면 — 점선 계선이 가는 덩어리로 끼어 자간이 절반(쥬역언해 0127 ·
+#   관셰음), 문턱이 낮아 이웃 열이 붙어 두 배(쥬역언해 0014) — 가는 덩어리(표준 자간의 PITCH_THIN 안 되는 폭)를 버리고, 더 높은 문턱
+#   (최대값의 PITCH_SCAN 배)도 시험해 PITCH_ON 안인 첫 것을 씀. () = 끔. JS 짝 `열찾기` · 설정 `열다시찾기` · `열가는덩이`
+PITCH_SCAN = (0.2, 0.3, 0.4, 0.5)
+PITCH_THIN = 0.25
 INK_EDGE = 0.0      # 스캔 양 끝 이 몫에 걸친 거의 위아래가 다 검은 띠(제본 그림자)를 열 찾기 전에 지움 — 판심떼기=True 일 때만. 0 = 끔
                     # ⚠ 늘 켜지 말 것 — 전사대조만 `find_columns(…, 끝띠=True)` 로 후보 하나로 씀
 EDGE_ZONE = 0.03    # `끝띠=True` 로 부를 때의 그 몫
@@ -125,6 +133,16 @@ def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None):
                         abs(got[1] - 표준자간) <= 표준자간 * PITCH_ON and \
                         (멀다 or len(got[0]) >= len(r0) * PITCH_MORE):
                     골랐 = got; break
+        if PITCH_SCAN and abs(골랐[1] - 표준자간) > 표준자간 * PITCH_OFF:
+            얇 = 표준자간 * PITCH_THIN
+            문턱들 = [ink.max() * 0.12, float(np.percentile(ink, 90)) * 0.25] + [ink.max() * f for f in PITCH_SCAN]
+            시험 = [(t, 얇) for t in 문턱들[:2]] + [(t, 0) for t in 문턱들[2:]] + [(t, 얇) for t in 문턱들[2:]]
+            넓다, n0 = 골랐[1] > 표준자간, _열수(*골랐)
+            for t, w in 시험:
+                got = _columns_at(ink, W, t, w)
+                # 간격이 넓게(열을 묶어) 잡혔던 쪽은 열이 줄어드는 후보를 받지 않음 — 열은 맞는데 간격 셈만 벗어난 쪽(쥬역언해 3책 0024)
+                if got is not None and abs(got[1] - 표준자간) <= 표준자간 * PITCH_ON and                         not (넓다 and _열수(*got) < n0):
+                    골랐 = got; break
     runs, pitch = 골랐
 
     merged = [runs[0]]                                   # ③ 쪼개진 열 합치기
@@ -156,6 +174,19 @@ def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None):
     if 판심떼기:
         out = _drop_margin_column(out)
     return pitch, list(reversed(out))
+
+
+def _열수(runs, pitch):
+    """`find_columns` ③④ 를 거친 뒤의 열 수(합치고 빠진 열 끼운 뒤) — 후보를 견줄 때만."""
+    merged = [list(runs[0])]
+    for r in runs[1:]:
+        if (r[0]+r[1])/2 - (merged[-1][0]+merged[-1][1])/2 < pitch * 0.6:
+            merged[-1][1] = r[1]
+        else:
+            merged.append(list(r))
+    cen = [(a + b) / 2 for a, b in merged]
+    if len(cen) > 2: pitch = float(np.median(np.diff(cen)))
+    return 1 + sum(max(1, int(round((b - a) / pitch))) for a, b in zip(cen, cen[1:]))
 
 
 def _drop_margin_column(cols, ratio=1.18):
@@ -760,6 +791,87 @@ def _가름판_geometry(path, g, ratio, 가름):
 
 
 # ── 자를 자리 후보 ───────────────────────────────────────────────────
+# ── 분주(열 안의 두 줄) 후보 (`분주후보`, 2026-10-09) ────────────────────────
+# 열 가운데 좁은 띠는 비고 좌우 양쪽에 글자 반쪽 넘는 잉크가 있는 가로 띠가 이어진 구간. 판정은 느슨하게 — 받을지는
+# `align.분주읽기` 가 모델 확신으로 정함(그림 모양만으로는 쪽 끝 열 · 판심 · '이 · 니' 같은 글자에 헛잡음).
+BUNJU_BAND = 0.25    # 가로 띠 높이(세로 자간의 몫)
+BUNJU_WIDE = 1.25    # 열 가운데에서 좌우로 글자 폭의 이 배까지 봄(분주 글자는 열 밖으로 삐져나옴 — 증남포)
+BUNJU_MID = 0.3      # 두 줄 사이 빈틈을 열 가운데에서 글자 폭의 ± 이 몫 안에서 찾음(정가운데가 아닐 수 있음 — 증남포 0018)
+BUNJU_GAP = 3        # 그 빈틈은 적어도 이 px
+BUNJU_SIDE = 0.3     # 좌우 잉크가 각각 글자 폭의 이 몫은 넘어야
+BUNJU_MIN = 0.6      # 구간이 세로 자간의 이 배는 돼야
+
+
+def _가름자리(occ, m0, m1, cx):
+    """occ 의 [m0, m1) 안 빈 자리 중 cx 에 가장 가까운 빈틈(BUNJU_GAP 넘는)의 가운데 — 없으면 None."""
+    best, x = None, m0
+    while x < m1:
+        if occ[x]:
+            x += 1; continue
+        e = x
+        while e < m1 and not occ[e]:
+            e += 1
+        if e - x >= BUNJU_GAP:
+            c = (x + e) / 2
+            if best is None or abs(c - cx) < abs(best - cx):
+                best = c
+        x = e
+    return best
+
+
+def 분주후보(g, cols, i, sp, pitch):
+    """열 i 의 글자 구간 sp 에서 분주처럼 보이는 [(y0, y1, 왼끝, 가름 x, 오른끝)] — `cols` 는 열 잉크 덩어리(글자 폭)."""
+    c0, c1 = cols[i]
+    w = c1 - c0
+    if w < 8 or not sp:
+        return []
+    cx = (c0 + c1) / 2
+    lo, hi = cx - w * BUNJU_WIDE, cx + w * BUNJU_WIDE
+    for j in (i - 1, i + 1):                         # 이웃 열과의 가운데를 넘지 않게
+        if 0 <= j < len(cols):
+            n = (cols[j][0] + cols[j][1]) / 2
+            if abs(n - cx) < 1:
+                continue
+            if n > cx: hi = min(hi, (cx + n) / 2)
+            else: lo = max(lo, (cx + n) / 2)
+    lo, hi = int(max(0, lo)), int(min(g.shape[1], hi))
+    y0, y1 = sp
+    blk = g[y0:y1, lo:hi] < INK
+    c = cx - lo
+    m0, m1 = int(max(1, c - w * BUNJU_MID)), int(min(blk.shape[1] - 1, c + w * BUNJU_MID))
+    if m1 - m0 < BUNJU_GAP:
+        return []
+    h = max(2, int(pitch * BUNJU_BAND))
+    상태, 가름 = [], []
+    for y in range(0, blk.shape[0], h):
+        occ = blk[y:y + h].any(axis=0)
+        if not occ.any():
+            상태.append(0); 가름.append(None); continue
+        x = _가름자리(occ, m0, m1, c)
+        if x is None:
+            상태.append(-1); 가름.append(None); continue
+        왼 = np.flatnonzero(occ[:int(x)]); 오 = np.flatnonzero(occ[int(x) + 1:])
+        wl = (x - 왼[0]) if len(왼) else 0
+        wr = (오[-1] + 1) if len(오) else 0
+        ok = wl >= w * BUNJU_SIDE and wr >= w * BUNJU_SIDE
+        # 가운데가 비고 한쪽 줄에만 글자가 있는 띠(두 줄 길이가 다름 — 증남포 0018 「증남포 / 목포」)는 끊지 않음
+        상태.append(1 if ok else 0); 가름.append(x if ok else None)
+    out, k = [], 0
+    while k < len(상태):
+        if 상태[k] != 1:
+            k += 1; continue
+        e, n1 = k, 0
+        while e < len(상태) and 상태[e] != -1:
+            n1 += 상태[e] == 1; e += 1
+        while e > k and 상태[e - 1] == 0:
+            e -= 1
+        if n1 >= 2 and (e - k) * h >= pitch * BUNJU_MIN:
+            xs = [v for v in 가름[k:e] if v is not None]
+            out.append((y0 + k * h, y0 + min(e * h, blk.shape[0]), lo, int(round(lo + float(np.median(xs)))), hi))
+        k = max(e, k + 1)
+    return out
+
+
 def smooth(a, s):
     k = np.exp(-0.5 * (np.arange(-3*s, 3*s+1) / s) ** 2); k /= k.sum()
     return np.convolve(a, k, 'same')

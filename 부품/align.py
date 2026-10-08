@@ -28,6 +28,8 @@ EDGE_MAX     = 3      # 한쪽에서 이만큼까지만 버린다
 EDGE_OVERLAP = 0.6    # 이웃 열과 가운데가 자간의 이 배보다 가까우면 겹친 것으로 본다
 EDGE_DROP_IN = 0.7    # 광곽 세로줄을 찾은 쪽은 줄 안쪽 열을 이만큼까지 봐준다
 EDGE_BAR     = 0.5    # 끝 열의 글자가 이 몫 넘게 `ㅣ` 면 광곽 세로줄로 보고 뗀다 (None = 끔)
+EDGE_BAR_RUN = 5      # 끝 열에 `ㅣ` 가 이만큼 넘게 **연달아** 나오면 광곽 줄 · 판심 열로 보고 뗀다 (None = 끔, 2026-10-09)
+                      #   — 본문의 주격 조사 `ㅣ` 는 두 번 넘게 잇따르지 않음. 판심 글씨 열(「예례미야일쟝ㅣㅣㅣㅣ…이쳔구십칠」)은 `ㅣ` 가 40% 라 EDGE_BAR 에 안 걸림
 EDGE_GUIDE   = 0.3    # 세로줄 너머 떼일 열(둘 이상)이 본문처럼 보이면(확신 · 간격이 자간 ±이 몫) 떼지 않음 — 계선 판 (None = 끔)
 
 # ── 읽을 때 글자가 아닌 칸 빼기 (`열마다읽기`) ────────────────────────
@@ -517,8 +519,75 @@ def 열마다읽기(mdl, geo, span=3):
         out.append((float(np.mean(logc[s0:s0+ln])), 글, 확, ln, 상))
     if HEADING:
         큰제목읽기(mdl, geo, out, span)
+    if BUNJU:
+        분주읽기(mdl, geo, out)
     # 넷째 = 글자를 낸 칸의 상자들(글자와 같은 차례) · 다섯째 = 잘라 본 칸 수(뺀 칸 포함 — 끝 열 보호가 씀)
     return [None if o is None else (o[0], o[1], o[2], o[4], o[3]) for o in out]
+
+
+BUNJU      = True    # (읽을 때만, 2026-10-09) 열 안의 두 줄(분주 · 협주)을 갈라 읽어 보고 모델이 뚜렷이 자신 있을 때만 바꿈 — `분주읽기`
+BUNJU_GAIN = 0.3     # 갈라 읽은 쪽의 로그 확신 평균이 이만큼 넘게 나을 때만
+BUNJU_CONF = 0.5     # 갈라 읽은 칸들의 확신(기하평균)이 이보다 낮으면 버림
+BUNJU_H    = (0.45, 0.55, 0.7, 0.85, 1.0)   # 분주 글자 높이 후보(세로 자간의 배) — 작은 협주부터 보통 크기(증남포)까지
+BUNJU_MINC = 2       # 바꿀 칸이 이보다 적거나 갈라 읽은 한쪽 줄이 이보다 짧으면 안 바꿈(한 글자를 반으로 갈라 읽는 헛켜짐)
+BUNJU_BAR  = 0.25    # 갈라 읽은 글자 중 'ㅣ' 가 이 몫을 넘으면 안 바꿈(계선 · 광곽 줄을 ㅣ 로 읽는 헛켜짐)
+
+
+def _줄읽기(mdl, geo, x0, x1, y0, y1):
+    """[x0, x1) × [y0, y1) 을 한 줄로 보고 칸 수를 모델 확신으로 골라 읽음 — (로그 확신 합, 글자, 확신, 상자) 또는 None."""
+    g = np.asarray(geo["image"])
+    prof = (g[:, x0:x1] < scan.INK).sum(axis=1).astype(float)
+    sm = scan.smooth(prof, max(2.0, geo["pitch"] / 9))
+    r = _잉크범위(sm, y0, y1)
+    if r is None or r[1] - r[0] < geo["pitch"] * 0.3:
+        return None
+    a, b = r
+    최고 = None
+    for hm in BUNJU_H:
+        h = geo["pitch"] * hm
+        n = max(1, int(round((b - a) / h)))
+        cuts, _ = scan.split_column(sm, a, b, n, scan.cut_points(sm, a, b, h))
+        if not cuts:
+            cuts = [int(a + (b - a) * k / n) for k in range(n + 1)]
+        bx = [(x0, p, x1, q) for p, q in zip(cuts[:-1], cuts[1:])]
+        pL, pV, pT, cf = mdl.read(geo["image"], bx)
+        lg = np.log(np.clip(cf, 1e-6, None))
+        if 최고 is None or lg.mean() > 최고[0] / len(최고[1]):
+            최고 = (float(lg.sum()), [mdl.letter(pL[j], pV[j], pT[j]) for j in range(n)], [float(c) for c in cf], bx)
+    return 최고
+
+
+def 분주읽기(mdl, geo, out):
+    """
+    열 안에 두 줄로 찍힌 분주(협주)를 갈라 읽는다 — 읽는 경로에만. `scan.분주후보` 가 느슨하게 잡은 구간마다
+    지금 읽은 칸들(가운데가 그 구간 안)과, 열 가운데를 경계로 오른쪽 줄 → 왼쪽 줄로 갈라 읽은 판을 견주어
+    로그 확신 평균이 `BUNJU_GAIN` 넘게 낫고 기하평균 확신이 `BUNJU_CONF` 넘을 때만 바꾼다(전사문 `{{분주|오른|왼}}` 차례와 같음).
+    `out` 을 제자리에서 고친다. 열 점수(첫 값)는 그대로.
+    """
+    g = np.asarray(geo["image"])
+    for i, o in enumerate(out):
+        if o is None or not geo["spans"][i]:
+            continue
+        for (y0, y1, lo, cx, hi) in scan.분주후보(g, geo["cols"], i, geo["spans"][i], geo["pitch"]):
+            o = out[i]
+            안 = [j for j, b in enumerate(o[4]) if y0 <= (b[1] + b[3]) / 2 < y1]
+            if not 안:
+                continue
+            Y0, Y1 = min(y0, o[4][안[0]][1]), max(y1, o[4][안[-1]][3])
+            옛 = float(np.mean(np.log(np.clip([o[2][j] for j in 안], 1e-6, None))))
+            오 = _줄읽기(mdl, geo, cx, hi, Y0, Y1)
+            왼 = _줄읽기(mdl, geo, lo, cx, Y0, Y1)
+            if 오 is None or 왼 is None:
+                continue
+            n = len(오[1]) + len(왼[1])
+            if len(안) < BUNJU_MINC or min(len(오[1]), len(왼[1])) < BUNJU_MINC or                     sum(c == "ㅣ" for c in 오[1] + 왼[1]) > n * BUNJU_BAR:
+                continue
+            새 = (오[0] + 왼[0]) / n
+            if 새 <= 옛 + BUNJU_GAIN or 새 < np.log(BUNJU_CONF):
+                continue
+            a, b = 안[0], 안[-1] + 1
+            out[i] = (o[0], o[1][:a] + 오[1] + 왼[1] + o[1][b:], o[2][:a] + 오[2] + 왼[2] + o[2][b:],
+                      o[3], o[4][:a] + 오[3] + 왼[3] + o[4][b:])
 
 
 HEADING_INK = 0.15     # 잉크가 그 구간 최댓값의 이 몫을 넘는 첫·끝 자리부터 칸을 나눈다(위아래 빈 여백을 칸으로 읽지 않게)
@@ -766,7 +835,16 @@ def 가장자리다듬기(geo, 열들, δ=EDGE_DROP, 최대=EDGE_MAX, 겹침=EDG
     # 광곽 세로줄을 한 열 통째 `ㅣ` 로 자신 있게 읽으면 확신으로는 못 떼므로 따로 뗀다(`EDGE_BAR`)
     막대 = lambda i: (EDGE_BAR is not None and 열들[i] is not None and len(열들[i][1]) > 0
                      and sum(자 == "ㅣ" for 자 in 열들[i][1]) > EDGE_BAR * len(열들[i][1]))
-    나쁨 = lambda i, d, j: 열들[i] is None or (점(i) < 기준 - d and not 보호(i, j)) or 막대(i)
+    def 막대줄(i):
+        if EDGE_BAR_RUN is None or 열들[i] is None:
+            return False
+        n = 0
+        for 자 in 열들[i][1]:
+            n = n + 1 if 자 == "ㅣ" else 0
+            if n > EDGE_BAR_RUN:
+                return True
+        return False
+    나쁨 = lambda i, d, j: 열들[i] is None or (점(i) < 기준 - d and not 보호(i, j)) or 막대(i) or 막대줄(i)
     for _ in range(최대):
         if len(남) > 4 and 나쁨(남[0], d앞, 남[0] - 1): 남.pop(0)
         else: break
