@@ -109,6 +109,103 @@ class 모델:
         return np.array(rL), np.array(rV), np.array(rT)
 
 
+def _한자인가(c):
+    if len(c) != 1:
+        return False
+    o = ord(c)
+    return 0x3400 <= o <= 0x4DBF or 0x4E00 <= o <= 0x9FFF or 0xF900 <= o <= 0xFAFF or 0x20000 <= o <= 0x3134F
+
+
+class 혼용모델(모델):
+    """'근대 국한문' — `제작/도구/ocr혼용.혼용Model` 과 같은 모양을 ONNX 로 읽음(머리 다섯: 갈래 K · 초 L · 중 V · 종 T · 한자 H).
+
+    폴더: `국한문모델.onnx` + `글자표.json`(`제작/만들기/내보내기_국한문.py`). 한자는 초성 표 **뒤에 이어 붙인 자리**(`Ls[nL + k]`)로,
+    중성 · 종성은 빈 자리('')로 실어 보냄 — `Ls[l] + Vs[v] + Ts[t]` 가 곧 그 한자라 `align` · `page` · `대조` 가 고침 없이 돎.
+    확신 = 한글이면 min(갈래, 초, 중, 종), 한자면 min(갈래, 한자). ⚠ 결과는 파이토치 `ocr혼용` 과 같아야 함(고치면 둘 다).
+    """
+
+    def __init__(self, 폴더, 설정, 스레드=1):
+        with open(os.path.join(폴더, "글자표.json"), encoding="utf-8") as f:
+            v = json.load(f)
+        self.설정 = 설정                                    # 스캔너비 · 뭉치 — 옛한글 모델 설정과 같은 값
+        self.뭉치 = 설정.get("뭉치", 64)
+        Ls, Vs, Ts, Hs = v["초성"], v["중성"], v["종성"], v["한자"]
+        self.Hs, self.nL = Hs, len(Ls)
+        self.Ls = list(Ls) + list(Hs)
+        self.Vs = list(Vs) + ([""] if "" not in Vs else [])
+        self.Ts = list(Ts) + ([""] if "" not in Ts else [])
+        self.v빈, self.t빈 = self.Vs.index(""), self.Ts.index("")
+        self.iL = {c: i for i, c in enumerate(Ls)}
+        self.iV = {c: i for i, c in enumerate(Vs)}
+        self.iT = {c: i for i, c in enumerate(Ts)}
+        self.iH = {c: i for i, c in enumerate(Hs)}
+        self.size = v["그림크기"]
+        self.세션 = _세션(os.path.join(폴더, "국한문모델.onnx"), 스레드)
+        self.폴더 = 폴더
+        self.dev = "onnx"
+        self._기억 = (None, {})
+
+    def _머리들(self, im, boxes, batch):
+        # 마지막 그림 하나의 (갈래 · 초 · 중 · 종 · 한자) 확률을 상자별로 기억 — 부름 사이에도(옛한글 모델과 같은 까닭)
+        batch = min(batch, self.뭉치)
+        열쇠그림 = (im.size, im.mode, hashlib.blake2b(im.tobytes(), digest_size=16).digest())
+        if self._기억[0] != 열쇠그림:
+            self._기억 = (열쇠그림, {})
+        기억 = self._기억[1]
+        열쇠들 = [tuple(int(v) for v in b) for b in boxes]
+        새것 = list(dict.fromkeys(k for k in 열쇠들 if k not in 기억))
+        for i in range(0, len(새것), batch):
+            덩이 = 새것[i:i + batch]
+            x = self.crops(im, 덩이)
+            p = [_펴기(z) for z in self.세션.run(None, {"x": x})]
+            for j, k in enumerate(덩이):
+                기억[k] = tuple(a[j] for a in p)
+        return [np.stack([기억[k][m] for k in 열쇠들]) for m in range(5)]
+
+    def read(self, im, boxes, batch=None):
+        if not boxes:
+            z = np.zeros(0, dtype=np.int64)
+            return z, z, z, np.zeros(0)
+        sK, sL, sV, sT, sH = self._머리들(im, list(boxes), batch or self.뭉치)
+        한 = sK[:, 1] > sK[:, 0]
+        l = np.where(한, sH.argmax(1) + self.nL, sL.argmax(1))
+        v = np.where(한, self.v빈, sV.argmax(1))
+        t = np.where(한, self.t빈, sT.argmax(1))
+        c = np.where(한, np.minimum(sK[:, 1], sH.max(1)),
+                     np.minimum(np.minimum(sK[:, 0], sL.max(1)), np.minimum(sV.max(1), sT.max(1))))
+        return l, v, t, c
+
+    def 확률(self, im, boxes, batch=None):
+        """`대조.확률읽기` 용 — 세 머리 꼴(초 · 중 · 종)로. 갈래로 한글 · 한자를 가르고(`read` 와 같은 쪽), 그쪽 머리 확률에 갈래 확률을 곱함.
+        한글: 초 [갈래0 × 초, 0…] · 중 [중, 0] · 종 [종, 0] / 한자: 초 [0…, 갈래1 × 한자] · 중 · 종은 빈 자리 하나만 1 →
+        '초 × 중 × 종' 이 곧 그 글자의 확률이고 1순위가 `read` 와 같음."""
+        if not boxes:
+            z = np.zeros((0, 1))
+            return z, z, z
+        sK, sL, sV, sT, sH = (a.astype(np.float64) for a in self._머리들(im, list(boxes), batch or self.뭉치))
+        n, nH = len(sK), sH.shape[1]
+        한 = (sK[:, 1] > sK[:, 0])[:, None]
+        L = np.zeros((n, self.nL + nH)); V = np.zeros((n, len(self.Vs))); T = np.zeros((n, len(self.Ts)))
+        L[:, :self.nL] = np.where(한, 0.0, sL * sK[:, :1])
+        L[:, self.nL:] = np.where(한, sH * sK[:, 1:], 0.0)
+        V[:, :sV.shape[1]] = np.where(한, 0.0, sV)
+        T[:, :sT.shape[1]] = np.where(한, 0.0, sT)
+        V[:, self.v빈] = np.where(한[:, 0], 1.0, V[:, self.v빈])
+        T[:, self.t빈] = np.where(한[:, 0], 1.0, T[:, self.t빈])
+        return L, V, T
+
+    def codes(self, letters, decompose):
+        rL, rV, rT = [], [], []
+        for c in letters:
+            if _한자인가(c):
+                h = self.iH.get(c, -1)
+                rL.append(h + self.nL if h >= 0 else -1); rV.append(self.v빈); rT.append(self.t빈)
+                continue
+            L, V, T = decompose(c)
+            rL.append(self.iL.get(L, -1)); rV.append(self.iV.get(V, -1)); rT.append(self.iT.get(T, -1))
+        return np.array(rL), np.array(rV), np.array(rT)
+
+
 def 띠(g, x0, x1):
     """`경계검출.띠` 와 같은 셈 — 쪽 그림(np.uint8 H×W)의 열 [x0, x1) → (띠, 배율)"""
     x0, x1 = max(0, int(x0)), min(g.shape[1], int(x1))
@@ -131,7 +228,8 @@ class 검출기:
 
 
 def 끼우기(폴더, 스레드=1):
-    """글자 모델을 돌려주고, `align` 의 경계 검출기도 ONNX 것으로 끼움(torch 를 부르지 않게)."""
+    """`폴더`(= 묶음의 `모델/`)에서 근대 순한글 모델을 돌려주고, `align` 의 경계 검출기도 ONNX 것으로 끼움(torch 를 부르지 않게).
+    폴더 짜임: `근대 순한글/`(옛한글모델.onnx · 설정.json) · `근대 국한문/` · (앞으로 중세 …) · `공용/`(경계검출.onnx — 모델마다 같이 씀)"""
     import align
-    align._검출기 = 검출기(폴더, 스레드)
-    return 모델(폴더, 스레드)
+    align._검출기 = 검출기(os.path.join(폴더, "공용"), 스레드)
+    return 모델(os.path.join(폴더, "근대 순한글"), 스레드)

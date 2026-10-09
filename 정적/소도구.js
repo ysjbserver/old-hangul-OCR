@@ -1,23 +1,14 @@
 /*
  * 옛한글 OCR — 위키문헌 소도구
  *
- * 페이지 이름공간 편집 창에 단추를 놓고, 누르면 그 쪽 스캔을 브라우저 안에서 읽어 편집 상자에 넣음.
- * 읽는 셈은 `읽기.js`, 이 파일은 화면과 그림 가져오기만.
+ * 페이지 이름공간 편집 창에 단추를 놓고, 누르면 그 쪽을 **Toolforge 서버**에서 읽어 편집 상자에 넣음.
+ * 셈은 전부 서버(`근원/툴포지/app.py` · 파이썬 부품) — 이 파일은 화면만. 서버가 내주는 이 파일의 맨 앞 줄이
+ * `window.옛한글OCR서버` 를 채움(서버 없이 단독으로는 안 돎).
  */
 (function () {
 "use strict";
 
 // ── 어디서 가져오나 ──────────────────────────────────────────────────
-// ⚠ 위키문헌 CSP 가 허용하는 곳만 됨(jsdelivr · cdnjs · unpkg · toolforge 등). 다른 곳은 조용히 막힘
-var ORT = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
-
-// 실행기 — 기본 WASM. `window.옛한글OCR실행기 = "webgpu"` 로 WebGPU (파이썬과 대조 안 됨)
-var 실행기 = (window.옛한글OCR실행기 === "webgpu") ? ["webgpu", "wasm"] : ["wasm"];
-// 모델·설정·읽기.js 가 있는 곳 (`window.옛한글OCR자료`)
-// ⚠ 빈 값이면 빈 채로 — "/" 를 붙이면 사이트 루트가 됨
-var 자료 = window.옛한글OCR자료 || "";
-if (자료 && 자료.charAt(자료.length - 1) !== "/") 자료 += "/";
-
 // Toolforge 서버(`툴포지/app.py`) — 있으면 모델 · 판형 살피기를 서버에 맡김. 서버가 내주는 이 파일의 맨 앞 줄이 채움
 var 서버 = window.옛한글OCR서버 || "";
 if (서버 && 서버.charAt(서버.length - 1) !== "/") 서버 += "/";
@@ -25,7 +16,7 @@ if (서버 && 서버.charAt(서버.length - 1) !== "/") 서버 += "/";
 // 영역 지정 화면 주소 — 서버 모드면 그 서버의 area/. `window.옛한글OCR영역` 으로 바꿀 수 있음. 비면 단추 없음
 var 영역 = window.옛한글OCR영역 || (서버 ? 서버 + "area/" : "");
 
-var 상태, 단추, 모델 = null, 설정 = null;
+var 상태, 단추;
 
 // ── 작은 도우미 ──────────────────────────────────────────────────────
 function 알림(t) { if (상태) 상태.textContent = t; }
@@ -45,16 +36,14 @@ function 시각글(d) {
 function 로그머리(쪽, 언제) {
   var c = mw.config.get(["wgServer", "wgArticlePath", "wgFormattedNamespaces", "wgNamespaceNumber", "wgCurRevisionId"]);
   var 제목 = 쪽 ? ((c.wgFormattedNamespaces || {})[c.wgNamespaceNumber] || "페이지") + ":" + 쪽.파일 + "/" + 쪽.쪽 : "(못 찾음)";
-  var A = window.옛한글읽기;
   return [
     ["도구", "인식 (전사)"],
+    ["모델 · 단", 선택글()],
     ["시각", 시각글(언제)],
     ["문서", 제목],
     ["주소", 쪽 ? (c.wgServer || location.origin) + (c.wgArticlePath || "/wiki/$1").replace("$1", encodeURIComponent(제목.replace(/ /g, "_")).replace(/%2F/g, "/").replace(/%3A/g, ":")) : ""],
     ["판", c.wgCurRevisionId || "(새 문서)"],
-    ["실행", 서버 ? "서버 " + 서버 : 실행기.join(",") + " · 자료 " + (자료 || "(없음)")],
-    ["읽기.js", A ? "판형판 " + A.판형판 : (서버 ? "(서버 모드 — 안 받음)" : "(아직 안 받음)")],
-    ["표시문턱", 설정 ? 설정.표시문턱 : ""],
+    ["실행", "서버 " + 서버],
     ["구문 강조", 편집상자() && !보이나(편집상자()) ? "켜짐" : "꺼짐"],
     ["브라우저", navigator.userAgent],
   ];
@@ -69,16 +58,16 @@ function 로그쓰기(줄들) {
 
 function 초글(ms) { return (ms / 1000).toFixed(1) + "초"; }
 
-/** 단추 줄 오른쪽 끝의 작은 '디버그 로그' — 누르면 줄 아래에 펼침 */
-function 로그단추(줄) {
+/** 단추 줄 오른쪽 끝의 작은 '인식 로그' — 누르면 줄 아래에 펼침. `공` = `공용도구()` */
+function 로그단추(공) {
   var 고리 = document.createElement("a");
   고리.href = "#";
   고리.setAttribute("role", "button");
-  고리.textContent = "디버그 로그";
+  고리.textContent = "인식 로그";
   고리.title = "마지막으로 읽은 쪽의 기록(쪽 · 시간 · 판정 …) — 잘 안 읽힌 쪽을 알릴 때 복사해 붙여 주세요";
-  고리.style.cssText = "margin-left:auto;font-size:11px;color:#a2a9b1;text-decoration:none";
+  고리.style.cssText = "font-size:11px;color:#a2a9b1;text-decoration:none";
   var 칸 = document.createElement("div");
-  칸.style.cssText = "flex-basis:100%;display:none;font-size:12px;color:#54595d";
+  칸.style.cssText = "flex-basis:100%;order:10;display:none;font-size:12px;color:#54595d";
   var 글 = document.createElement("textarea");
   글.readOnly = true;
   글.rows = 12;
@@ -110,23 +99,126 @@ function 로그단추(줄) {
     e.preventDefault();
     var 열림 = 칸.style.display === "none";
     칸.style.display = 열림 ? "block" : "none";
-    고리.textContent = 열림 ? "디버그 로그 닫기" : "디버그 로그";
+    고리.textContent = 열림 ? "인식 로그 닫기" : "인식 로그";
     글.value = 로그.글 || "아직 기록이 없습니다 — '인식 (전사)' 를 한 번 누른 뒤에 보세요.";
     알림말.textContent = "";
   });
-  줄.appendChild(고리);
-  줄.appendChild(칸);              // 줄이 flex-wrap 이라 폭 100% 로 다음 줄에 펼쳐짐
+  공.로그묶음.appendChild(고리);
+  공.줄.appendChild(칸);           // 줄이 flex-wrap 이라 폭 100% 로 다음 줄에 펼쳐짐
   로그.칸 = { 글: 글 };
 }
 
-function 스크립트(url) {
-  return new Promise(function (ok, no) {
-    var s = document.createElement("script");
-    s.src = url;
-    s.onload = ok;
-    s.onerror = function () { no(new Error(url + " 를 못 불러왔습니다")); };
-    document.head.appendChild(s);
+// ── 공용 도구 줄 — 인식 · 교정 · 영역 지정 단추를 한 줄에 모으고, 옆의 '설정' 메뉴에 모델 · 단을 둠 ──
+// ⚠ `소도구.js` 와 `전사대조.js` 에 **같은 꼴**로 들어 있음 — 한쪽을 고치면 다른 쪽도(어느 쪽이 먼저 떠도 한 줄을 같이 씀)
+// 고른 값은 `window.옛한글OCR공용.모델()` · `.단()` 으로 읽음 — 모델 "hangul"(근대 순한글, 기본) | "hanmun"(근대 국한문, 서버판만) ·
+// 단 null(자동 — 파일을 살펴 정한 값) | 1~5
+function 공용도구() {
+  var 옛 = window.옛한글OCR공용;
+  if (옛 && 옛.뿌리.isConnected) return 옛;
+  var 서버주소 = window.옛한글OCR서버 || "";
+  if (서버주소 && 서버주소.charAt(서버주소.length - 1) !== "/") 서버주소 += "/";
+  var 저장 = function (이름, 값) {          // 쪽을 옮겨도 · 새로 고쳐도 고른 값을 기억(막힌 브라우저면 그냥 기억 없이)
+    try {
+      if (값 === undefined) return localStorage.getItem("옛한글OCR:" + 이름);
+      localStorage.setItem("옛한글OCR:" + 이름, 값);
+    } catch (e) {}
+    return null;
+  };
+  var 만들기 = function (태그, 글, 꼴) {
+    var e = document.createElement(태그);
+    if (글) e.textContent = 글;
+    if (꼴) e.style.cssText = 꼴;
+    return e;
+  };
+
+  var 뿌리 = 만들기("div", "", "margin:8px 0");
+  뿌리.id = "옛한글OCR-도구";
+  var 줄 = 만들기("div", "", "display:flex;gap:10px;align-items:center;flex-wrap:wrap");
+  var 로그묶음 = 만들기("span", "", "margin-left:auto;order:9;display:inline-flex;gap:10px");
+  줄.appendChild(로그묶음);
+
+  var 설정단추 = 만들기("button", "설정 ▾");
+  설정단추.type = "button";
+  설정단추.className = "cdx-button";
+  설정단추.style.order = "4";
+  설정단추.title = "모델 · 몇 단짜리인지 고르기";
+  var 칸 = 만들기("div", "", "display:none;margin:6px 0 0;padding:8px 12px;border:1px solid #c8ccd1;"
+                   + "background:#f8f9fa;border-radius:2px;font-size:13px;color:#202122");
+  줄.appendChild(설정단추);
+
+  var 항목 = function (이름, 값들, 도움말) {
+    var 행 = 만들기("div", "", "display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin:4px 0");
+    행.appendChild(만들기("label", 이름, "min-width:3.2em;font-weight:bold"));
+    var 고름 = 만들기("select", "", "padding:2px 6px");
+    값들.forEach(function (v) {
+      var o = document.createElement("option");
+      o.value = v[0]; o.textContent = v[1];
+      고름.appendChild(o);
+    });
+    행.appendChild(고름);
+    행.appendChild(만들기("span", 도움말, "font-size:12px;color:#72777d"));
+    칸.appendChild(행);
+    return 고름;
+  };
+  var 모델선택 = 항목("모델", [["hangul", "근대 순한글"], ["hanmun", "근대 국한문 (시험 중)"]],
+                    "한글로만 된 문헌일 경우 순한글을 선택하는 것이 정확도가 높습니다.");
+  var 단선택 = 항목("단", [["auto", "자동"], ["1", "1단"], ["2", "2단"], ["3", "3단"], ["4", "4단"], ["5", "5단"]],
+                  "자동을 선택하면 파일을 처음 열 때 쪽을 몇 장 받아 살펴 정합니다.");
+
+  var 한문칸 = 모델선택.querySelector("option[value=hanmun]");
+  var 요약 = function () {
+    var 글 = [];
+    if (모델선택.value !== "hangul") 글.push("국한문");
+    if (단선택.value !== "auto") 글.push(단선택.value + "단");
+    설정단추.textContent = "설정 ▾" + (글.length ? " (" + 글.join(" · ") + ")" : "");
+    설정단추.setAttribute("aria-expanded", 칸.style.display !== "none" ? "true" : "false");
+  };
+  // 서버에 국한문 모델 파일이 없으면 못 고르게(`/api/health` 로 확인)
+  var 국한문가능 = function (됨) {
+    한문칸.disabled = !됨;
+    한문칸.textContent = "근대 국한문" + (됨 ? "" : " — 이 서버에는 없음");
+    if (!됨 && 모델선택.value === "hanmun") 모델선택.value = "hangul";
+    요약();
+  };
+  var 옛모델 = 저장("모델"), 옛단 = 저장("단");
+  if (옛모델 === "hanmun") 모델선택.value = "hanmun";
+  if (옛단 && 단선택.querySelector("option[value='" + 옛단 + "']")) 단선택.value = 옛단;
+  fetch(서버주소 + "api/health").then(function (r) { return r.json(); }).then(function (h) {
+    if (h && h.모델들 && !h.모델들.hanmun) 국한문가능(false);
+  }).catch(function () {});
+  모델선택.addEventListener("change", function () { 저장("모델", 모델선택.value); 요약(); });
+  단선택.addEventListener("change", function () { 저장("단", 단선택.value); 요약(); });
+  설정단추.addEventListener("click", function () {
+    칸.style.display = 칸.style.display === "none" ? "block" : "none";
+    요약();
   });
+  요약();
+
+  뿌리.appendChild(줄);
+  뿌리.appendChild(칸);
+  var 상자 = 편집상자();
+  상자.parentNode.insertBefore(뿌리, 상자);
+  return (window.옛한글OCR공용 = {
+    뿌리: 뿌리, 줄: 줄, 로그묶음: 로그묶음,
+    모델: function () { return (모델선택.value === "hanmun" && !한문칸.disabled) ? "hanmun" : "hangul"; },
+    단: function () { return 단선택.value === "auto" ? null : parseInt(단선택.value, 10); },
+  });
+}
+
+/** 살핀 값(자동으로 정한 설정)의 단만 사람이 고른 값으로 — 1단 = 1, N단 = 가름줄 높이 목록(서버 `단바꾸기` · `읽기.js` 의 가름줄 판형과 같은 꼴). 자동(null)이면 그대로 */
+function 단바꾸기(살핀, 단) {
+  if (!단 || !살핀) return 살핀;
+  var s = {};
+  for (var k in 살핀) s[k] = 살핀[k];
+  s.단 = 단 === 1 ? 1 : Array.apply(null, Array(단 - 1)).map(function (_, i) { return (i + 1) / 단; });
+  return s;
+}
+
+function 단글(단) { return 단 ? 단 + "단(직접 고름)" : "자동"; }
+
+function 선택글() {
+  var 공 = window.옛한글OCR공용;
+  return 공 ? (공.모델() === "hanmun" ? "근대 국한문" : "근대 순한글") + " · 단 " + 단글(공.단()) : "";
 }
 
 /**
@@ -155,116 +247,13 @@ function 지금쪽() {
   return { 파일: m[1], 쪽: parseInt(m[2], 10) };
 }
 
-/**
- * 그 쪽 스캔을 학습 때와 같은 너비(`설정.스캔너비`, 1920px)로 받기.
- * ⚠ 너비가 다르면 쪽 판정이 전부 '못씀' — 받은 뒤 실제 너비를 확인
- * ⚠ 여러 쪽 파일은 API 가 요청한 너비를 무시하고 500px 을 줌
- *   → 주소를 한 번 받아 `/page{쪽}-{너비}px-` 만 갈아 끼움
- * ⚠ 주소를 통째로 짐작하면 404 (해시가 들어 있음)
- * ⚠ `crossOrigin="anonymous"` 가 있어야 캔버스에서 픽셀을 꺼낼 수 있음
- */
-var 주소틀 = {};                 // 파일 이름 → 주소 틀 (파일당 한 번 물음)
-var 쪽수 = {};                   // 파일 이름 → 전체 쪽 수
-
-function 주소틀얻기(파일) {
-  var 너비 = (설정 && 설정.스캔너비) || 1920;
-  return 주소틀[파일]
-    ? Promise.resolve(주소틀[파일])
-    : new mw.Api().get({
-        action: "query", format: "json", formatversion: 2,
-        prop: "imageinfo", titles: "File:" + 파일,
-        iiprop: "url|size", iiurlwidth: 500, iiurlparam: "page1-500px",
-      }).then(function (r) {
-        var p = r.query && r.query.pages && r.query.pages[0];
-        var ii = p && p.imageinfo && p.imageinfo[0];
-        if (!ii || !ii.thumburl) {
-          throw new Error("스캔 주소를 못 받았습니다. 파일 이름이 맞는지 보세요: " + 파일);
-        }
-        // 받은 주소에서 쪽 번호와 너비만 갈아 끼우기
-        var u = ii.thumburl.split("?")[0];
-        if (!/\/page\d+-\d+px-/.test(u)) {
-          throw new Error("이 파일은 여러 쪽짜리(PDF·DjVu)가 아닌 것 같습니다: " + 파일);
-        }
-        주소틀[파일] = u.replace(/\/page\d+-\d+px-/, "/page{N}-" + 너비 + "px-");
-        쪽수[파일] = ii.pagecount || 0;       // 판형 살필 쪽 고르기에 씀
-        return 주소틀[파일];
-      });
-}
-
-function 스캔가져오기(파일, 쪽) {
-  var 너비 = (설정 && 설정.스캔너비) || 1920;
-  return 주소틀얻기(파일).then(function (pat) {
-    var url = pat.replace("{N}", String(쪽));
-    return new Promise(function (ok, no) {
-      var im = new Image();
-      im.crossOrigin = "anonymous";
-      im.onload = function () {
-        if (im.naturalWidth !== 너비) {
-          no(new Error("스캔을 " + 너비 + "px 로 달라고 했는데 "
-                       + im.naturalWidth + "px 이 왔습니다. 이 크기로는 쪽 판정이"
-                       + " 맞지 않습니다."));
-          return;
-        }
-        ok(im);
-      };
-      im.onerror = function () {
-        no(new Error("스캔 그림을 못 읽었습니다. 그 쪽이 정말 있는 쪽인가요? " + url));
-      };
-      im.src = url;
-    });
-  });
-}
-
 /** 편집 상자 (2017 편집기·CodeMirror 아래에서도 원본은 이것) */
 function 편집상자() {
   return document.querySelector("#wpTextbox1")
       || document.querySelector("textarea[name='wpTextbox1']");
 }
 
-// ── 모델 한 번만 불러오기 ────────────────────────────────────────────
-var 준비중 = null;
-function 준비() {
-  if (준비중) return 준비중;
-  준비중 = (async function () {
-    알림("도구를 불러오는 중…");
-    if (!window.옛한글읽기) await 스크립트(자료 + "읽기.js");
-    // ⚠ `ort.min.js` 말고 `ort.webgpu.min.js` — WASM 도 들어 있고, `ort.min.js` 에는 WebGPU 가 없음
-    if (!window.ort) await 스크립트(ORT + "ort.webgpu.min.js");
-    설정 = window.옛한글읽기.설정넣기(
-      await (await fetch(자료 + "설정.json")).json());
-    알림("모델을 불러오는 중… (2.4MB, 처음 한 번만)");
-    ort.env.wasm.wasmPaths = ORT;
-    // ⚠ 위키문헌에는 SharedArrayBuffer 가 없어 WASM 은 1스레드
-    ort.env.wasm.numThreads = 1;
-    var 세션 = await ort.InferenceSession.create(자료 + "옛한글모델.onnx",
-                    { executionProviders: 실행기 });
-    // 글자 경계 검출기(0.4MB) — 자를 자리를 고를 때 씀(`align.CUT_LEARN`)
-    var 경계세션 = 설정.경계 ? await ort.InferenceSession.create(자료 + "경계검출.onnx",
-                    { executionProviders: 실행기 }) : null;
-    모델 = window.옛한글읽기.모델만들기(설정, 세션, ort, 경계세션);
-  })();
-  return 준비중;
-}
-
-/**
- * 파일마다 처음 한 번 — 판형 · 자간비 · 판짜임. 셈은 `읽기.js` 의 `판형살피기`(전사대조와 같은 것)
- * 모든 파일을 스스로 잼 — `설정.json` 에 문헌 표 없음
- * ⚠ 판정 규칙을 바꾸면 `읽기.js` 의 `판형판` 을 올릴 것
- */
-function 판형살피기(파일) {
-  if (!window.옛한글읽기.판형살피기) {          // 브라우저가 옛 읽기.js 를 기억하는 중(jsDelivr 최대 7일)
-    var 오류 = new Error("읽기.js 가 옛 판입니다 — 편집 창을 Ctrl+Shift+R 로 새로 고쳐 주세요.");
-    오류.name = "OldReadJsVersionError";
-    return Promise.reject(오류);
-  }
-  return window.옛한글읽기.판형살피기(파일, {
-    쪽수: function () { return 주소틀얻기(파일).then(function () { return 쪽수[파일] || 0; }); },
-    받기: function (p) { return 스캔가져오기(파일, p); },
-    알림: 알림,
-  });
-}
-
-// ── 서버 모드 ────────────────────────────────────────────────────────
+// ── 서버 ────────────────────────────────────────────────────────
 /** 서버에 판형 살피기를 맡기고 끝날 때까지 되물음(처음 보는 파일은 1~3분) */
 async function 서버살피기(파일) {
   for (;;) {
@@ -290,7 +279,7 @@ function 판형글(값) {
 }
 
 function 살핀글(살핀) {
-  return "쪽을 살펴 " + 판형글(살핀.단)
+  return (window.옛한글OCR공용 && window.옛한글OCR공용.단() ? "단은 직접 골라 " : "쪽을 살펴 ") + 판형글(살핀.단)
        + (살핀.자간비 ? " · 자간비 " + 살핀.자간비.toFixed(3) : " · 자간은 기본값")
        + "으로 정했습니다";
 }
@@ -300,44 +289,24 @@ async function 읽기시작() {
   var 상자 = 편집상자();
   var 쪽 = 지금쪽();
   if (!상자 || !쪽) { 알림("편집 창을 못 찾았습니다."); return; }
+  if (!서버) { 알림("서버 주소가 없습니다 — Toolforge 도구가 내주는 주소(…/ocr.js · …/compare.js)로 불러와 주세요."); return; }
   단추.disabled = true;
+  var 공 = 공용도구(), 고른모델 = 공.모델(), 고른단 = 공.단();
   var 언제 = new Date(), 처음 = performance.now(), 때 = {}, 결과 = [], 살핀, r;
   var 재기 = function (이름, t) { 때[이름] = performance.now() - t; };
   try {
     var 초, 실행, t;
-    if (서버) {                                  // 모델은 서버에서 — 결과 꼴은 아래 `한쪽` 과 같음
-      t = performance.now();
-      살핀 = await 서버살피기(쪽.파일);
-      재기("판형 살피기", t);
-      알림("서버에서 문자를 인식하는 중…");
-      var t1 = performance.now();
-      r = await 서버로("api/read", { file: 쪽.파일, page: 쪽.쪽 });
-      재기("인식(서버 왕복)", t1);
-      if (r.초 !== undefined) 때["└ 서버 셈"] = r.초 * 1000;
-      초 = ((performance.now() - t1) / 1000).toFixed(1);
-      실행 = "서버";
-    } else {
-      t = performance.now();
-      await 준비();
-      재기("도구 · 모델 준비", t);
-      t = performance.now();
-      살핀 = await 판형살피기(쪽.파일);
-      재기("판형 살피기", t);
-      알림("스캔 파일을 받는 중…");
-      t = performance.now();
-      var im = await 스캔가져오기(쪽.파일, 쪽.쪽);
-      재기("스캔 받기", t);
-      결과.push(["스캔", im.src + " (" + im.naturalWidth + "×" + im.naturalHeight + ")"]);
-
-      알림("문자를 인식하는 중… (5~10초 걸립니다)");
-      await new Promise(function (ok) { setTimeout(ok, 30); });   // 안내가 먼저 화면에 그려지게
-      var g = window.옛한글읽기.그림읽기(im);
-      var t0 = performance.now();
-      r = await window.옛한글읽기.한쪽(모델, g, null, { 문헌설정: 살핀 });
-      재기("인식", t0);
-      초 = ((performance.now() - t0) / 1000).toFixed(1);
-      실행 = 실행기[0];
-    }
+    t = performance.now();
+    살핀 = await 서버살피기(쪽.파일);
+    재기("판형 살피기", t);
+    알림("서버에서 문자를 인식하는 중…");
+    var t1 = performance.now();
+    r = await 서버로("api/read", { file: 쪽.파일, page: 쪽.쪽, model: 고른모델, tiers: 고른단 || "auto" });
+    살핀 = 단바꾸기(살핀, 고른단);
+    재기("인식(서버 왕복)", t1);
+    if (r.초 !== undefined) 때["└ 서버 셈"] = r.초 * 1000;
+    초 = ((performance.now() - t1) / 1000).toFixed(1);
+    실행 = "서버";
     결과.push(["판정", r.판정.등급 + (r.판정.까닭.length ? " — " + r.판정.까닭.join(" · ") : "")]);
 
     // 순서대로 편집에서 읽는 사이 쪽을 옮겼으면 넣지 않음 — 다른 쪽 글을 덮게 됨
@@ -369,13 +338,12 @@ async function 읽기시작() {
                               : "판정: " + r.판정.등급)
          + (칠함 ? " · 노란 자리가 확신 낮은 글자입니다(고치면 칠이 사라지고, 칠은 저장되지 않습니다)" : "")
          + " · " + 살핀글(살핀)
+         + (고른모델 === "hanmun" ? " · 국한문 모델" : "")
          + " · 확신 낮은 글자 " + (r.표시비 * 100).toFixed(0) + "%"
          + " · " + r.상자수 + (서버 ? "자 " : "상자 ") + 초 + "초(" + 실행 + ")"
          + (r.판정.까닭.length ? " · " + r.판정.까닭.join(" · ") : ""));
   } catch (e) {
-    알림(e && e.name === "OldReadJsVersionError"
-      ? e.message
-      : "멈췄습니다: " + e.message);
+    알림("멈췄습니다: " + e.message);
     console.error(e);
     결과.push(["오류", (e && e.message) || String(e)]);
     if (e && e.stack) 결과.push(["오류 자리", "\n  " + String(e.stack).split("\n").slice(0, 6).join("\n  ")]);
@@ -607,40 +575,45 @@ function 보이기(r, 넣을상자) {
 function 세우기() {
   if (!지금쪽() || !편집상자()) return;
   if (document.getElementById("옛한글OCR-줄")) return;
-  var 줄 = document.createElement("div");
-  줄.id = "옛한글OCR-줄";
-  줄.style.cssText = "margin:8px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap";
+  var 공 = 공용도구();                     // 인식 · 교정 · 영역 지정 단추가 한 줄 — 차례는 style.order(인식 1 · 교정 2 · 영역 3 · 설정 4)
   단추 = document.createElement("button");
   단추.type = "button";
   단추.className = "cdx-button";
+  단추.style.order = "1";
   단추.textContent = "인식 (전사)";
   단추.addEventListener("click", 읽기시작);
-  상태 = document.createElement("span");
-  상태.style.cssText = "font-size:13px;color:#54595d";
-  상태.textContent = "";
-  줄.appendChild(단추);
-  // 영역 지정 화면을 새 창으로 — 지금 쪽(파일 · 쪽 번호)을 물음표 뒤에 실어 저절로 불러오게
+  공.줄.appendChild(단추);
+  // 영역 지정 화면을 새 창으로 — 지금 쪽(파일 · 쪽 번호)과 고른 모델을 물음표 뒤에 실어 저절로 불러오게
   if (영역) {
     var 영역단추 = document.createElement("a");
     영역단추.className = "cdx-button";
+    영역단추.style.order = "3";
     영역단추.target = "_blank";
     영역단추.rel = "noopener";
     영역단추.textContent = "영역 지정";
     영역단추.title = "이 쪽 스캔을 영역 지정 도구에서 엽니다(상자를 쳐서 그 자리만 읽기)";
     var 영역주소 = function () {
       var 쪽 = 지금쪽();                       // 순서대로 편집으로 쪽을 옮겼을 수 있어 누를 때마다 새로
-      영역단추.href = 영역 + (쪽 ? "?" + new URLSearchParams({
-        host: location.host, file: 쪽.파일, page: String(쪽.쪽) }) : "");
+      var 값 = { host: location.host };
+      if (쪽) { 값.file = 쪽.파일; 값.page = String(쪽.쪽); }
+      if (공.모델() !== "hangul") 값.model = 공.모델();
+      영역단추.href = 영역 + "?" + new URLSearchParams(값);
     };
     영역주소();
     영역단추.addEventListener("mousedown", 영역주소);   // 가운데 단추로 새 탭에 열 때도
     영역단추.addEventListener("click", 영역주소);
-    줄.appendChild(영역단추);
+    공.줄.appendChild(영역단추);
   }
+  // 알림 글은 단추 줄 아래 한 줄(⚠ `보이기` 가 이 줄 다음에 교정 칸을 놓음)
+  var 줄 = document.createElement("div");
+  줄.id = "옛한글OCR-줄";
+  줄.style.cssText = "margin:4px 0 0";
+  상태 = document.createElement("span");
+  상태.style.cssText = "font-size:13px;color:#54595d";
+  상태.textContent = "";
   줄.appendChild(상태);
-  로그단추(줄);
-  var 상자 = 편집상자();
-  상자.parentNode.insertBefore(줄, 상자);
+  공.뿌리.appendChild(줄);
+  로그단추(공);
   // 순서대로 편집으로 쪽을 옮기면 앞 쪽의 칠 · 교정 칸 · 알림을 걷음
   if (/[?&]prp_editinsequence=/i.test(location.search)) {
     window.addEventListener("hashchange", function () {

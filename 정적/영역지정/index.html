@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>옛한글 OCR 영역 지정</title>
+<title>옛한글 OCR</title>
 <style>
 :root {
   --bg: #f6f6f4; --fg: #1d1d1b; --muted: #6b6b66; --line: #d6d5cf; --panel: #ffffff;
@@ -58,7 +58,7 @@ kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font-si
 </head>
 <body>
 <header>
-  <h1>옛한글 OCR 영역 지정 <span class="hint">시험판</span></h1>
+  <h1>옛한글 OCR</h1>
   <input id="src" type="text" placeholder="파일 이름 또는 위키문헌 페이지 주소 (예: 훈아진언.pdf/62)">
   <label>쪽 <input id="pageNo" type="number" min="1"></label>
   <button id="loadBtn" class="main">불러오기</button>
@@ -134,6 +134,8 @@ function 스크립트(url) {
 // Toolforge 에서는 `서버.js` 가 window.옛한글OCR서버 를 채움 → 모델 셈(상자 · 경계 확률)만 서버에, 열 찾기 · 칸 나누기는 `읽기.js`
 // 아니면 ORT 를 이 폴더의 ort/ 에서, 없으면 jsDelivr 에서
 const 서버 = window.옛한글OCR서버 || null;
+// 소도구의 '설정 → 모델' 에서 넘어온 값("hanmun" = 근대 국한문) — 서버 모드에서만. 없으면 근대 순한글
+const 모델이름 = (서버 && new URLSearchParams(location.search).get("model")) || "hangul";
 
 async function 서버로(경로, 몸) {
   const res = await fetch(서버 + 경로, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(몸) });
@@ -144,7 +146,7 @@ async function 서버로(경로, 몸) {
 
 function 원격모델() {
   const m = 옛한글읽기.모델만들기(설정, null, null, null);   // 글자 만들기(모델.글자)는 그대로
-  const 어디 = () => ({ file: st.file, page: st.page || 1 });
+  const 어디 = () => ({ file: st.file, page: st.page || 1, model: 모델이름 });
   m.읽기 = async function (g, boxes) {
     const n = boxes.length, 자리 = new Int32Array(n), 고유 = [], 본 = new Map();
     for (let i = 0; i < n; i++) {                          // 같은 상자는 한 번만
@@ -174,7 +176,21 @@ function 준비() {
   if (준비중) return 준비중;
   준비중 = (async () => {
     설정 = 옛한글읽기.설정넣기(await (await fetch("설정.json")).json());
-    if (서버) { 모델 = 원격모델(); return; }
+    if (서버) {
+      모델 = 원격모델();
+      if (모델이름 !== "hangul") {                        // 국한문 모델은 글자표가 달라(한자가 초성 표 뒤에 이어 붙음) 서버에서 받아 번호를 글자로
+        const 표 = await (await fetch(서버 + "api/tables?model=" + encodeURIComponent(모델이름))).json();
+        if (표.오류) throw new Error(표.오류);
+        모델.글자 = (l, v, t) => {
+          const x = 표.초성[l] + 표.중성[v] + 표.종성[t];
+          if (x === "ᅟᅵ") return "ㅣ";
+          if (x === "○ᅠ" || x === "々ᅠ" || x === "ᄉᅠ" || x === ",ᅠ" || x === ".ᅠ") return x === "ᄉᅠ" ? "ㅅ" : x[0];
+          return x;
+        };
+        알림("근대 국한문 모델로 읽습니다.");
+      }
+      return;
+    }
     let ortBase = "ort/";
     try { await 스크립트(ortBase + "ort.webgpu.min.js"); }
     catch (e) { ortBase = ORT_CDN; await 스크립트(ortBase + "ort.webgpu.min.js"); }
@@ -277,7 +293,7 @@ async function 불러오기() {
     알림(p.file + (page ? " · " + page + "쪽" : "") + " — 자간비 " + st.자간비.toFixed(3)
          + (잰.자간비 ? "" : "(못 재서 기본값)") + (st.열간격 ? " · 열 간격 " + Math.round(st.열간격) + "px" : " · 열 간격 못 잼")
          + ". 스캔 위에 상자를 치세요.");
-    history.replaceState(null, "", "?" + new URLSearchParams({ host: p.host, file: p.file, page: page || "" }));
+    history.replaceState(null, "", "?" + new URLSearchParams(Object.assign({ host: p.host, file: p.file, page: page || "" }, 모델이름 !== "hangul" ? { model: 모델이름 } : {})));
   } catch (e) { 알림(e.message || String(e), true); }
 }
 async function 설정준비() { while (!설정) await new Promise(r => setTimeout(r, 30)); }

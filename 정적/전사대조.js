@@ -1,629 +1,15 @@
 /*
  * 전사대조 — 위키문헌 '페이지:' 편집 창에서 **이미 전사된 글**을 그 쪽 스캔과 맞대어,
- * 전사문이 틀렸을 만한 자리를 편집 상자 안에 칠하는 소도구. OCR 소도구와 **따로 켭니다**:
+ * 전사문이 틀렸을 만한 자리를 편집 상자 안에 칠하는 소도구. Toolforge 서버(`https://<도구 주소>/compare.js`)가 내줌:
  *
- *   window.옛한글OCR자료 = "https://cdn.jsdelivr.net/gh/ysjbserver/old-hangul-OCR@…/";
- *   mw.loader.load(window.옛한글OCR자료 + "소도구.js");      ← OCR (있던 줄)
- *   mw.loader.load(window.옛한글OCR자료 + "전사대조.js");    ← 이 줄을 더하면 켜짐
+ *   mw.loader.load("https://<도구 주소>/ocr.js");        ← 인식 (전사)
+ *   mw.loader.load("https://<도구 주소>/compare.js");    ← 교정 (전사대조) — 이 줄을 더하면 켜짐
  *
- * 셈은 모두 브라우저 안에서(모델 · `읽기.js` 는 OCR 과 같은 것).
- * 파이썬 짝: `부품/대조.py`(인쇄글자 · 맞대기 · 한쪽) · `부품/align.py`(to_text) · `부품/wikitext.py`(printed_text)
+ * 셈은 전부 서버(`근원/부품/대조.py`) — 이 파일은 화면(칠하기 · 후보 목록 · 바꾸기)만.
+ * 서버가 내주는 이 파일의 맨 앞 줄이 `window.옛한글OCR서버` 를 채움.
  */
 (function (전역) {
 "use strict";
-
-// ════════════════════════════════════════════════════════════════════
-//  셈 — 파이썬 `부품/대조.py` 를 옮긴 것
-// ════════════════════════════════════════════════════════════════════
-
-// `대조.py` 의 문턱 (재기.py 로 고름)
-const P_TR_MAX = 0.05, TOP_MIN = 0.80, 일치문턱 = 0.75, 다시볼일치 = 0.9, 쪽자간차이 = 0.02, 열문턱 = 0.75, 받침잘림높이 = 0.8;
-const MIN_LETTERS = 50;                                  // page.MIN_LETTERS
-// `align.py` 의 무게
-const W_L = 0.40, W_V = 0.40, W_T = 0.20, W_ALL = 0.20, UNKNOWN = 0.45;
-const W_CONF = 0.20, W_PITCH = 22.0, PITCH_CAP = 0.20, W_CUT = 0.4, EMPTY_PEN = 6.0;
-
-// ── 위키 원문 → 인쇄된 글자 + 원문 자리 (`대조.인쇄글자` = `wikitext.printed_text`) ──
-// ⚠ 틀 표(DROP · LAST · JOIN · FIRST)는 `wikitext.py` 를 옮겨 적은 것 — 그쪽을 고치면 여기도.
-const DROP = new Set(["절", "marginNote", "nop", "upe", "여백", "점선 요약", "목차용 점선",
-  "references", "reflist", "pagequality", "-"]);
-const LAST = new Set(["왼쪽 여백"]), JOIN = new Set(["분주"]);
-const FIRST = new Set(["u", "du", "wu", "물결밑줄", "밑줄", "더크게", "더더크게", "크게", "작게",
-  "가운데", "복원", "SIC", "sc", "글자크기"]);
-const 오식틀 = new Set(["SIC"]);
-const 큰틀 = new Set(["크게", "더크게", "더더크게"]);   // `대조.큰틀` — 큰 활자, '빼고 맞대기' 후보
-// 파이썬 `\s` 와 같은 빈칸(자바스크립트 `\s` 와 조금 다름 — \x1c-\x1f · \x85 가 있고 ﻿ 가 없음)
-const S = "\\t\\n\\v\\f\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
-const 속성 = new RegExp("^[" + S + "]*[A-Za-z-]+[" + S + "]*=");
-const 다듬기 = function (s) { return s.replace(new RegExp("^[" + S + "]+|[" + S + "]+$", "g"), ""); };
-const 제목꼴 = new RegExp("(?<![^\\n])[" + S + "]*=+[" + S + "]*([^\\n]*?)[" + S + "]*=+[" + S + "]*(?![^\\n])", "gd");
-const 빈칸꼴 = new RegExp("[" + S + "\\u200b]+", "g");
-
-function 틀남길것(이름, 인자, 큰빼기) {
-  if (DROP.has(이름) || 이름.indexOf("왼쪽 여백/") === 0 || (큰빼기 && 큰틀.has(이름))) return [];
-  if (JOIN.has(이름)) return 인자.slice(0, 2);
-  if (LAST.has(이름)) return 인자.slice(-1);
-  if (FIRST.has(이름)) return 인자.slice(0, 1);
-  return [];
-}
-
-/** 맞음마다 그 자리를 `남길것(m)` 이 돌려준 구간들로 바꿈 — 남는 글자는 원문 자리(pos)를 그대로 데려감 */
-function 걷어내기(t, pos, 맞음들, 남길것) {
-  const nt = [], npos = [];
-  let p = 0;
-  for (const m of 맞음들) {
-    nt.push(t.slice(p, m.s));
-    for (let k = p; k < m.s; k++) npos.push(pos[k]);
-    for (const ab of 남길것(m)) {
-      nt.push(t.slice(ab[0], ab[1]));
-      for (let k = ab[0]; k < ab[1]; k++) npos.push(pos[k]);
-    }
-    p = m.e;
-  }
-  nt.push(t.slice(p));
-  for (let k = p; k < t.length; k++) npos.push(pos[k]);
-  return [nt.join(""), npos];
-}
-
-function 찾기(꼴, t) {
-  const out = [];
-  for (const m of t.matchAll(꼴)) {
-    out.push({ s: m.index, e: m.index + m[0].length, 묶음: m.indices ? m.indices[1] : null });
-  }
-  return out;
-}
-
-/** `wikitext.표구간` — 표 문법 `{| … |}`: 칸 글자는 남기고 표시 · 속성만 걷음 */
-function 표구간(t, 표) {
-  if (!표) return [];
-  const out = [];
-  for (const m of t.matchAll(/(?<![^\n])[ \t]*(\{\||\|\}|\|-|\|\+|\||!)([^\n]*)(?![^\n])/gd)) {
-    const a = m.index, b = a + m[0].length, s = m.indices[2][0], 표시 = m[1];
-    if (표시 === "{|" || 표시 === "|-") { out.push({ s: a, e: b, 남길: [] }); continue; }
-    if (표시 === "|}") { out.push({ s: a, e: s, 남길: [] }); continue; }
-    const 칸들 = [];
-    let p = s;
-    for (const d of t.slice(s, b).matchAll(표시 === "!" ? /\|\||!!/g : /\|\|/g)) {
-      칸들.push([p, s + d.index]); p = s + d.index + d[0].length;
-    }
-    칸들.push([p, b]);
-    const 남길 = [];
-    for (let [ca, cb] of 칸들) {
-      const i = t.indexOf("|", ca);
-      if (i >= 0 && i < cb && 속성.test(t.slice(ca, i))) ca = i + 1;
-      남길.push([ca, cb]);
-    }
-    out.push({ s: a, e: b, 남길: 남길 });
-  }
-  return out;
-}
-
-/**
- * `대조.인쇄글자` — 위키 원문 → [[글자, 원문 시작, 원문 끝, {{SIC}} 안인가], …]
- * 글자는 `wikitext.letters(wikitext.printed_text(raw, 제목))` 와 같음. 자리는 자바스크립트 문자열 자리(UTF-16).
- */
-function 인쇄글자(raw, 제목, 큰빼기) {
-  let t = raw, pos = new Array(raw.length);
-  for (let i = 0; i < raw.length; i++) pos[i] = i;
-  const 오식 = new Set();
-  const 표 = /(?<!\{)\{\|/.test(raw);
-  [t, pos] = 걷어내기(t, pos, 찾기(/<noinclude>[\s\S]*?<\/noinclude>/g, t), function () { return []; });
-  for (;;) {                                              // 안쪽 틀부터 하나씩
-    const m = /\{\{([^{}]*)\}\}/.exec(t);
-    if (!m) break;
-    const s1 = m.index + 2, e1 = m.index + m[0].length - 2;
-    const 조각 = [];
-    let a = s1;
-    for (let i = s1; i < e1; i++) if (t[i] === "|") { 조각.push([a, i]); a = i + 1; }
-    조각.push([a, e1]);
-    const 이름 = 다듬기(t.slice(조각[0][0], 조각[0][1]));
-    const 인자 = 조각.slice(1).filter(function (ab) { return !속성.test(t.slice(ab[0], ab[1])); });
-    const 남길 = 틀남길것(이름, 인자, 큰빼기);
-    if (오식틀.has(이름)) for (const ab of 남길) for (let k = ab[0]; k < ab[1]; k++) 오식.add(pos[k]);
-    [t, pos] = 걷어내기(t, pos, [{ s: m.index, e: m.index + m[0].length }], function () { return 남길; });
-  }
-  [t, pos] = 걷어내기(t, pos, 찾기(제목꼴, t), function (m) { return 제목 ? [m.묶음] : []; });
-  [t, pos] = 걷어내기(t, pos, 찾기(/^[ \t]*:+/gm, t), function () { return []; });   // 줄 머리 `:` 들여쓰기
-  [t, pos] = 걷어내기(t, pos, 찾기(/'{2,}/g, t), function () { return []; });   // `''` · `'''` 굵게 · 기울임
-  [t, pos] = 걷어내기(t, pos, 찾기(/\[\[[^|\]]*\|([^\]]*)\]\]/gd, t), function (m) { return [m.묶음]; });
-  [t, pos] = 걷어내기(t, pos, 찾기(/\[\[([^\]]*)\]\]/gd, t), function (m) { return [m.묶음]; });
-  [t, pos] = 걷어내기(t, pos, 표구간(t, 표), function (m) { return m.남길; });
-  [t, pos] = 걷어내기(t, pos, 찾기(/<[^>]+>/g, t), function () { return []; });
-  [t, pos] = 걷어내기(t, pos, 찾기(빈칸꼴, t), function () { return []; });
-
-  const out = [];                                         // `wikitext.letters` 와 같은 묶기(코드 포인트로)
-  let cur = null;
-  for (let i = 0; i < t.length;) {
-    const o = t.codePointAt(i), w = o > 0xFFFF ? 2 : 1;
-    const ps = w === 2 ? [pos[i], pos[i + 1]] : [pos[i]];
-    const 꼬리 = (0x1160 <= o && o <= 0x11FF) || (0xA960 <= o && o <= 0xA97F) || (0xD7B0 <= o && o <= 0xD7FF);
-    if (꼬리 && cur) { cur.c += t.slice(i, i + w); cur.p.push.apply(cur.p, ps); }
-    else { if (cur) out.push(cur); cur = { c: t.slice(i, i + w), p: ps }; }
-    i += w;
-  }
-  if (cur) out.push(cur);
-  return out.map(function (x) {
-    return [x.c, Math.min.apply(null, x.p), Math.max.apply(null, x.p) + 1, x.p.some(function (q) { return 오식.has(q); })];
-  });
-}
-
-// ── 글자 → 모델 번호 (`wikitext.decompose` · `ocr.Model.codes`) ──
-const 특수 = { "ㅣ": ["ᅟ", "ᅵ", ""], "○": ["○", "ᅠ", ""], "〇": ["○", "ᅠ", ""], "々": ["々", "ᅠ", ""], "ㅅ": ["ᄉ", "ᅠ", ""],
-  ",": [",", "ᅠ", ""], ".": [".", "ᅠ", ""] };
-function 가르기(cl) {
-  if (특수[cl]) return 특수[cl];
-  const cps = Array.from(cl);
-  if (cps.length === 1) {
-    const o = cl.codePointAt(0);
-    if (o >= 0xAC00 && o <= 0xD7A3) {
-      const i = o - 0xAC00;
-      return [String.fromCharCode(0x1100 + Math.floor(i / 588)), String.fromCharCode(0x1161 + Math.floor((i % 588) / 28)),
-        i % 28 ? String.fromCharCode(0x11A7 + i % 28) : ""];
-    }
-  }
-  let L = "", V = "", T = "";
-  for (const ch of cps) {
-    const o = ch.codePointAt(0);
-    if (o >= 0x1100 && o <= 0x115F) L += ch;
-    else if (o >= 0x1160 && o <= 0x11A7) V += ch;
-    else if (o >= 0x11A8 && o <= 0x11FF) T += ch;
-  }
-  return [L, V, T];
-}
-
-function 번호표(설정) {
-  if (설정._번호표) return 설정._번호표;
-  const 표 = function (a) { const m = new Map(); a.forEach(function (c, i) { if (!m.has(c)) m.set(c, i); }); return m; };
-  return (설정._번호표 = { L: 표(설정.초성), V: 표(설정.중성), T: 표(설정.종성) });
-}
-
-function 번호들(설정, letters) {
-  const 표 = 번호표(설정), n = letters.length;
-  const rL = new Int32Array(n), rV = new Int32Array(n), rT = new Int32Array(n);
-  for (let k = 0; k < n; k++) {
-    const p = 가르기(letters[k]);
-    rL[k] = 표.L.has(p[0]) ? 표.L.get(p[0]) : -1;
-    rV[k] = 표.V.has(p[1]) ? 표.V.get(p[1]) : -1;
-    rT[k] = 표.T.has(p[2]) ? 표.T.get(p[2]) : -1;
-  }
-  return { rL: rL, rV: rV, rT: rT };
-}
-
-// ── 상자마다 세 머리의 확률 — 한 쪽 안에서는 같은 상자를 한 번만 읽음 ──
-function 읽개만들기(모델, g) {
-  const 설정 = 모델.설정, nL = 설정.초성.length, nV = 설정.중성.length, nT = 설정.종성.length;
-  const 본 = new Map();
-  const 열쇠 = function (b) { return b[0] + "," + b[1] + "," + b[2] + "," + b[3]; };
-  function 큰것(a) {
-    let k = 0;
-    for (let i = 1; i < a.length; i++) if (a[i] > a[k]) k = i;
-    return k;
-  }
-  return {
-    채우기: async function (boxes, geo) {
-      const 새 = [], 새열쇠 = new Set();
-      for (const b of boxes) {
-        const k = 열쇠(b);
-        if (!본.has(k) && !새열쇠.has(k)) { 새열쇠.add(k); 새.push(b); }
-      }
-      if (!새.length) return;
-      const r = await 모델.확률(g, geo ? 전역.옛한글읽기.맞춤상자(g, 새, geo) : 새);   // 행간 넓은 쪽은 글자 크기 상자로(`align._맞춤상자`)
-      새.forEach(function (b, i) {
-        const L = r.L.slice(i * nL, (i + 1) * nL), V = r.V.slice(i * nV, (i + 1) * nV), T = r.T.slice(i * nT, (i + 1) * nT);
-        const kL = 큰것(L), kV = 큰것(V), kT = 큰것(T);
-        본.set(열쇠(b), { L: L, V: V, T: T, kL: kL, kV: kV, kT: kT,
-          확신: Math.min(L[kL], Math.min(V[kV], T[kT])), 읽음: L[kL] * V[kV] * T[kT] });
-      });
-    },
-    값: function (b) { return 본.get(열쇠(b)); },
-  };
-}
-
-// ── 전사문을 정답지 삼아 자르기 (`align.to_text`) ──
-function 풀기(plans, M, N, 덤) {
-  const NEG = -1e18;
-  let dp = [new Float64Array(N + 1).fill(NEG), new Float64Array(N + 1).fill(NEG)];
-  dp[0][0] = 0.0;
-  const back = [];
-  for (let i = 0; i < plans.length; i++) {
-    const nd = [new Float64Array(N + 1).fill(NEG), new Float64Array(N + 1).fill(NEG)];
-    const bo = [new Int32Array(N + 1).fill(-1), new Int32Array(N + 1).fill(-1)];
-    const bs = [new Int8Array(N + 1), new Int8Array(N + 1)];
-    plans[i].forEach(function (o, oi) {
-      const n = o.칸수;
-      if (n > N) return;
-      const K = N - n + 1, add = new Float64Array(K);
-      for (let j = 0; j < n; j++) {
-        const b = o.시작 + j;
-        for (let t = 0; t < K; t++) add[t] += M(b, j + t);
-      }
-      if (덤 && n) for (let t = 0; t < K; t++) add[t] += 덤[i][oi];
-      if (n === 0) for (let t = 0; t < K; t++) add[t] -= EMPTY_PEN;
-      for (const st of [0, 1]) {
-        const to = n ? st : st + 1;
-        if (to > 1) continue;
-        for (let t = 0; t < K; t++) {
-          const d = dp[st][t];
-          const cand = d > NEG / 2 ? d + add[t] : NEG;
-          if (cand > nd[to][n + t]) { nd[to][n + t] = cand; bo[to][n + t] = oi; bs[to][n + t] = st; }
-        }
-      }
-    });
-    dp = nd; back.push([bo, bs]);
-  }
-  let st = dp[0][N] >= dp[1][N] ? 0 : 1;
-  if (dp[st][N] <= NEG / 2) return null;
-  const chosen = [];
-  let k = N;
-  for (let i = plans.length - 1; i >= 0; i--) {
-    const bo = back[i][0], bs = back[i][1];
-    const oi = bo[st][k];
-    if (oi < 0) return null;
-    const n = plans[i][oi].칸수;
-    if (n) chosen.push([i, oi, k - n]);
-    st = bs[st][k]; k -= n;
-  }
-  return k === 0 ? chosen.reverse() : null;
-}
-
-function 덤매기기(plans, geo, logc, 쪽자간) {            // `align._bonus`
-  return plans.map(function (opts, i) {
-    return opts.map(function (o) {
-      if (o.개수 === 0) return 0.0;
-      const y0 = geo.spans[i][0], y1 = geo.spans[i][1];
-      let 합 = 0;
-      for (let k = o.시작; k < o.시작 + o.개수; k++) 합 += logc[k];
-      const mlog = 합 / o.개수;
-      const dev = Math.min(Math.abs((y1 - y0) / o.칸수 - 쪽자간) / Math.max(1.0, 쪽자간), PITCH_CAP);
-      return o.칸수 * (W_CONF * mlog - W_PITCH * dev * dev) - W_CUT * o.비용;
-    });
-  });
-}
-
-function 읽어내기(chosen, plans, exact, rL, cf) {          // `align._readout`
-  const boxes = [], assign = [], conf = [];
-  let hit = 0, known = 0;
-  for (const c of chosen) {
-    const o = plans[c[0]][c[1]], k0 = c[2];
-    for (let j = 0; j < o.칸수; j++) {
-      boxes.push(o.상자들[j]); assign.push(k0 + j);
-      conf.push(cf[o.시작 + j]);
-      if (exact(o.시작 + j, k0 + j)) hit++;
-      if (rL[k0 + j] >= 0) known++;
-    }
-  }
-  return { boxes: boxes, assign: assign, conf: conf, hit: hit, known: known };
-}
-
-async function 정답지자르기(A, 모델, 읽개, geo, letters, r, span, 경계) {
-  const 중앙값 = A._속.중앙값, 반올림 = A._속.반올림;
-  const N = letters.length, ncol = geo.cols.length;
-  const base = geo.est.reduce(function (s, e) { return s + e; }, 0);
-  const tries = [[geo.est.slice(), span]];
-  if (Math.abs(N - base) > span * ncol * 0.5) {            // 짐작이 크게 빗나가면 넓게 다시
-    const k = Math.max(0.35, N / Math.max(1, base));
-    tries.push([geo.est.map(function (e) { return Math.max(1, 반올림(e * k)); }),
-      span + 2 + Math.trunc(Math.abs(N - base) / Math.max(1, ncol))]);
-  }
-  const rL = r.rL, rV = r.rV, rT = r.rT;
-  const 그림자 = 경계 ? await A.경계프로파일(모델, geo) : null;
-  let why = "글자 수를 맞추지 못함";
-  let 결과 = null;
-  for (const tr of tries) {
-    const bp = A.자를계획(geo, tr[0], tr[1], true, 그림자);
-    const plans = bp.계획, flat = bp.상자;
-    const mins = [];
-    let hi = 0;
-    for (const c of plans) {
-      let mn = Infinity, mx = 0;
-      for (const o of c) { if (o.칸수 > 0 && o.칸수 < mn) mn = o.칸수; if (o.칸수 > mx) mx = o.칸수; }
-      if (mn < Infinity) mins.push(mn);
-      hi += mx;
-    }
-    const lo = mins.reduce(function (s, v) { return s + v; }, 0) - (mins.length ? Math.max.apply(null, mins) : 0);
-    if (!(lo <= N && N <= hi)) { why = "글자 수를 맞추지 못함 (그림은 " + lo + "~" + hi + "칸, 전사문은 " + N + "자)"; continue; }
-
-    await 읽개.채우기(flat, geo);
-    const nb = flat.length;
-    const pL = new Int32Array(nb), pV = new Int32Array(nb), pT = new Int32Array(nb);
-    const cf = new Float64Array(nb), logc = new Float64Array(nb);
-    for (let b = 0; b < nb; b++) {
-      const v = 읽개.값(flat[b]);
-      pL[b] = v.kL; pV[b] = v.kV; pT[b] = v.kT; cf[b] = v.확신;
-      logc[b] = Math.log(Math.max(v.확신, 1e-6));
-    }
-    const 모름 = new Uint8Array(N);
-    for (let k = 0; k < N; k++) 모름[k] = (rL[k] < 0 || rV[k] < 0) ? 1 : 0;
-    const M = function (b, k) {                           // `align._match_matrix`
-      if (모름[k]) return UNKNOWN;
-      const a = pL[b] === rL[k], c = pV[b] === rV[k], d = pT[b] === rT[k];
-      return W_L * (a ? 1 : 0) + W_V * (c ? 1 : 0) + W_T * (d ? 1 : 0) + W_ALL * (a && c && d ? 1 : 0);
-    };
-    const exact = function (b, k) { return pL[b] === rL[k] && pV[b] === rV[k] && pT[b] === rT[k]; };
-    const 자간들 = function (ch) {
-      return 중앙값(ch.map(function (c) {
-        return (geo.spans[c[0]][1] - geo.spans[c[0]][0]) / plans[c[0]][c[1]].칸수;
-      }));
-    };
-
-    let best = null;
-    const ch = 풀기(plans, M, N, null);
-    if (ch) {
-      best = 읽어내기(ch, plans, exact, rL, cf);
-      best.방법 = 1;
-      const seen = [];
-      let pit = 자간들(ch);
-      for (const step of [2, 3, 4]) {                     // 잰 자간으로 벌점을 주고 다시 풂
-        if (seen.some(function (q) { return Math.abs(pit - q) < q * 0.01; })) break;
-        seen.push(pit);
-        const ch2 = 풀기(plans, M, N, 덤매기기(plans, geo, logc, pit));
-        if (!ch2) break;
-        const cand = 읽어내기(ch2, plans, exact, rL, cf);
-        cand.방법 = step;
-        if (cand.hit > best.hit) best = cand;           // 실제로 더 맞은 쪽만
-        pit = 자간들(ch2);
-      }
-    }
-    if (best === null) continue;
-    best.일치 = best.hit / Math.max(1, best.known);
-    best.사유 = null;
-    if (결과 === null || best.hit > 결과.hit) 결과 = best;   // 넓게 다시 자른 판도 풀어 보고 더 맞은 쪽
-  }
-  return 결과 !== null ? 결과 : { 사유: why };
-}
-
-// ── 맞대기 (`대조.맞대기`) ──
-async function 맞대기(A, 모델, 읽개, geo, 글자들, span, 경계) {
-  const letters = 글자들.map(function (g) { return g[0]; });
-  if (letters.length < MIN_LETTERS) return { 사유: "글자가 너무 적습니다(" + letters.length + "자)" };
-  const 번호 = 번호들(모델.설정, letters);
-  const r = await 정답지자르기(A, 모델, 읽개, geo, letters, 번호, span, 경계);
-  if (r.사유) return { 사유: r.사유 };
-  const 중앙값 = A._속.중앙값;
-  const boxes = r.boxes, assign = r.assign, n = boxes.length, N = letters.length;
-  const rL = 번호.rL, rV = 번호.rV, rT = 번호.rT;
-  const v = boxes.map(function (b) { return 읽개.값(b); });
-  const 아는 = [], 같음 = [], 전사확률 = [], 스캔 = [];
-  for (let i = 0; i < n; i++) {
-    const k = assign[i], w = v[i];
-    아는.push(rL[k] >= 0 && rV[k] >= 0 && rT[k] >= 0);
-    같음.push(아는[i] && w.kL === rL[k] && w.kV === rV[k] && w.kT === rT[k]);
-    전사확률.push(아는[i] ? w.L[rL[k]] * w.V[rV[k]] * w.T[rT[k]] : 0.0);
-    스캔.push(모델.글자(w.kL, w.kV, w.kT).normalize("NFC"));   // 현대 글자는 완성형으로
-  }
-  // 열마다 일치 — 한 열이 통째로 어긋나면 그 열의 '글자가 다름' 은 내지 않음
-  const 열 = boxes.map(function (b) { return b[0]; });
-  const 열들 = Array.from(new Set(열));
-  const 흔들린열 = new Set();
-  열들.forEach(function (x) {
-    let 셈 = 0, 맞 = 0;
-    for (let j = 0; j < n; j++) if (열[j] === x && 아는[j]) { 셈++; if (같음[j]) 맞++; }
-    if ((셈 >= 5 ? 맞 / 셈 : 1.0) < 열문턱) 흔들린열.add(x);
-  });
-  const 높이 = boxes.map(function (b) { return b[3] - b[1]; });
-  const 열높이 = new Map();
-  열들.forEach(function (x) { 열높이.set(x, 중앙값(높이.filter(function (h, j) { return 열[j] === x; }))); });
-  const 높이비 = function (j) { return 높이[j] / Math.max(1.0, 열높이.get(열[j])); };
-  const 맞음 = function (i, kk) {
-    return 0 <= kk && kk < N && rL[kk] >= 0 && rV[kk] >= 0 && rT[kk] >= 0
-      && v[i].kL === rL[kk] && v[i].kV === rV[kk] && v[i].kT === rT[kk];
-  };
-  const 후보 = [];
-  const 넣기 = function (갈래, i, 점수) {
-    const 이웃 = [];
-    for (const j of [i - 1, i + 1]) if (0 <= j && j < n && 열[j] === 열[i]) 이웃.push(높이비(j));
-    후보.push({ 갈래: 갈래, 번호: assign[i], 상자번호: i, 전사: letters[assign[i]], 스캔: 스캔[i],
-      전사확률: 전사확률[i], 확신: v[i].확신, 점수: 점수, 높이비: 높이비(i), 이웃높이비: 이웃 });
-  };
-  const 표 = 번호표(모델.설정);
-  const 빈종성 = 표.T.has("") ? 표.T.get("") : -1;
-  const 받침잘림 = function (j) {
-    const kk = assign[j];
-    return v[j].kL === rL[kk] && v[j].kV === rV[kk] && rT[kk] !== 빈종성 && v[j].kT === 빈종성 && 높이비(j) < 받침잘림높이;
-  };
-  const 바뀜인가 = function (j, 엄격) {
-    엄격 = 엄격 === undefined ? 1.0 : 엄격;
-    return 아는[j] && !글자들[assign[j]][3] && 전사확률[j] < P_TR_MAX * 엄격
-      && v[j].확신 >= TOP_MIN && !흔들린열.has(열[j]) && !받침잘림(j);
-  };
-  const 점수 = function (j) { return Math.log(v[j].읽음) - Math.log(Math.max(전사확률[j], 1e-12)); };
-
-  let i = 0;
-  while (i < n) {                                         // 읽는 차례로 '다름' 이 이어진 덩이마다
-    if (같음[i]) { i++; continue; }
-    let e = i;
-    while (e + 1 < n && !같음[e + 1]) e++;
-    const 덩이 = [];
-    for (let j = i; j <= e; j++) 덩이.push(j);
-    if (덩이.length === 1) {
-      if (글자들[assign[i]][3]) {
-        // {{SIC}} 안 — 원문 오식으로 이미 표시됨
-      } else if (!아는[i]) {
-        if (v[i].확신 >= TOP_MIN && !흔들린열.has(열[i])) 넣기("모르는자모", i, 0.0);
-      } else if (바뀜인가(i)) {
-        넣기("바뀜", i, 점수(i));
-      }
-      i = e + 1;
-      continue;
-    }
-    const 옮김 = new Map();                               // 상자마다 '몇 칸 옮기면 맞나'
-    for (const j of 덩이) {
-      let d = null;
-      for (const q of [-1, 1, -2, 2, -3, 3]) if (맞음(j, assign[j] + q)) { d = q; break; }
-      옮김.set(j, d);
-    }
-    let 옮김수 = 0;
-    옮김.forEach(function (d) { if (d !== null) 옮김수++; });
-    if (옮김수 >= 2) {                                    // 밀림 — 옮김 값이 바뀌는 자리마다 '빠짐 · 더들어감'
-      let 지금 = 0, 틈 = i;
-      const 사건 = [];
-      for (const j of 덩이) {
-        const d = 옮김.get(j);
-        if (d === null) continue;
-        if (d !== 지금) {
-          사건.push(j);
-          넣기(d < 지금 ? "빠짐" : "더들어감", 틈, Math.abs(d - 지금));
-          후보[후보.length - 1].끝번호 = assign[j];
-          후보[후보.length - 1].칸 = Math.abs(d - 지금);
-          지금 = d;
-        }
-        틈 = j + 1;
-      }
-      for (const j of 덩이) {
-        if (옮김.get(j) === null && 사건.every(function (q) { return Math.abs(j - q) > 2; })
-            && 바뀜인가(j, 0.2) && v[j].확신 >= 0.95) {
-          넣기("바뀜", j, 점수(j)); 후보[후보.length - 1].붙음 = true;
-        }
-      }
-    } else {
-      for (const j of 덩이) {
-        if (바뀜인가(j, 0.2) && v[j].확신 >= 0.95) { 넣기("바뀜", j, 점수(j)); 후보[후보.length - 1].붙음 = true; }
-      }
-    }
-    i = e + 1;
-  }
-  const 차례 = { "바뀜": 0, "모르는자모": 1, "깨진글자": 1, "빠짐": 2, "더들어감": 2 };
-  후보.sort(function (a, b) { return (차례[a.갈래] - 차례[b.갈래]) || (b.점수 - a.점수); });
-  return { 사유: null, 일치: r.일치, 상자: boxes, assign: assign, 후보: 후보,
-    흔들림: r.일치 < 일치문턱, 흔들린열: 흔들린열.size, 열수: 열들.length, 글자수: N };
-}
-
-const 낱갈래 = ["바뀜", "모르는자모"];
-function 같은후보(c, 들) {                                // 다른 자르기에도 같은 자리 · 같은 글자로 나왔나
-  return 들.some(function (d) {
-    if (낱갈래.indexOf(c.갈래) >= 0) return d.갈래 === c.갈래 && d.번호 === c.번호 && d.스캔 === c.스캔;
-    return d.갈래 === c.갈래 && Math.abs(d.번호 - c.번호) <= 2;
-  });
-}
-
-// ── 한 쪽 (`대조.한쪽` · `_한번`) ──
-// 기하 후보: false = 자르는 기하 · true = 읽는 기하 · "끝띠" = 제본 그림자 띠를 지운 자르는 기하(전사문과 더 잘 맞을 때만)
-// · "판심" = 판심 걸러내기를 끈 읽는 기하(광곽에 붙은 끝 열을 판심으로 뗀 쪽용).
-// · "쪽자간" = 이 쪽 그림으로 잰 자간비로 자른 끝띠 기하(`대조.쪽자간기하` — 파일 자간비와 2% 넘게 다를 때만).
-// 큰빼기: 큰 활자 틀(책 이름) 안 글자를 빼고 맞대기 — null 이면 그대로 해 보고, 잘 안 맞고 큰 활자 틀이 있으면 빼고도.
-async function 한번(A, 모델, 읽개, 기하얻기, raw, 제목, 경계, 기하들, 큰빼기) {
-  const 시도 = (제목 === null || 제목 === undefined) ? [false, true] : [제목];
-  const 큰있음 = Array.from(큰틀).some(function (n) { return new RegExp("\\{\\{[" + S + "]*" + n + "[" + S + "]*\\|").test(raw); });
-  const 빼기들 = (큰빼기 === null || 큰빼기 === undefined) ? [false, true] : [큰빼기];
-  let best = null;
-  const 본열 = {};
-  for (const 빼기 of 빼기들) {
-    if (빼기 && (큰빼기 === null || 큰빼기 === undefined) && (!큰있음 || (best && (best[0].일치 || 0) >= 다시볼일치))) break;
-    for (const 판 of 기하들) {
-      if (best && (best[0].일치 || 0) >= 다시볼일치) break;     // 자르는 기하로 잘 맞았으면 그만
-      if (판 === "쪽자간") {
-        const geo = 기하얻기(false, true, false, true);
-        if (!geo) continue;
-        let 이전 = null;
-        for (const kh of 시도) {
-          const 글자들 = 인쇄글자(raw, kh, 빼기);
-          if (이전 !== null && 글자들.length === 이전) continue;
-          이전 = 글자들.length;
-          const r = await 맞대기(A, 모델, 읽개, geo, 글자들, 3, 경계);
-          r.기하 = "쪽자간"; r.제목 = kh; r.큰빼기 = 빼기;
-          if (best === null || (r.일치 || -1) > (best[0].일치 || -1)) best = [r, 글자들];
-        }
-        continue;
-      }
-      const 판심 = 판 === "판심", 읽기 = 판 === true || 판심, 끝띠 = 판 === "끝띠";
-      if (끝띠 && !("자르기" in 본열)) { const g0 = 기하얻기(false, false); 본열.자르기 = g0 ? g0.cols : null; }
-      if (판심 && !("읽기" in 본열)) { const g0 = 기하얻기(true, false); 본열.읽기 = g0 ? g0.cols : null; }
-      const geo = 기하얻기(읽기, 끝띠, 판심);
-      if (!geo) continue;
-      if (끝띠 && JSON.stringify(geo.cols) === JSON.stringify(본열.자르기)) continue;   // 띠가 없는 쪽 — 자르는 기하와 같음
-      if (판심 && JSON.stringify(geo.cols) === JSON.stringify(본열.읽기)) continue;     // 뗀 판심 열이 없는 쪽 — 읽는 기하와 같음
-      if (!읽기 && !끝띠) 본열.자르기 = geo.cols;
-      if (읽기 && !판심) 본열.읽기 = geo.cols;
-      let 이전 = null;
-      for (const kh of 시도) {
-        const 글자들 = 인쇄글자(raw, kh, 빼기);
-        if (이전 !== null && 글자들.length === 이전) continue;   // 제목이 없는 쪽 — 같은 것을 두 번 안 함
-        이전 = 글자들.length;
-        const r = await 맞대기(A, 모델, 읽개, geo, 글자들, 3, 경계);
-        r.기하 = 판심 ? "판심" : (끝띠 ? "끝띠" : (읽기 ? "읽기" : "자르기"));
-        r.제목 = kh;
-        r.큰빼기 = 빼기;
-        if (best === null || (r.일치 || -1) > (best[0].일치 || -1)) best = [r, 글자들];
-      }
-    }
-  }
-  if (best === null) return [{ 사유: "스캔에서 열을 못 찾았습니다" }, []];
-  return best;
-}
-
-/**
- * 위키 원문 한 쪽을 그 쪽 스캔(그림 g — `읽기.js` 의 `그림읽기`)과 맞댐.
- * 옵션: 문헌설정 {자간비, 읽기자간비, 단, 판짜임} (없으면 이 쪽 그림으로 자간을 재고 한 단으로 봄 — 파이썬의 '모르는 문헌'),
- *       제목(편·장 제목이 종이에 찍히나 — 없으면 둘 다 해 보고 잘 맞는 쪽), 합의(기본 켬), 밀림(기본 끔).
- * 반환은 서버판(`툴포지/app.py`)의 답과 같은 꼴 — 후보마다 원문 자리(시작 · 끝, UTF-16)와 앞뒤 글자.
- */
-async function 한쪽(모델, g, raw, 옵션) {
-  옵션 = 옵션 || {};
-  const A = 전역.옛한글읽기;
-  const s = 옵션.문헌설정 || null;
-  const 합의 = 옵션.합의 !== false, 밀림 = !!옵션.밀림;
-  const 기하들 = 옵션.기하들 || [false, true, "끝띠", "판심", "쪽자간"];
-  const 읽개 = 읽개만들기(모델, g);
-  let 쪽자간 = undefined;
-  const 보관 = {};
-  const 기하얻기 = function (읽기, 끝띠, 판심, 쪽만) {           // `대조.기하` — 가장자리 후보 열 없이(끝띠 = 제본 그림자 띠를 지우고 · 판심 = 판심 걸러내기 끔)
-    const 열쇠 = (읽기 ? "읽기" : "자르기") + (끝띠 ? "끝띠" : "") + (판심 ? "판심" : "") + (쪽만 ? "쪽자간" : "");
-    const 판 = 판심 ? false : undefined;
-    if (열쇠 in 보관) return 보관[열쇠];
-    let geo;
-    if (쪽만) {                                          // `대조.쪽자간기하` — 이 쪽 그림으로 잰 자간비(파일 값과 2% 넘게 다를 때만)
-      geo = null;
-      if (s && s.자간비) {
-        if (쪽자간 === undefined) 쪽자간 = A.쪽자간비(g, s.단 || 1);
-        if (쪽자간 && Math.abs(쪽자간 - s.자간비) > s.자간비 * 쪽자간차이)
-          geo = A.쪽기하(g, 쪽자간, s.단 || 1, false, null, false, true, undefined);
-      }
-    } else if (s) {
-      let r = (읽기 && s.읽기자간비) || s.자간비 || null;
-      if (!r) {                                          // 판형만 정하고 자간비는 못 잰 파일 — 이 쪽 그림으로
-        if (쪽자간 === undefined) 쪽자간 = A.쪽자간비(g, s.단 || 1);
-        r = 쪽자간;
-      }
-      const 표준 = (읽기 && s.판짜임) ? s.판짜임.자간 : null;
-      geo = A.쪽기하(g, r, s.단 || 1, 읽기, 표준, false, !!끝띠, 판);
-    } else {
-      if (쪽자간 === undefined) 쪽자간 = A.쪽자간비(g, 1);
-      geo = A.쪽기하(g, 쪽자간, 1, 읽기, null, false, !!끝띠, 판);
-    }
-    return (보관[열쇠] = geo);
-  };
-  const 처음 = await 한번(A, 모델, 읽개, 기하얻기, raw, 옵션.제목, false, 기하들, null);
-  const r = 처음[0], 글자들 = 처음[1];
-  if (r.사유) return r;
-  if (!밀림) r.후보 = r.후보.filter(function (c) { return c.갈래 !== "빠짐" && c.갈래 !== "더들어감"; });
-  r.합의본 = [];
-  const 낱 = r.후보.filter(function (c) { return 낱갈래.indexOf(c.갈래) >= 0; });
-  r.후보.forEach(function (c) { c.합의 = 낱갈래.indexOf(c.갈래) < 0 || !합의; });
-  // 다르게 한 번 더 잘라서 남는 것만 펼쳐 보임 — B: 배운 경계 검출기를 섞은 자르기, C: 읽는 기하 + 검출기
-  for (const 판 of [["B", 기하들], ["C", [true, "판심"]]]) {
-    const 남은 = 낱.filter(function (c) { return !c.합의; });
-    if (!합의 || !남은.length) break;
-    const 다시 = await 한번(A, 모델, 읽개, 기하얻기, raw, r.제목, true, 판[1], r.큰빼기);
-    r.합의본.push(판[0]);
-    if (다시[0].사유 || 다시[1].length !== 글자들.length) continue;
-    남은.forEach(function (c) { c.합의 = 같은후보(c, 다시[0].후보); });
-  }
-  const 차례 = { "바뀜": 0, "모르는자모": 1, "깨진글자": 1, "빠짐": 2, "더들어감": 2 };
-  r.후보.sort(function (a, b) {
-    return ((a.합의 ? 0 : 1) - (b.합의 ? 0 : 1)) || (차례[a.갈래] - 차례[b.갈래]) || (b.점수 - a.점수);
-  });
-  r.후보.forEach(function (c) {
-    const 끝k = c.끝번호 !== undefined ? c.끝번호 : c.번호;
-    c.시작 = 글자들[c.번호][1]; c.끝 = 글자들[끝k][2];
-    c.앞 = 글자들.slice(Math.max(0, c.번호 - 5), c.번호).map(function (x) { return x[0]; }).join("");
-    c.뒤 = 글자들.slice(끝k + 1, 끝k + 6).map(function (x) { return x[0]; }).join("");
-  });
-  r.아는문헌 = !!s;
-  return r;
-}
-
-전역.옛한글전사대조 = { 한쪽: 한쪽, 인쇄글자: 인쇄글자, _속: { 가르기: 가르기, 표구간: 표구간 } };
-const 셈 = 전역.옛한글전사대조;
 
 // ════════════════════════════════════════════════════════════════════
 //  화면 — 위키문헌 편집 창 (칠하기 · 목록 · 바꾸기)
@@ -685,18 +71,130 @@ function 시각글(d) {
 function 로그머리(쪽, 언제) {
   var c = mw.config.get(["wgServer", "wgArticlePath", "wgFormattedNamespaces", "wgNamespaceNumber", "wgCurRevisionId"]);
   var 제목 = 쪽 ? ((c.wgFormattedNamespaces || {})[c.wgNamespaceNumber] || "페이지") + ":" + 쪽.파일 + "/" + 쪽.쪽 : "(못 찾음)";
-  var A = 전역.옛한글읽기;
   return [
     ["도구", "교정 (전사대조)"],
+    ["모델 · 단", 선택글()],
     ["시각", 시각글(언제)],
     ["문서", 제목],
     ["주소", 쪽 ? (c.wgServer || location.origin) + (c.wgArticlePath || "/wiki/$1").replace("$1", encodeURIComponent(제목.replace(/ /g, "_")).replace(/%2F/g, "/").replace(/%3A/g, ":")) : ""],
     ["판", c.wgCurRevisionId || "(새 문서)"],
-    ["실행", 서버 ? "서버 " + 서버 : "wasm · 자료 " + (자료 || "(없음)")],
-    ["읽기.js", A ? "판형판 " + A.판형판 : (서버 ? "(서버 모드 — 안 받음)" : "(아직 안 받음)")],
+    ["실행", "서버 " + 서버],
     ["구문 강조", 편집상자() && !보이나(편집상자()) ? "켜짐" : "꺼짐"],
     ["브라우저", navigator.userAgent],
   ];
+}
+
+// ── 공용 도구 줄 — 인식 · 교정 · 영역 지정 단추를 한 줄에 모으고, 옆의 '설정' 메뉴에 모델 · 단을 둠 ──
+// ⚠ `소도구.js` 와 `전사대조.js` 에 **같은 꼴**로 들어 있음 — 한쪽을 고치면 다른 쪽도(어느 쪽이 먼저 떠도 한 줄을 같이 씀)
+// 고른 값은 `window.옛한글OCR공용.모델()` · `.단()` 으로 읽음 — 모델 "hangul"(근대 순한글, 기본) | "hanmun"(근대 국한문, 서버판만) ·
+// 단 null(자동 — 파일을 살펴 정한 값) | 1~5
+function 공용도구() {
+  var 옛 = window.옛한글OCR공용;
+  if (옛 && 옛.뿌리.isConnected) return 옛;
+  var 서버주소 = window.옛한글OCR서버 || "";
+  if (서버주소 && 서버주소.charAt(서버주소.length - 1) !== "/") 서버주소 += "/";
+  var 저장 = function (이름, 값) {          // 쪽을 옮겨도 · 새로 고쳐도 고른 값을 기억(막힌 브라우저면 그냥 기억 없이)
+    try {
+      if (값 === undefined) return localStorage.getItem("옛한글OCR:" + 이름);
+      localStorage.setItem("옛한글OCR:" + 이름, 값);
+    } catch (e) {}
+    return null;
+  };
+  var 만들기 = function (태그, 글, 꼴) {
+    var e = document.createElement(태그);
+    if (글) e.textContent = 글;
+    if (꼴) e.style.cssText = 꼴;
+    return e;
+  };
+
+  var 뿌리 = 만들기("div", "", "margin:8px 0");
+  뿌리.id = "옛한글OCR-도구";
+  var 줄 = 만들기("div", "", "display:flex;gap:10px;align-items:center;flex-wrap:wrap");
+  var 로그묶음 = 만들기("span", "", "margin-left:auto;order:9;display:inline-flex;gap:10px");
+  줄.appendChild(로그묶음);
+
+  var 설정단추 = 만들기("button", "설정 ▾");
+  설정단추.type = "button";
+  설정단추.className = "cdx-button";
+  설정단추.style.order = "4";
+  설정단추.title = "모델 · 몇 단짜리인지 고르기";
+  var 칸 = 만들기("div", "", "display:none;margin:6px 0 0;padding:8px 12px;border:1px solid #c8ccd1;"
+                   + "background:#f8f9fa;border-radius:2px;font-size:13px;color:#202122");
+  줄.appendChild(설정단추);
+
+  var 항목 = function (이름, 값들, 도움말) {
+    var 행 = 만들기("div", "", "display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin:4px 0");
+    행.appendChild(만들기("label", 이름, "min-width:3.2em;font-weight:bold"));
+    var 고름 = 만들기("select", "", "padding:2px 6px");
+    값들.forEach(function (v) {
+      var o = document.createElement("option");
+      o.value = v[0]; o.textContent = v[1];
+      고름.appendChild(o);
+    });
+    행.appendChild(고름);
+    행.appendChild(만들기("span", 도움말, "font-size:12px;color:#72777d"));
+    칸.appendChild(행);
+    return 고름;
+  };
+  var 모델선택 = 항목("모델", [["hangul", "근대 순한글"], ["hanmun", "근대 국한문 (시험 중)"]],
+                    "한글로만 된 문헌은 순한글, 한자가 섞인 문헌은 국한문을 고르세요.");
+  var 단선택 = 항목("단", [["auto", "자동"], ["1", "1단"], ["2", "2단"], ["3", "3단"], ["4", "4단"], ["5", "5단"]],
+                  "자동은 파일을 처음 열 때 쪽을 몇 장 받아 살펴 정합니다(지금까지처럼). 잘못 정해지면 직접 고르세요.");
+
+  var 한문칸 = 모델선택.querySelector("option[value=hanmun]");
+  var 요약 = function () {
+    var 글 = [];
+    if (모델선택.value !== "hangul") 글.push("국한문");
+    if (단선택.value !== "auto") 글.push(단선택.value + "단");
+    설정단추.textContent = "설정 ▾" + (글.length ? " (" + 글.join(" · ") + ")" : "");
+    설정단추.setAttribute("aria-expanded", 칸.style.display !== "none" ? "true" : "false");
+  };
+  // 서버에 국한문 모델 파일이 없으면 못 고르게(`/api/health` 로 확인)
+  var 국한문가능 = function (됨) {
+    한문칸.disabled = !됨;
+    한문칸.textContent = "근대 국한문 (시험 중)" + (됨 ? "" : " — 이 서버에는 없음");
+    if (!됨 && 모델선택.value === "hanmun") 모델선택.value = "hangul";
+    요약();
+  };
+  var 옛모델 = 저장("모델"), 옛단 = 저장("단");
+  if (옛모델 === "hanmun") 모델선택.value = "hanmun";
+  if (옛단 && 단선택.querySelector("option[value='" + 옛단 + "']")) 단선택.value = 옛단;
+  fetch(서버주소 + "api/health").then(function (r) { return r.json(); }).then(function (h) {
+    if (h && h.모델들 && !h.모델들.hanmun) 국한문가능(false);
+  }).catch(function () {});
+  모델선택.addEventListener("change", function () { 저장("모델", 모델선택.value); 요약(); });
+  단선택.addEventListener("change", function () { 저장("단", 단선택.value); 요약(); });
+  설정단추.addEventListener("click", function () {
+    칸.style.display = 칸.style.display === "none" ? "block" : "none";
+    요약();
+  });
+  요약();
+
+  뿌리.appendChild(줄);
+  뿌리.appendChild(칸);
+  var 상자 = 편집상자();
+  상자.parentNode.insertBefore(뿌리, 상자);
+  return (window.옛한글OCR공용 = {
+    뿌리: 뿌리, 줄: 줄, 로그묶음: 로그묶음,
+    모델: function () { return (모델선택.value === "hanmun" && !한문칸.disabled) ? "hanmun" : "hangul"; },
+    단: function () { return 단선택.value === "auto" ? null : parseInt(단선택.value, 10); },
+  });
+}
+
+/** 살핀 값(자동으로 정한 설정)의 단만 사람이 고른 값으로 — 1단 = 1, N단 = 가름줄 높이 목록(서버 `단바꾸기` · `읽기.js` 의 가름줄 판형과 같은 꼴). 자동(null)이면 그대로 */
+function 단바꾸기(살핀, 단) {
+  if (!단 || !살핀) return 살핀;
+  var s = {};
+  for (var k in 살핀) s[k] = 살핀[k];
+  s.단 = 단 === 1 ? 1 : Array.apply(null, Array(단 - 1)).map(function (_, i) { return (i + 1) / 단; });
+  return s;
+}
+
+function 단글(단) { return 단 ? 단 + "단(직접 고름)" : "자동"; }
+
+function 선택글() {
+  var 공 = window.옛한글OCR공용;
+  return 공 ? (공.모델() === "hanmun" ? "근대 국한문" : "근대 순한글") + " · 단 " + 단글(공.단()) : "";
 }
 
 function 로그쓰기(줄들) {
@@ -708,16 +206,16 @@ function 로그쓰기(줄들) {
 
 function 초글(ms) { return (ms / 1000).toFixed(1) + "초"; }
 
-/** 단추 줄 오른쪽 끝의 작은 '디버그 로그' — 누르면 줄 아래에 펼침 */
-function 로그단추(줄) {
+/** 단추 줄 오른쪽 끝의 작은 '교정 로그' — 누르면 줄 아래에 펼침. `공` = `공용도구()` */
+function 로그단추(공) {
   var 고리 = document.createElement("a");
   고리.href = "#";
   고리.setAttribute("role", "button");
-  고리.textContent = "디버그 로그";
+  고리.textContent = "교정 로그";
   고리.title = "마지막으로 맞댄 쪽의 기록(쪽 · 시간 · 일치율 …) — 잘 안 맞은 쪽을 알릴 때 복사해 붙여 주세요";
-  고리.style.cssText = "margin-left:auto;font-size:11px;color:#a2a9b1;text-decoration:none";
+  고리.style.cssText = "font-size:11px;color:#a2a9b1;text-decoration:none";
   var 칸 = document.createElement("div");
-  칸.style.cssText = "flex-basis:100%;display:none;font-size:12px;color:#54595d";
+  칸.style.cssText = "flex-basis:100%;order:10;display:none;font-size:12px;color:#54595d";
   var 글 = document.createElement("textarea");
   글.readOnly = true;
   글.rows = 12;
@@ -749,12 +247,12 @@ function 로그단추(줄) {
     e.preventDefault();
     var 열림 = 칸.style.display === "none";
     칸.style.display = 열림 ? "block" : "none";
-    고리.textContent = 열림 ? "디버그 로그 닫기" : "디버그 로그";
+    고리.textContent = 열림 ? "교정 로그 닫기" : "교정 로그";
     글.value = 로그.글 || "아직 기록이 없습니다 — '교정 (전사대조)' 를 한 번 누른 뒤에 보세요.";
     알림말.textContent = "";
   });
-  줄.appendChild(고리);
-  줄.appendChild(칸);              // 줄이 flex-wrap 이라 폭 100% 로 다음 줄에 펼쳐짐
+  공.로그묶음.appendChild(고리);
+  공.줄.appendChild(칸);           // 줄이 flex-wrap 이라 폭 100% 로 다음 줄에 펼쳐짐
   로그.칸 = { 글: 글 };
 }
 
@@ -1109,12 +607,7 @@ function 판세우기(답) {
   목록그리기();
 }
 
-// ── 도구 불러오기 — OCR 소도구와 같은 자료(`window.옛한글OCR자료`). 둘 다 켜 두면 읽기.js · onnxruntime 은 한 번만 받음 ──
-var ORT = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
-var 자료 = window.옛한글OCR자료 || "";
-if (자료 && 자료.charAt(자료.length - 1) !== "/") 자료 += "/";
-var 설정 = null, 모델 = null, 준비중 = null;
-
+// ── 서버 ────────────────────────────────────────────────────────────
 // Toolforge 서버(`툴포지/app.py`) — 있으면 맞대기를 서버에 맡김(파이썬 `대조.한쪽` — 답의 꼴이 `셈.한쪽` 과 같음).
 // 서버가 내주는 이 파일의 맨 앞 줄이 채움. OCR 소도구와 같은 서버 · 같은 판형 살피기
 var 서버 = window.옛한글OCR서버 || "";
@@ -1139,145 +632,28 @@ async function 서버로(경로, 몸) {
   return 답;
 }
 
-function 스크립트(url) {
-  return new Promise(function (ok, no) {
-    var s = document.createElement("script");
-    s.src = url;
-    s.onload = ok;
-    s.onerror = function () { no(new Error(url + " 를 못 불러왔습니다")); };
-    document.head.appendChild(s);
-  });
-}
-
-function 준비() {
-  if (준비중) return 준비중;
-  준비중 = (async function () {
-    알림("도구를 불러오는 중…");
-    if (!window.옛한글읽기) await 스크립트(자료 + "읽기.js");
-    if (!window.ort) await 스크립트(ORT + "ort.webgpu.min.js");
-    설정 = window.옛한글읽기.설정 || window.옛한글읽기.설정넣기(await (await fetch(자료 + "설정.json")).json());
-    알림("모델을 불러오는 중… (처음 한 번만)");
-    ort.env.wasm.wasmPaths = ORT;
-    ort.env.wasm.numThreads = 1;                        // 위키문헌에는 SharedArrayBuffer 가 없음
-    var 세션 = await ort.InferenceSession.create(자료 + "옛한글모델.onnx", { executionProviders: ["wasm"] });
-    var 경계세션 = 설정.경계 ? await ort.InferenceSession.create(자료 + "경계검출.onnx", { executionProviders: ["wasm"] }) : null;
-    모델 = window.옛한글읽기.모델만들기(설정, 세션, ort, 경계세션);
-  })();
-  준비중.catch(function () { 준비중 = null; });         // 실패하면 다음에 다시
-  return 준비중;
-}
-
-// 스캔 — OCR 소도구와 같은 방법(⚠ 여러 쪽 파일은 API 가 너비를 무시함 → 주소를 한 번 받아 `/page{쪽}-1920px-` 만 갈아 끼움)
-var 주소틀 = {}, 쪽수 = {};
-function 주소틀얻기(파일) {
-  var 너비 = (설정 && 설정.스캔너비) || 1920;
-  return 주소틀[파일] ? Promise.resolve(주소틀[파일]) : new mw.Api().get({
-    action: "query", format: "json", formatversion: 2,
-    prop: "imageinfo", titles: "File:" + 파일,
-    iiprop: "url|size", iiurlwidth: 500, iiurlparam: "page1-500px",
-  }).then(function (r) {
-    var p = r.query && r.query.pages && r.query.pages[0];
-    var ii = p && p.imageinfo && p.imageinfo[0];
-    if (!ii || !ii.thumburl) throw new Error("스캔 주소를 못 받았습니다. 파일 이름이 맞는지 보세요: " + 파일);
-    var u = ii.thumburl.split("?")[0];
-    if (!/\/page\d+-\d+px-/.test(u)) throw new Error("이 파일은 여러 쪽짜리(PDF·DjVu)가 아닌 것 같습니다: " + 파일);
-    쪽수[파일] = ii.pagecount || 0;                    // 판형 살필 쪽 고르기에 씀
-    return (주소틀[파일] = u.replace(/\/page\d+-\d+px-/, "/page{N}-" + 너비 + "px-"));
-  });
-}
-
-function 스캔가져오기(파일, 쪽) {
-  var 너비 = (설정 && 설정.스캔너비) || 1920;
-  return 주소틀얻기(파일).then(function (pat) {
-    var url = pat.replace("{N}", String(쪽));
-    return new Promise(function (ok, no) {
-      var im = new Image();
-      im.crossOrigin = "anonymous";
-      im.onload = function () {
-        if (im.naturalWidth !== 너비) {
-          no(new Error("스캔을 " + 너비 + "px 로 달라고 했는데 " + im.naturalWidth + "px 이 왔습니다."));
-          return;
-        }
-        ok(im);
-      };
-      im.onerror = function () { no(new Error("스캔 그림을 못 읽었습니다: " + url)); };
-      im.src = url;
-    });
-  });
-}
-
-// 이 파일의 판형 · 자간비 · 판짜임 — OCR 소도구와 **같은** 셈 · 같은 기억 칸(`읽기.js` 의 `판형살피기`).
-// 소도구로 먼저 연 파일이면 기억한 값, 처음이면 쪽 몇 장을 받아 정함(처음 한 번 1~3분)
-function 판형살피기(파일) {
-  if (!window.옛한글읽기.판형살피기) {          // 브라우저가 옛 읽기.js 를 기억하는 중(jsDelivr 최대 7일)
-    var 오류 = new Error("읽기.js 가 옛 판입니다 — 편집 창을 Ctrl+Shift+R 로 새로 고쳐 주세요.");
-    오류.name = "OldReadJsVersionError";
-    return Promise.reject(오류);
-  }
-  return window.옛한글읽기.판형살피기(파일, {
-    쪽수: function () { return 주소틀얻기(파일).then(function () { return 쪽수[파일] || 0; }); },
-    받기: function (p) { return 스캔가져오기(파일, p); },
-    알림: 알림,
-  });
-}
-
-/** 상자 i 와 같은 열의 앞뒤 글자까지 오려 빨간 테를 두른 그림(data: 주소) — `대조.조각그림` */
-function 조각그림(im, boxes, i, 앞뒤) {
-  var b = boxes[i], j0 = i, j1 = i;
-  while (j0 > 0 && i - j0 < 앞뒤 && boxes[j0 - 1][0] === b[0]) j0--;
-  while (j1 + 1 < boxes.length && j1 - i < 앞뒤 && boxes[j1 + 1][0] === b[0]) j1++;
-  var pad = 6;
-  var x0 = Math.max(0, b[0] - pad), x1 = Math.min(im.naturalWidth, b[2] + pad);
-  var y0 = Math.max(0, boxes[j0][1] - pad), y1 = Math.min(im.naturalHeight, boxes[j1][3] + pad);
-  var cv = document.createElement("canvas");
-  cv.width = x1 - x0; cv.height = y1 - y0;
-  var c = cv.getContext("2d");
-  c.drawImage(im, x0, y0, x1 - x0, y1 - y0, 0, 0, x1 - x0, y1 - y0);
-  c.strokeStyle = "rgb(220,30,30)"; c.lineWidth = 3;
-  c.strokeRect(b[0] - x0 - 1, b[1] - y0, b[2] - b[0] + 1, b[3] - b[1]);
-  return cv.toDataURL("image/png");
-}
-
 async function 시작() {
   var 쪽 = 지금쪽(), 상자 = 편집상자();
   if (!쪽 || !상자) return;
+  if (!서버) { 알림("서버 주소가 없습니다 — Toolforge 도구가 내주는 주소(…/ocr.js · …/compare.js)로 불러와 주세요."); return; }
   단추.disabled = true;
   걷기();
+  var 공 = 공용도구(), 고른모델 = 공.모델(), 고른단 = 공.단();
   var t0 = performance.now();
   var 언제 = new Date(), 때 = {}, 결과 = [], 살핀 = null, 답 = null, t;
   var 재기 = function (이름, t) { 때[이름] = performance.now() - t; };
   try {
     var 본문 = 상자.value;
-    var im = null;
     결과.push(["편집 상자", 본문.length + "글자(UTF-16)"]);
-    if (서버) {                                         // 후보 그림(data: 주소)까지 서버가 붙여 줌
-      t = performance.now();
-      살핀 = await 서버살피기(쪽.파일);
-      재기("판형 살피기", t);
-      알림("서버에서 문자를 대조하는 중…");
-      t = performance.now();
-      답 = await 서버로("api/compare", { file: 쪽.파일, page: 쪽.쪽, text: 본문 });
-      재기("대조(서버 왕복)", t);
-      if (답.초 !== undefined) 때["└ 서버 셈"] = 답.초 * 1000;
-    } else {
-      t = performance.now();
-      await 준비();
-      재기("도구 · 모델 준비", t);
-      t = performance.now();
-      살핀 = await 판형살피기(쪽.파일);
-      재기("판형 살피기", t);
-      알림("스캔 파일을 받는 중…");
-      t = performance.now();
-      im = await 스캔가져오기(쪽.파일, 쪽.쪽);
-      재기("스캔 받기", t);
-      결과.push(["스캔", im.src + " (" + im.naturalWidth + "×" + im.naturalHeight + ")"]);
-      알림("문자를 대조하는 중… (화면이 잠깐 멎을 수 있습니다)");
-      await new Promise(function (ok) { setTimeout(ok, 30); });   // 알림이 먼저 그려지게
-      var g = window.옛한글읽기.그림읽기(im);
-      t = performance.now();
-      답 = await 셈.한쪽(모델, g, 본문, { 문헌설정: 살핀 });
-      재기("대조", t);
-    }
+    t = performance.now();
+    살핀 = await 서버살피기(쪽.파일);
+    재기("판형 살피기", t);
+    알림("서버에서 문자를 대조하는 중…");
+    t = performance.now();
+    살핀 = 단바꾸기(살핀, 고른단);
+    답 = await 서버로("api/compare", { file: 쪽.파일, page: 쪽.쪽, text: 본문, model: 고른모델, tiers: 고른단 || "auto" });
+    재기("대조(서버 왕복)", t);       // 후보 그림(data: 주소)까지 서버가 붙여 줌
+    if (답.초 !== undefined) 때["└ 서버 셈"] = 답.초 * 1000;
     if (답.사유) throw new Error(답.사유);
     var 뒤쪽 = 지금쪽();
     if (!뒤쪽 || 뒤쪽.파일 !== 쪽.파일 || 뒤쪽.쪽 !== 쪽.쪽) throw new Error("맞대는 사이에 쪽이 바뀌었습니다 — 다시 눌러 주세요.");
@@ -1285,7 +661,6 @@ async function 시작() {
     답.초 = ((performance.now() - t0) / 1000).toFixed(1);
     후보들 = 답.후보.map(function (c) {
       c.원문 = 본문.slice(c.시작, c.끝);
-      if (im && c.상자번호 >= 0) c.그림 = 조각그림(im, 답.상자, c.상자번호, (c.갈래 === "빠짐" || c.갈래 === "더들어감") ? 2 : 1);
       return c;
     });
     기준글 = 본문;
@@ -1296,7 +671,7 @@ async function 시작() {
   } catch (e) {
     console.error(e);
     var 메시지 = e && e.message ? e.message : e;
-    알림(e && e.name === "OldReadJsVersionError" ? 메시지 : "✗ " + 메시지);
+    알림("✗ " + 메시지);
     결과.push(["오류", String(메시지)]);
     if (e && e.stack) 결과.push(["오류 자리", "\n  " + String(e.stack).split("\n").slice(0, 6).join("\n  ")]);
   } finally {
@@ -1309,22 +684,24 @@ async function 시작() {
 function 세우기() {
   if (!지금쪽() || !편집상자()) return;
   if (document.getElementById("전사대조-줄")) return;
-  var 줄 = document.createElement("div");
-  줄.id = "전사대조-줄";
-  줄.style.cssText = "margin:8px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap";
+  var 공 = 공용도구();                     // 인식 · 교정 · 영역 지정 단추가 한 줄 — 차례는 style.order(인식 1 · 교정 2 · 영역 3 · 설정 4)
   단추 = document.createElement("button");
   단추.type = "button";
   단추.className = "cdx-button";
+  단추.style.order = "2";
   단추.textContent = "교정 (전사대조)";
   단추.title = "지금 편집 상자의 전사문을 이 쪽 스캔과 맞대어 틀렸을 만한 글자를 짚습니다";
   단추.addEventListener("click", 시작);
+  공.줄.appendChild(단추);
+  // 알림 글은 단추 줄 아래 한 줄(⚠ 후보 목록 판이 이 줄 다음에 놓임)
+  var 줄 = document.createElement("div");
+  줄.id = "전사대조-줄";
+  줄.style.cssText = "margin:4px 0 0";
   상태 = document.createElement("span");
   상태.style.cssText = "font-size:13px;color:#54595d";
-  줄.appendChild(단추);
   줄.appendChild(상태);
-  로그단추(줄);
-  var 상자 = 편집상자();
-  상자.parentNode.insertBefore(줄, 상자);
+  공.뿌리.appendChild(줄);
+  로그단추(공);
   // 순서대로 편집으로 쪽을 옮기면 앞 쪽의 칠 · 후보 목록을 걷음
   if (/[?&]prp_editinsequence=/i.test(location.search)) {
     window.addEventListener("hashchange", function () {

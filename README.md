@@ -82,7 +82,7 @@ toolforge build logs
 mw.loader.load("https://old-hangul-ocr.toolforge.org/ocr.js");
 mw.loader.load("https://old-hangul-ocr.toolforge.org/compare.js");
 ```
-⚠ 브라우저판(jsDelivr)의 OCR 소도구 줄과 **함께 두지 마세요** — 단추가 둘 생깁니다. 하나만 남기세요.
+⚠ 예전 브라우저판(jsDelivr)의 줄은 **지우세요** — 브라우저판은 없어졌고(2026-10-09, 서버 한 벌로 통합), 함께 두면 단추가 둘 생깁니다.
 
 ---
 
@@ -117,7 +117,7 @@ mw.loader.load("https://old-hangul-ocr.toolforge.org/compare.js");
 | `app.py` | 서버(WSGI). gunicorn 이 `app:app` 을 띄움(`Procfile`) |
 | `부품/`(전사대조 `대조.py` · `step1_collect.py` 포함) | 프로젝트의 파이썬 셈 그대로(정본 — 원본은 프로젝트의 `근원/부품/`) |
 | `부품/onnx모델.py` | torch 대신 ONNX 로 읽는 부분 — 같은 답(확신값 차이 0.0004 미만) |
-| `모델/` | `옛한글모델.onnx` · `경계검출.onnx` · `설정.json` (브라우저판과 같은 파일) |
+| `모델/` | 모델마다 폴더 하나 — `근대 순한글/`(옛한글모델.onnx · 설정.json) · `근대 국한문/`(국한문모델.onnx · 글자표.json) · (앞으로 중세 …) · `공용/`(경계검출.onnx). 설정 메뉴에서 고름 |
 | `정적/` | 첫 화면 · 소도구 두 개 · 영역 지정 화면 |
 | `판.json` | 만든 날 · 모델 지문 — 첫 화면 맨 아래에 나옴 |
 

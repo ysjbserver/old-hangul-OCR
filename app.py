@@ -21,7 +21,10 @@
   POST /api/compare         {file, page, text}      → 전사대조 결과
   POST /api/boxes           {file, page, boxes}     → 상자마다 글자(영역 지정 화면)
   POST /api/edge            {file, page, x0, x1}    → 열의 글자 경계 확률(영역 지정 화면)
+  GET  /api/tables?model=   그 모델의 글자표(영역 지정 화면이 번호를 글자로 바꿈)
   GET  /api/health          모델 · 판 정보
+  ★ read · compare · boxes 는 선택 값 둘을 더 받음 — model("hangul" 근대 순한글 · 기본 / "hanmun" 근대 국한문),
+    tiers(몇 단짜리인지 — 없으면 "자동": 파일을 살펴 정한 값)
 """
 import hashlib
 import json
@@ -64,6 +67,39 @@ os.makedirs(캐시, exist_ok=True)
 모델 = onnx모델.끼우기(os.path.join(여기, "모델"), 스레드)
 너비 = 모델.설정.get("스캔너비", 1920)
 계산 = threading.Lock()            # CPU 가 적어 모델 셈은 한 번에 하나씩
+
+# 글자 모델 — "hangul"(근대 순한글, 기본) · "hanmun"(근대 국한문, 있을 때만 · 처음 쓸 때 불러옴 — 메모리를 아끼려고)
+모델이름들 = {"hangul": "근대 순한글", "hanmun": "근대 국한문"}
+국한문폴더 = os.path.join(여기, "모델", "근대 국한문")      # 모델마다 `모델/<이름>/` 폴더 하나 — 이름은 `모델이름들` 과 같게
+_모델들 = {"hangul": 모델}
+_모델잠금 = threading.Lock()
+
+
+def 모델얻기(이름):
+    이름 = (이름 or "hangul")
+    if 이름 not in 모델이름들:
+        raise 손님오류("모르는 모델입니다: " + str(이름))
+    with _모델잠금:
+        if 이름 not in _모델들:
+            if not os.path.exists(os.path.join(국한문폴더, "국한문모델.onnx")):
+                raise 손님오류("이 서버에는 국한문 모델이 없습니다")
+            _모델들[이름] = onnx모델.혼용모델(국한문폴더, 모델.설정, 스레드)
+        return _모델들[이름]
+
+
+def 단바꾸기(s, 단):
+    """파일을 살펴 정한 설정 `s` 에서 단만 사람이 고른 값으로(없거나 "auto" 면 그대로). 1단 = 1, N단 = 가름줄 높이 목록 [1/N …]."""
+    if 단 in (None, "", "auto", "자동"):
+        return s
+    try:
+        n = int(단)
+    except (TypeError, ValueError):
+        raise 손님오류("tiers(몇 단)는 숫자나 auto 여야 합니다")
+    if not 1 <= n <= 6:
+        raise 손님오류("tiers(몇 단)는 1~6 사이여야 합니다")
+    s = dict(s)
+    s["단"] = 1 if n == 1 else [k / n for k in range(1, n)]
+    return s
 판정보 = {}
 try:
     with open(os.path.join(여기, "판.json"), encoding="utf-8") as f:
@@ -303,9 +339,10 @@ class 손님오류(Exception):
         self.코드, self.덧 = 코드, 덧 or {}
 
 
-def 읽기(파일, 쪽, 문턱=표시문턱):
+def 읽기(파일, 쪽, 문턱=표시문턱, 모델이름=None, 단=None):
     """OCR 한 쪽 — 브라우저판 `읽기.js` 의 `한쪽` 과 같은 셈(파이썬 정본으로)."""
-    s = 살핀값(파일)
+    s = 단바꾸기(살핀값(파일), 단)
+    모델 = 모델얻기(모델이름)
     ip = 스캔(파일, 쪽)
     t0 = time.time()
     단 = s.get("단") or 1
@@ -325,9 +362,10 @@ def 읽기(파일, 쪽, 문턱=표시문턱):
                 살핀=s, 초=round(time.time() - t0, 1))
 
 
-def 맞대기(파일, 쪽, 본문):
+def 맞대기(파일, 쪽, 본문, 모델이름=None, 단=None):
     """전사대조 한 쪽 (파일마다 잰 설정으로)."""
-    s = 살핀값(파일)
+    s = 단바꾸기(살핀값(파일), 단)
+    모델 = 모델얻기(모델이름)
     ip = 스캔(파일, 쪽)
     t0 = time.time()
     with 계산:
@@ -348,7 +386,8 @@ def 맞대기(파일, 쪽, 본문):
     return 답
 
 
-def 상자읽기(파일, 쪽, 상자들):
+def 상자읽기(파일, 쪽, 상자들, 모델이름=None):
+    모델 = 모델얻기(모델이름)
     im, _ = 그림(파일, 쪽)
     with 계산:
         kL, kV, kT, cf = 모델.read(im, [list(map(int, b)) for b in 상자들])
@@ -476,28 +515,33 @@ def app(env, start):
                     return [b]
                 return _정적(start, os.path.join("영역지정", 이름))
         if 경로 == "/api/health":
-            return _응답(start, dict(모델=판정보, 스레드=스레드, 캐시=캐시, 살핀파일=len(_살핀)))
+            return _응답(start, dict(모델=판정보, 스레드=스레드, 캐시=캐시, 살핀파일=len(_살핀),
+                                  모델들={k: v for k, v in 모델이름들.items()
+                                          if k == "hangul" or os.path.exists(os.path.join(국한문폴더, "국한문모델.onnx"))}))
         q = {k: v[0] for k, v in urllib.parse.parse_qs(env.get("QUERY_STRING", "")).items()}
         if 경로 == "/api/inspect":
             파일, _ = _파일쪽(q)
             return _응답(start, 살핌상태(파일))
+        if 경로 == "/api/tables":
+            m = 모델얻기(q.get("model"))
+            return _응답(start, dict(초성=m.Ls, 중성=m.Vs, 종성=m.Ts))
         if 방식 != "POST":
             return _응답(start, {"오류": "없는 주소"}, 404)
         몸 = _몸(env)
         파일, 쪽 = _파일쪽(몸)
         if 경로 == "/api/read":
             문턱 = float(몸.get("threshold") or 표시문턱)
-            return _응답(start, 읽기(파일, 쪽, 문턱))
+            return _응답(start, 읽기(파일, 쪽, 문턱, 몸.get("model"), 몸.get("tiers")))
         if 경로 == "/api/compare":
             본문 = 몸.get("text") if 몸.get("text") is not None else 몸.get("본문")
             if not isinstance(본문, str):
                 raise 손님오류("text(본문)가 없습니다")
-            return _응답(start, 맞대기(파일, 쪽, 본문))
+            return _응답(start, 맞대기(파일, 쪽, 본문, 몸.get("model"), 몸.get("tiers")))
         if 경로 == "/api/boxes":
             상자 = 몸.get("boxes") or []
             if len(상자) > 20000:
                 raise 손님오류("상자가 너무 많습니다")
-            return _응답(start, 상자읽기(파일, 쪽, 상자))
+            return _응답(start, 상자읽기(파일, 쪽, 상자, 몸.get("model")))
         if 경로 == "/api/edge":
             return _응답(start, 경계읽기(파일, 쪽, int(몸["x0"]), int(몸["x1"])))
         return _응답(start, {"오류": "없는 주소"}, 404)
