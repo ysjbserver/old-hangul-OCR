@@ -62,6 +62,7 @@ kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font-si
   <input id="src" type="text" placeholder="파일 이름 또는 위키문헌 페이지 주소 (예: 훈아진언.pdf/62)">
   <label>쪽 <input id="pageNo" type="number" min="1"></label>
   <button id="loadBtn" class="main">불러오기</button>
+  <label id="modelBox" hidden title="읽는 모델 — 서버가 가진 모델 중에서 고릅니다. 바꾸면 이어서 읽는 상자부터 새 모델로 읽습니다.">모델 <select id="modelSel"></select></label>
   <span id="msg"></span>
 </header>
 <main>
@@ -134,8 +135,30 @@ function 스크립트(url) {
 // Toolforge 에서는 `서버.js` 가 window.옛한글OCR서버 를 채움 → 모델 셈(상자 · 경계 확률)만 서버에, 열 찾기 · 칸 나누기는 `읽기.js`
 // 아니면 ORT 를 이 폴더의 ort/ 에서, 없으면 jsDelivr 에서
 const 서버 = window.옛한글OCR서버 || null;
-// 소도구의 '설정 → 모델' 에서 넘어온 값("hanmun" = 근대 국한문) — 서버 모드에서만. 없으면 근대 순한글
-const 모델이름 = (서버 && new URLSearchParams(location.search).get("model")) || "hangul";
+// 읽는 모델 — 서버 모드에서만. 처음 값: 소도구에서 넘어온 `?model=`(hanmun = 근대 국한문) > 지난번에 고른 것 > 근대 순한글.
+// 머리의 '모델' 칸에서 바꿈(서버가 가진 모델 목록은 `/api/health`)
+const 저장 = (k, v) => { try { if (v === undefined) return localStorage.getItem("옛한글OCR:" + k); localStorage.setItem("옛한글OCR:" + k, v); } catch (e) {} return null; };
+let 모델이름 = (서버 && (new URLSearchParams(location.search).get("model") || 저장("모델"))) || "hangul";
+
+if (서버) {
+  fetch(서버 + "api/health").then(r => r.json()).then(h => {
+    const 목록 = h.모델들 || { hangul: "근대 순한글" };
+    if (!(모델이름 in 목록)) 모델이름 = "hangul";
+    const 칸 = $("modelSel");
+    for (const k in 목록)칸.add(new Option(목록[k], k));
+    칸.value = 모델이름;
+    $("modelBox").hidden = false;
+    칸.addEventListener("change", () => {
+      모델이름 = 칸.value;
+      저장("모델", 모델이름);
+      모델 = null; 준비중 = null;                       // 다음에 읽을 때 새 모델로(이미 읽은 조각은 그대로)
+      const q = new URLSearchParams(location.search);
+      if (모델이름 === "hangul") q.delete("model"); else q.set("model", 모델이름);
+      history.replaceState(null, "", "?" + q);
+      알림("모델을 「" + 목록[모델이름] + "」(으)로 바꿨습니다 — 이제 읽는 상자부터 적용됩니다.");
+    });
+  }).catch(() => {});
+}
 
 async function 서버로(경로, 몸) {
   const res = await fetch(서버 + 경로, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(몸) });
@@ -187,7 +210,6 @@ function 준비() {
           if (x === "○ᅠ" || x === "々ᅠ" || x === "ᄉᅠ" || x === ",ᅠ" || x === ".ᅠ") return x === "ᄉᅠ" ? "ㅅ" : x[0];
           return x;
         };
-        알림("근대 국한문 모델로 읽습니다.");
       }
       return;
     }
