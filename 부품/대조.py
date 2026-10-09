@@ -366,9 +366,48 @@ def 맞대기(mdl, geo, 글자들, span=3, 경계=False):
     차례 = {"바뀜": 0, "모르는자모": 1, "깨진글자": 1, "빠짐": 2, "더들어감": 2}
     후보.sort(key=lambda c: (차례[c["갈래"]], -c["점수"]))
     일치 = r["일치"]
+    열순서 = {x: i for i, x in enumerate(sorted(set(열)))}
+    열진단 = []
+    for x in sorted(열):
+        js = [j for j in range(n) if 열[j] == x]
+        알려진 = [j for j in js if 아는[j]]
+        맞은 = sum(bool(같음[j]) for j in 알려진)
+        열진단.append(dict(
+            번호=열순서[x], x=int(x), 상자수=len(js), 알려진수=len(알려진),
+            맞은수=맞은, 일치율=(맞은 / len(알려진) if 알려진 else None),
+            첫상자=int(min(js)), 마지막상자=int(max(js)),
+            상자범위=[int(min(boxes[j][0] for j in js)), int(max(boxes[j][2] for j in js)),
+                      int(min(boxes[j][1] for j in js)), int(max(boxes[j][3] for j in js))],
+            예상칸=(int(geo["est"][열순서[x]]) if 열순서[x] < len(geo.get("est", [])) else None),
+            흔들림=x in 흔들린열))
+    상자진단 = []
+    for i, b in enumerate(boxes):
+        kk = int(assign[i])
+        상자진단.append(dict(
+            번호=i, 열=열순서[열[i]], 좌표=[int(v) for v in b],
+            전사번호=kk, 전사=letters[kk], 스캔=스캔[i], 같음=bool(같음[i]),
+            전사확률=float(전사확률[i]), 확신=float(확신[i]),
+            읽음확률=float(읽음확률[i]), 높이비=높이비(i)))
+    불일치구간 = []
+    i = 0
+    while i < n:
+        if 같음[i]:
+            i += 1
+            continue
+        e = i
+        while e + 1 < n and not 같음[e + 1]:
+            e += 1
+        불일치구간.append(dict(상자시작=i, 상자끝=e, 전사시작=int(assign[i]), 전사끝=int(assign[e]),
+                              전사="".join(letters[assign[i]:assign[e] + 1]),
+                              스캔="".join(스캔[i:e + 1]), 길이=e - i + 1))
+        i = e + 1
     return dict(사유=None, 일치=일치, 상자=boxes, assign=list(assign), 후보=후보, 흔들림=bool(일치 is not None and 일치 < 일치문턱),
                 흔들린열=len(흔들린열), 열수=len(열일치),
-                글자수=len(letters), 스캔글자=스캔, 이미지=geo["image"])
+                글자수=len(letters), 스캔글자=스캔, 이미지=geo["image"],
+                진단=dict(전사글자=letters, 상자=상자진단, 열=열진단, 불일치구간=불일치구간,
+                          기하=dict(열=geo.get("cols"), 상자열=geo.get("crop_cols"), 구간=geo.get("spans"),
+                                    예상칸=geo.get("est"), 자간=geo.get("pitch"), 기본자간=geo.get("xpitch"),
+                                    단=geo.get("단"), 가장자리=geo.get("가장자리"))))
 
 
 # ── 보여 줄 그림 ─────────────────────────────────────────────────────
@@ -454,6 +493,15 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     시도 = [제목] if 제목 is not None else [False, True]
     best = None
     본열 = {}
+    시도기록 = []
+
+    def 기하요약(g):
+        if g is None:
+            return None
+        return dict(열수=len(g.get("cols", [])), 단=g.get("단"),
+                    자간=g.get("pitch"), 기본자간=g.get("xpitch"),
+                    예상칸=g.get("est"), 열=g.get("cols"),
+                    상자열=g.get("crop_cols"), 구간=g.get("spans"))
     큰있음 = any(re.search(r"\{\{\s*" + 이름 + r"\s*\|", raw) for 이름 in 큰틀)
     for 빼기 in ([큰빼기] if 큰빼기 is not None else [False, True]):
         if 빼기 and 큰빼기 is None and (not 큰있음 or (best and (best[0].get("일치") or 0) >= 다시볼일치)):
@@ -475,6 +523,10 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                     이전 = len(글자들)
                     r = 맞대기(mdl, geo, 글자들, 경계=경계)
                     r["기하"], r["제목"], r["큰빼기"] = "쪽자간", kh, 빼기
+                    시도기록.append(dict(기하="쪽자간", 제목=kh, 큰빼기=빼기, 경계=경계,
+                                      전사글자수=len(글자들), 일치=r.get("일치"),
+                                      사유=r.get("사유"), 후보수=len(r.get("후보", [])),
+                                      상세=기하요약(geo)))
                     if best is None or (r.get("일치") or -1) > (best[0].get("일치") or -1):
                         best = (r, 글자들)
                 continue
@@ -507,10 +559,15 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                 r["기하"] = "판심" if 판심 else ("끝띠" if 끝띠 else ("읽기" if 읽기 else "자르기"))
                 r["제목"] = kh
                 r["큰빼기"] = 빼기
+                시도기록.append(dict(기하=r["기하"], 제목=kh, 큰빼기=빼기, 경계=경계,
+                                  전사글자수=len(글자들), 일치=r.get("일치"),
+                                  사유=r.get("사유"), 후보수=len(r.get("후보", [])),
+                                  상세=기하요약(geo)))
                 if best is None or (r.get("일치") or -1) > (best[0].get("일치") or -1):
                     best = (r, 글자들)
     if best is None:
         return dict(사유="스캔에서 열을 못 찾았습니다"), []
+    best[0]["시도기록"] = 시도기록
     return best
 
 

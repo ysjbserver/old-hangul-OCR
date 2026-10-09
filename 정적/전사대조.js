@@ -783,6 +783,14 @@ function 로그본문(살핀, 답, 때, 처음) {
       줄.push(["서버 OCR", (답.debug.OCR글자수 == null ? "개수 없음" : 답.debug.OCR글자수 + "자") +
         " · 해시 " + (답.debug.OCR해시 || "?") +
         (답.debug.OCR미리보기 ? " · 앞 80자 " + 답.debug.OCR미리보기 : "")]);
+      if (답.debug.OCR전체 != null) 줄.push(["서버 OCR 전체", 답.debug.OCR전체]);
+      if (답.debug.시도기록) 줄.push(["맞대기 시도 기록", JSON.stringify(답.debug.시도기록)]);
+      var 상 = 답.debug.상세 || {};
+      if (상.전사글자) 줄.push(["서버 전사 글자", 상.전사글자.join("")]);
+      if (상.불일치구간) 줄.push(["불일치 구간", JSON.stringify(상.불일치구간)]);
+      if (상.열) 줄.push(["열별 진단", JSON.stringify(상.열)]);
+      if (상.기하) 줄.push(["선택 기하 상세", JSON.stringify(상.기하)]);
+      if (상.상자) 줄.push(["상자별 OCR 진단", JSON.stringify(상.상자)]);
     } else {
       줄.push(["서버 진단", "없음 — 구형 서버 응답"]);
     }
