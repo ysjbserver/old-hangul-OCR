@@ -368,7 +368,7 @@ def 맞대기(mdl, geo, 글자들, span=3, 경계=False):
     일치 = r["일치"]
     return dict(사유=None, 일치=일치, 상자=boxes, assign=list(assign), 후보=후보, 흔들림=bool(일치 is not None and 일치 < 일치문턱),
                 흔들린열=len(흔들린열), 열수=len(열일치),
-                글자수=len(letters), 이미지=geo["image"])
+                글자수=len(letters), 스캔글자=스캔, 이미지=geo["image"])
 
 
 # ── 보여 줄 그림 ─────────────────────────────────────────────────────

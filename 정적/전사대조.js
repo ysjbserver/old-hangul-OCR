@@ -776,6 +776,16 @@ function 로그본문(살핀, 답, 때, 처음) {
     줄.push(["글자 · 열", (답.글자수 || "?") + "자 · 열 " + (답.열수 || "?") + "개 · 흔들린 열 " + (답.흔들린열 || 0)]);
     줄.push(["후보", Object.keys(셈).length ? Object.keys(셈).map(function (k) { return k + " " + 셈[k]; }).join(" · ") : "없음"]);
     줄.push(["문헌 설정", 답.아는문헌 === false ? "없음 — 이 쪽 그림으로 자간을 잼" : "파일마다 잰 값"]);
+    if (답.debug) {
+      줄.push(["서버 진단", "그림 " + (답.debug.그림해시 || "?") + " · " +
+        (답.debug.크기 ? 답.debug.크기.join("×") : "?") + " · 캐시 " + (답.debug.캐시 || "?")]);
+      줄.push(["서버 판", (답.debug.주소 || "주소 없음") + " · " + JSON.stringify(답.debug.판 || {})]);
+      줄.push(["서버 OCR", (답.debug.OCR글자수 == null ? "개수 없음" : 답.debug.OCR글자수 + "자") +
+        " · 해시 " + (답.debug.OCR해시 || "?") +
+        (답.debug.OCR미리보기 ? " · 앞 80자 " + 답.debug.OCR미리보기 : "")]);
+    } else {
+      줄.push(["서버 진단", "없음 — 구형 서버 응답"]);
+    }
   }
   var 시간 = Object.keys(때).map(function (k) { return k + " " + 초글(때[k]); });
   시간.push("전체 " + 초글(performance.now() - 처음));

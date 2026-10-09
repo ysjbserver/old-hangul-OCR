@@ -145,6 +145,34 @@ def 스캔(파일, 쪽):
     return p
 
 
+def 진단정보(파일, 쪽, 경로, 결과):
+    """전사대조에 사용한 스캔과 서버 판을 재현할 짧은 정보."""
+    정보 = 파일정보(파일)
+    주소 = 정보["틀"].replace("{N}", str(쪽)) if 정보["여러쪽"] else 정보["주소"]
+    with open(경로, "rb") as f:
+        그림바이트 = f.read()
+    with Image.open(경로) as im:
+        크기 = [int(im.width), int(im.height)]
+    진단 = {
+        "파일": 파일,
+        "쪽": int(쪽),
+        "주소": 주소,
+        "캐시": hashlib.sha256(경로.encode("utf-8")).hexdigest()[:16],
+        "크기": 크기,
+        "그림해시": hashlib.sha256(그림바이트).hexdigest()[:16],
+        "판": 판정보,
+    }
+    if 결과 and not 결과.get("사유"):
+        글자 = 결과.get("스캔글자", [])
+        원문 = "".join(글자)
+        진단.update({
+            "OCR글자수": len(글자),
+            "OCR해시": hashlib.sha256(원문.encode("utf-8")).hexdigest()[:16],
+            "OCR미리보기": 원문[:80],
+        })
+    return 진단
+
+
 r_정리 = threading.Lock()
 _그림들 = OrderedDict()                   # (파일, 쪽) → (PIL 회색 그림, numpy) — 영역 지정이 같은 쪽을 여러 번 물음
 _그림잠금 = threading.Lock()
@@ -302,6 +330,7 @@ def 맞대기(파일, 쪽, 본문):
     with 계산:
         r = 대조.한쪽(모델, None, ip, 본문, 설정=s)
     답 = dict(사유=r.get("사유"), 아는문헌=True, 초=round(time.time() - t0, 1))
+    답["debug"] = 진단정보(파일, 쪽, ip, r)
     if not r.get("사유"):
         # 원문 자리를 자바스크립트 문자열 자리(UTF-16)로 — 한자 확장 B 처럼 BMP 밖 글자가 있으면 파이썬 자리와 갈림
         if any(ord(ch) > 0xFFFF for ch in 본문):
