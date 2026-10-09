@@ -1,0 +1,677 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>옛한글 OCR</title>
+<style>
+:root {
+  --bg: #f6f6f4; --fg: #1d1d1b; --muted: #6b6b66; --line: #d6d5cf; --panel: #ffffff;
+  --accent: #2f5fb3; --low: #c2362b; --ok: #2f7d4a; --sel: #e0a100;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #1b1b1a; --fg: #ecebe6; --muted: #a3a29b; --line: #3a3a37; --panel: #252523;
+          --accent: #7aa2ec; --low: #f0776c; --ok: #6cc28c; --sel: #f2c14e; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+       font: 14px/1.5 "Noto Sans KR", "Malgun Gothic", sans-serif; }
+header { padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel);
+         display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+header h1 { font-size: 16px; margin: 0 12px 0 0; }
+input[type=text], input[type=number] { padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px;
+       background: var(--bg); color: var(--fg); font: inherit; }
+#src { width: min(420px, 100%); }
+#pageNo { width: 70px; }
+button { padding: 4px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg);
+         color: var(--fg); font: inherit; cursor: pointer; }
+button.main { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: .5; cursor: default; }
+#msg { color: var(--muted); }
+#msg.err { color: var(--low); }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 0; height: calc(100vh - 54px); }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; height: auto; } }
+#left { overflow: auto; position: relative; border-right: 1px solid var(--line); }
+#tools { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line);
+         padding: 6px 12px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+#tools label { white-space: nowrap; }
+#stage { position: relative; margin: 12px; touch-action: none; }
+#stage canvas { position: absolute; left: 0; top: 0; width: 100%; }
+#scan { position: relative !important; display: block; }
+#over { cursor: crosshair; }
+#left.panning, #left.panning #over { cursor: grabbing; }
+#empty { padding: 40px 16px; color: var(--muted); }
+#right { overflow: auto; padding: 12px; background: var(--panel); }
+#right h2 { font-size: 14px; margin: 8px 0; }
+#pieces { list-style: none; margin: 0; padding: 0; }
+#pieces li { border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; margin-bottom: 6px; cursor: pointer; }
+#pieces li.on { border-color: var(--sel); box-shadow: 0 0 0 1px var(--sel); }
+#pieces .meta { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+#pieces .meta button { padding: 0 6px; font-size: 12px; }
+#pieces .txt { font-size: 16px; word-break: break-all; }
+.low { color: var(--low); background: color-mix(in srgb, var(--low) 12%, transparent); }
+textarea { width: 100%; min-height: 160px; font: 16px/1.6 "Noto Sans KR", "Malgun Gothic", sans-serif;
+           border: 1px solid var(--line); border-radius: 4px; background: var(--bg); color: var(--fg); padding: 6px; }
+.hint { color: var(--muted); font-size: 12px; }
+kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>옛한글 OCR</h1>
+  <input id="src" type="text" placeholder="파일 이름 또는 위키문헌 페이지 주소 (예: 훈아진언.pdf/62)">
+  <label>쪽 <input id="pageNo" type="number" min="1"></label>
+  <button id="loadBtn" class="main">불러오기</button>
+  <label id="modelBox" hidden title="읽는 모델 — 서버가 가진 모델 중에서 고릅니다. 바꾸면 이어서 읽는 상자부터 새 모델로 읽습니다.">모델 <select id="modelSel"></select></label>
+  <span id="msg"></span>
+</header>
+<main>
+  <section id="left">
+    <div id="tools">
+      <span>상자로:</span>
+      <label><input type="radio" name="mode" value="열" checked> 열(줄) 하나</label>
+      <label><input type="radio" name="mode" value="글자"> 글자 하나</label>
+      <label><input type="radio" name="mode" value="영역"> 여러 열</label>
+      <label title="비우면 모델이 칸수를 고릅니다">글자 수 <input id="nIn" type="number" min="1" style="width:56px" placeholder="자동"></label>
+      <label title="세로 글자 간격 ÷ 열 간격 — 불러올 때 쪽에서 잼">자간비 <input id="ratioIn" type="number" step="0.001" style="width:72px"></label>
+      <button id="autoBtn" disabled>쪽 전체 자동 읽기</button>
+      <button id="zoomOut" title="축소 (스캔 위에서 휠을 아래로)">－</button><button id="zoomFit">맞춤</button><button id="zoomIn" title="확대 (스캔 위에서 휠을 위로)">＋</button>
+      <label><input id="showText" type="checkbox" checked> 글자 보기</label>
+      <label title="끄면 새로 상자를 칠 때 앞에 읽은 조각을 모두 지우고 새로 읽습니다. 켜면 앞 조각을 남겨 두고 그 위에 고쳐 넣습니다(쪽 전체 자동 읽기 결과를 고칠 때).">
+        <input id="keepIn" type="checkbox"> 앞 조각 남기기</label>
+    </div>
+    <div id="empty">위에 파일 이름(또는 위키문헌 '페이지:' 주소)과 쪽 번호를 넣고 불러오세요.<br>
+      그다음 스캔 위에 끌어서 상자를 치면 그 자리를 읽습니다.<br>
+      스캔 위에서 마우스 휠로 확대 · 축소, 오른쪽(또는 가운데) 단추를 누른 채 끌면 화면을 옮깁니다.</div>
+    <div id="stage" hidden>
+      <canvas id="scan"></canvas>
+      <canvas id="over"></canvas>
+    </div>
+  </section>
+  <section id="right">
+    <h2>읽은 조각 <span class="hint">(오른쪽 열부터)</span></h2>
+    <p class="hint">
+      · <b>열</b> 상자: 그 열을 다시 읽어, 겹치는 조각을 바꿉니다. 칸수가 틀리면 <kbd>－</kbd> <kbd>＋</kbd>.<br>
+      · <b>글자</b> 상자: 그 자리 글자만 바꾸거나 빠진 글자를 끼워 넣습니다.<br>
+      · 조각을 누르고 <kbd>Delete</kbd> 로 지웁니다. 빨간 글자는 확신이 낮은 자리입니다.<br>
+      · 새 상자를 치면 앞 조각은 지워집니다. 쌓아 가며 고치려면 위의 <b>앞 조각 남기기</b>를 켜세요
+        (쪽 전체 자동 읽기를 하면 저절로 켜짐).<br>
+      · 스캔 위에서 <b>휠</b>로 확대 · 축소, <b>오른쪽 단추로 끌어</b> 화면 옮기기.
+    </p>
+    <ul id="pieces"></ul>
+    <h2>결과 <label class="hint" title="켜면 모델이 확신하지 못한 글자를 ⟪ ⟫ 로 감싸 결과에 남깁니다"><input id="markIn" type="checkbox"> 확신 낮은 글자를 ⟪⟫ 로 표시</label></h2>
+    <p class="hint">⟪⟫ 표시를 켜면 모델이 확신하지 못한 글자(위 목록의 빨간 글자)를 결과에서 ⟪ ⟫ 로 감쌉니다.</p>
+    <textarea id="out" spellcheck="false"></textarea>
+    <p><button id="copyBtn">복사</button> <button id="clearBtn">모두 지우기</button></p>
+    <p class="hint">결과는 원문 한 열이 한 줄입니다. 위키문헌에서 줄바꿈 하나는 띄어쓰기로 보이니, 낱말이 열을 넘어가면 이어 주세요.</p>
+  </section>
+</main>
+
+<script src="서버.js"></script><!-- Toolforge 에서만 있음(서버 주소를 채움) — 내 컴퓨터에서는 없어 404 가 한 번 찍힘(정상) -->
+<script src="읽기.js"></script>
+<script src="영역읽기.js"></script>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const ORT_CDN = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
+const st = {
+  host: "ko.wikisource.org", file: "", page: null,
+  g: null, 열간격: null, 자간비: null,
+  조각: [], 다음id: 1, 고름: null, zoom: 1,
+};
+let 모델 = null, 설정 = null, 준비중 = null;
+
+function 알림(t, err) { $("msg").textContent = t; $("msg").className = err ? "err" : ""; }
+
+function 스크립트(url) {
+  return new Promise((ok, no) => {
+    const s = document.createElement("script");
+    s.src = url; s.onload = ok; s.onerror = () => no(new Error(url));
+    document.head.appendChild(s);
+  });
+}
+
+// ── 모델 ─────────────────────────────────────────────────────────────
+// Toolforge 에서는 `서버.js` 가 window.옛한글OCR서버 를 채움 → 모델 셈(상자 · 경계 확률)만 서버에, 열 찾기 · 칸 나누기는 `읽기.js`
+// 아니면 ORT 를 이 폴더의 ort/ 에서, 없으면 jsDelivr 에서
+const 서버 = window.옛한글OCR서버 || null;
+// 읽는 모델 — 서버 모드에서만. 처음 값: 소도구에서 넘어온 `?model=`(hanmun = 근대 국한문) > 지난번에 고른 것 > 근대 순한글.
+// 머리의 '모델' 칸에서 바꿈(서버가 가진 모델 목록은 `/api/health`)
+const 저장 = (k, v) => { try { if (v === undefined) return localStorage.getItem("옛한글OCR:" + k); localStorage.setItem("옛한글OCR:" + k, v); } catch (e) {} return null; };
+let 모델이름 = (서버 && (new URLSearchParams(location.search).get("model") || 저장("모델"))) || "hangul";
+
+if (서버) {
+  fetch(서버 + "api/health").then(r => r.json()).then(h => {
+    const 목록 = h.모델들 || { hangul: "근대 순한글" };
+    if (!(모델이름 in 목록)) 모델이름 = "hangul";
+    const 칸 = $("modelSel");
+    for (const k in 목록)칸.add(new Option(목록[k], k));
+    칸.value = 모델이름;
+    $("modelBox").hidden = false;
+    칸.addEventListener("change", () => {
+      모델이름 = 칸.value;
+      저장("모델", 모델이름);
+      모델 = null; 준비중 = null;                       // 다음에 읽을 때 새 모델로(이미 읽은 조각은 그대로)
+      const q = new URLSearchParams(location.search);
+      if (모델이름 === "hangul") q.delete("model"); else q.set("model", 모델이름);
+      history.replaceState(null, "", "?" + q);
+      알림("모델을 「" + 목록[모델이름] + "」(으)로 바꿨습니다 — 이제 읽는 상자부터 적용됩니다.");
+    });
+  }).catch(() => {});
+}
+
+async function 서버로(경로, 몸) {
+  const res = await fetch(서버 + 경로, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(몸) });
+  const 답 = await res.json();
+  if (!res.ok || 답.오류) throw new Error(답.오류 || ("서버 오류 " + res.status));
+  return 답;
+}
+
+function 원격모델() {
+  const m = 옛한글읽기.모델만들기(설정, null, null, null);   // 글자 만들기(모델.글자)는 그대로
+  const 어디 = () => ({ file: st.file, page: st.page || 1, model: 모델이름 });
+  m.읽기 = async function (g, boxes) {
+    const n = boxes.length, 자리 = new Int32Array(n), 고유 = [], 본 = new Map();
+    for (let i = 0; i < n; i++) {                          // 같은 상자는 한 번만
+      const b = boxes[i], k = b.join(",");
+      let j = 본.get(k);
+      if (j === undefined) { j = 고유.length; 본.set(k, j); 고유.push(b.map(Math.round)); }
+      자리[i] = j;
+    }
+    const 초 = new Int32Array(n), 중 = new Int32Array(n), 종 = new Int32Array(n), 확신 = new Float64Array(n);
+    if (!n) return { 초, 중, 종, 확신 };
+    const 답 = await 서버로("api/boxes", Object.assign(어디(), { boxes: 고유 }));
+    for (let i = 0; i < n; i++) {
+      const j = 자리[i];
+      초[i] = 답.초[j]; 중[i] = 답.중[j]; 종[i] = 답.종[j]; 확신[i] = 답.확신[j];
+    }
+    return { 초, 중, 종, 확신 };
+  };
+  m.경계 = 설정.경계 ? async function (g, x0, x1) {
+    const 답 = await 서버로("api/edge", Object.assign(어디(), { x0: Math.round(x0), x1: Math.round(x1) }));
+    if (답.높이 !== g.높이) throw new Error("서버의 스캔 높이(" + 답.높이 + ")가 여기(" + g.높이 + ")와 다릅니다");
+    return Float64Array.from(답.확률);
+  } : null;
+  return m;
+}
+
+function 준비() {
+  if (준비중) return 준비중;
+  준비중 = (async () => {
+    설정 = 옛한글읽기.설정넣기(await (await fetch("설정.json")).json());
+    if (서버) {
+      모델 = 원격모델();
+      if (모델이름 !== "hangul") {                        // 국한문 모델은 글자표가 달라(한자가 초성 표 뒤에 이어 붙음) 서버에서 받아 번호를 글자로
+        const 표 = await (await fetch(서버 + "api/tables?model=" + encodeURIComponent(모델이름))).json();
+        if (표.오류) throw new Error(표.오류);
+        모델.글자 = (l, v, t) => {
+          const x = 표.초성[l] + 표.중성[v] + 표.종성[t];
+          if (x === "ᅟᅵ") return "ㅣ";
+          if (x === "○ᅠ" || x === "々ᅠ" || x === "ᄉᅠ" || x === ",ᅠ" || x === ".ᅠ") return x === "ᄉᅠ" ? "ㅅ" : x[0];
+          return x;
+        };
+      }
+      return;
+    }
+    let ortBase = "ort/";
+    try { await 스크립트(ortBase + "ort.webgpu.min.js"); }
+    catch (e) { ortBase = ORT_CDN; await 스크립트(ortBase + "ort.webgpu.min.js"); }
+    ort.env.wasm.wasmPaths = new URL(ortBase, location.href).href;
+    ort.env.wasm.numThreads = 1;
+    알림("모델을 불러오는 중… (2.8MB, 처음 한 번만)");
+    const 세션 = await ort.InferenceSession.create("옛한글모델.onnx", { executionProviders: ["wasm"] });
+    const 경계 = 설정.경계 ? await ort.InferenceSession.create("경계검출.onnx", { executionProviders: ["wasm"] }) : null;
+    모델 = 옛한글읽기.모델만들기(설정, 세션, ort, 경계);
+  })();
+  준비중.catch(e => { 준비중 = null; 알림("모델을 못 불러왔습니다: " + e.message, true); });
+  return 준비중;
+}
+
+// ── 입력 해석 (css-image-crop 도구와 같은 규칙) ───────────────────────
+function 해석(raw) {
+  let s = raw.trim(), host = "ko.wikisource.org";
+  const m = s.match(/^https?:\/\/([^/]+)\/(.*)$/);
+  if (m) {
+    host = m[1];
+    let rest = m[2];
+    const t = rest.match(/[?&]title=([^&#]+)/);
+    rest = t ? t[1] : rest.replace(/^wiki\//, "").replace(/[?#].*$/, "");
+    s = rest;
+  }
+  try { s = decodeURIComponent(s.replace(/\+/g, " ")); } catch (e) {}
+  s = s.replace(/_/g, " ").trim().replace(/^(페이지|Page|파일|File|색인|Index|Image|그림)\s*:\s*/i, "");
+  let page = null;
+  const pm = s.match(/^(.*\.(?:pdf|djvu|tiff?))\/(\d+)$/i);
+  if (pm) { s = pm[1]; page = +pm[2]; }
+  return { host, file: s, page };
+}
+
+// ── 스캔 받기 ─────────────────────────────────────────────────────────
+// ⚠ 여러 쪽 파일은 API 가 요청한 너비를 무시함 → 주소를 한 번 받아 `/page{쪽}-1920px-` 만 갈아 끼움
+async function 스캔주소(host, file, page) {
+  const 너비 = (설정 && 설정.스캔너비) || 1920;
+  const multi = /\.(pdf|djvu|tiff?)$/i.test(file);
+  const q = new URLSearchParams({
+    action: "query", format: "json", formatversion: "2", origin: "*",
+    titles: "File:" + file, prop: "imageinfo", iiprop: "url|size",
+    iiurlwidth: multi ? "500" : String(너비),
+  });
+  if (multi) q.set("iiurlparam", "page" + page + "-500px");
+  const d = await (await fetch("https://" + host + "/w/api.php?" + q)).json();
+  const pg = d.query && d.query.pages && d.query.pages[0];
+  const ii = pg && pg.imageinfo && pg.imageinfo[0];
+  if (!ii) throw new Error("파일을 찾지 못했습니다: " + file);
+  if (multi && ii.pagecount && page > ii.pagecount) throw new Error("이 파일은 " + ii.pagecount + "쪽까지입니다");
+  let u = (ii.thumburl || ii.url).split("?")[0];
+  if (multi) u = u.replace(/\/page\d+-\d+px-/, "/page" + page + "-" + 너비 + "px-");
+  return u;
+}
+
+function 그림받기(url) {
+  return new Promise((ok, no) => {
+    const im = new Image();
+    im.crossOrigin = "anonymous";
+    im.onload = () => ok(im);
+    im.onerror = () => no(new Error("스캔 그림을 못 읽었습니다: " + url));
+    im.src = url;
+  });
+}
+
+async function 불러오기() {
+  const p = 해석($("src").value);
+  if (!p.file) { 알림("파일 이름을 넣어 주세요", true); return; }
+  const multi = /\.(pdf|djvu|tiff?)$/i.test(p.file);
+  const page = $("pageNo").value ? +$("pageNo").value : (p.page || (multi ? 1 : null));
+  $("pageNo").value = page || "";
+  Object.assign(st, { host: p.host, file: p.file, page, 조각: [], 고름: null, g: null });
+  그리기목록();
+  알림("불러오는 중…");
+  try {
+    const 모델준비 = 준비();             // 그림을 받는 동안 모델도
+    await 설정준비();
+    const url = await 스캔주소(p.host, p.file, page);
+    const im = await 그림받기(url);
+    const 너비 = 설정.스캔너비 || 1920;
+    const H = Math.round(im.naturalHeight * 너비 / im.naturalWidth);
+    const cv = $("scan");
+    cv.width = 너비; cv.height = H;
+    const cx = cv.getContext("2d", { willReadFrequently: true });
+    cx.fillStyle = "#fff"; cx.fillRect(0, 0, 너비, H);
+    cx.drawImage(im, 0, 0, 너비, H);   // 1920px 이 아니면 늘려 맞춤(한 장짜리 그림)
+    st.g = 옛한글읽기.그림만들기(cx.getImageData(0, 0, 너비, H).data, 너비, H);
+    const ov = $("over"); ov.width = 너비; ov.height = H;
+    $("empty").hidden = true; $("stage").hidden = false;
+    맞춤(); 다시그리기();
+    if (im.naturalWidth !== 너비) 알림("⚠ 원본이 " + im.naturalWidth + "px 라 " + 너비 + "px 로 늘렸습니다 — 정확도가 떨어질 수 있습니다");
+    알림("쪽을 재는 중…");
+    await new Promise(r => setTimeout(r, 20));
+    const 잰 = 영역읽기.쪽재기(st.g);
+    st.자간비 = 잰.자간비 || 설정.기본자간비;
+    st.열간격 = 잰.열간격;
+    st.열들 = 잰.열들;
+    $("ratioIn").value = st.자간비.toFixed(3);
+    await 모델준비;
+    $("autoBtn").disabled = false;
+    알림(p.file + (page ? " · " + page + "쪽" : "") + " — 자간비 " + st.자간비.toFixed(3)
+         + (잰.자간비 ? "" : "(못 재서 기본값)") + (st.열간격 ? " · 열 간격 " + Math.round(st.열간격) + "px" : " · 열 간격 못 잼")
+         + ". 스캔 위에 상자를 치세요.");
+    history.replaceState(null, "", "?" + new URLSearchParams(Object.assign({ host: p.host, file: p.file, page: page || "" }, 모델이름 !== "hangul" ? { model: 모델이름 } : {})));
+  } catch (e) { 알림(e.message || String(e), true); }
+}
+async function 설정준비() { while (!설정) await new Promise(r => setTimeout(r, 30)); }
+
+// ── 확대 ─────────────────────────────────────────────────────────────
+const 확대최소 = 0.3, 확대최대 = 8;
+function 맞춤() { st.zoom = 1; 크기맞추기(); }
+function 크기맞추기() {
+  const 바탕 = $("left").clientWidth - 24;
+  $("stage").style.width = Math.round(바탕 * st.zoom) + "px";
+}
+/** 배율을 바꾸되 (cx, cy)(화면 좌표, 없으면 보이는 곳 가운데) 아래의 스캔 자리가 그대로 남게 */
+function 확대(배, cx, cy) {
+  const L = $("left"), S = $("stage"), r = L.getBoundingClientRect();
+  const 새 = Math.min(확대최대, Math.max(확대최소, st.zoom * 배));
+  if (새 === st.zoom) return;
+  if (cx == null) { cx = r.left + L.clientWidth / 2; cy = r.top + L.clientHeight / 2; }
+  const 옛폭 = S.offsetWidth || 1;
+  const px = (cx - r.left + L.scrollLeft - S.offsetLeft) / 옛폭;      // 스캔 폭에 대한 몫
+  const py = (cy - r.top + L.scrollTop - S.offsetTop) / 옛폭;
+  st.zoom = 새; 크기맞추기();
+  const 새폭 = S.offsetWidth;
+  L.scrollLeft = px * 새폭 + S.offsetLeft - (cx - r.left);
+  L.scrollTop = py * 새폭 + S.offsetTop - (cy - r.top);
+}
+$("zoomFit").onclick = 맞춤;
+$("zoomIn").onclick = () => 확대(1.25);
+$("zoomOut").onclick = () => 확대(1 / 1.25);
+window.addEventListener("resize", 크기맞추기);
+// 스캔 위에서 휠 = 확대 · 축소(마우스 자리를 가운데로). 터치패드 두 손가락 핀치(ctrlKey 붙은 휠)도 같이 됨
+$("stage").addEventListener("wheel", e => {
+  if (!st.g) return;
+  e.preventDefault();
+  const d = e.deltaMode === 1 ? e.deltaY * 33 : (e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY);
+  확대(Math.exp(-Math.max(-300, Math.min(300, d)) * 0.0015), e.clientX, e.clientY);
+}, { passive: false });
+// 오른쪽 · 가운데 단추로 끌면 화면 옮기기(왼쪽 단추는 상자 치기)
+let 옮김 = null;
+$("stage").addEventListener("pointerdown", e => {
+  if (e.button !== 1 && e.button !== 2) return;
+  옮김 = { x: e.clientX, y: e.clientY, l: $("left").scrollLeft, t: $("left").scrollTop };
+  $("stage").setPointerCapture(e.pointerId); $("left").classList.add("panning"); e.preventDefault();
+});
+$("stage").addEventListener("pointermove", e => {
+  if (!옮김) return;
+  $("left").scrollLeft = 옮김.l - (e.clientX - 옮김.x);
+  $("left").scrollTop = 옮김.t - (e.clientY - 옮김.y);
+});
+const 옮김끝 = () => { 옮김 = null; $("left").classList.remove("panning"); };
+$("stage").addEventListener("pointerup", 옮김끝);
+$("stage").addEventListener("pointercancel", 옮김끝);
+$("stage").addEventListener("contextmenu", e => e.preventDefault());
+$("stage").addEventListener("auxclick", e => e.preventDefault());
+
+// ── 그리기 ───────────────────────────────────────────────────────────
+function 범위(상자) {
+  let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+  상자.forEach(s => { a = Math.min(a, s[0]); b = Math.min(b, s[1]); c = Math.max(c, s[2]); d = Math.max(d, s[3]); });
+  return [a, b, c, d];
+}
+function 차례() {   // 오른쪽 열부터, 같은 열이면 위부터
+  st.조각.sort((p, q) => {
+    const pc = (p.범위[0] + p.범위[2]) / 2, qc = (q.범위[0] + q.범위[2]) / 2;
+    const 겹 = Math.min(p.범위[2], q.범위[2]) - Math.max(p.범위[0], q.범위[0]);
+    if (겹 > 0.5 * Math.min(p.범위[2] - p.범위[0], q.범위[2] - q.범위[0])) return p.범위[1] - q.범위[1];
+    return qc - pc;
+  });
+}
+
+let 끌기 = null;
+function 다시그리기() {
+  const cv = $("over"), cx = cv.getContext("2d");
+  cx.clearRect(0, 0, cv.width, cv.height);
+  const 문턱 = 설정 ? 설정.표시문턱 : 0.9;
+  const 글자보기 = $("showText").checked;
+  st.조각.forEach(p => {
+    const on = p.id === st.고름;
+    p.상자.forEach((s, i) => {
+      const 낮 = p.확신[i] < 문턱;
+      cx.lineWidth = on ? 4 : 2;
+      cx.strokeStyle = on ? "#e0a100" : (낮 ? "#d1352a" : (p.방식 === "자동" ? "rgba(47,95,179,.55)" : "#2f7d4a"));
+      cx.strokeRect(s[0] + 1, s[1] + 1, s[2] - s[0] - 2, s[3] - s[1] - 2);
+      if (글자보기) {
+        const fs = Math.max(12, Math.min(28, (s[3] - s[1]) * 0.38));
+        cx.font = fs + "px 'Noto Sans KR', 'Malgun Gothic', sans-serif";
+        const t = p.글자[i], w = cx.measureText(t).width;
+        cx.fillStyle = "rgba(255,255,255,.85)";
+        cx.fillRect(s[0] + 2, s[1] + 2, w + 6, fs + 4);
+        cx.fillStyle = 낮 ? "#c2362b" : "#111";
+        cx.fillText(t, s[0] + 5, s[1] + fs + 1);
+      }
+    });
+  });
+  if (끌기 && 끌기.지금) {
+    const b = 상자로(끌기.시작, 끌기.지금);
+    cx.lineWidth = 3; cx.setLineDash([12, 8]); cx.strokeStyle = "#e0a100";
+    cx.strokeRect(b[0], b[1], b[2] - b[0], b[3] - b[1]); cx.setLineDash([]);
+  }
+}
+
+function 표시글(p) {
+  const 문턱 = 설정 ? 설정.표시문턱 : 0.9;
+  return p.글자.map((c, i) => p.확신[i] < 문턱 ? '<span class="low">' + c + "</span>" : c).join("");
+}
+
+function 그리기목록() {
+  차례();
+  const ul = $("pieces"); ul.innerHTML = "";
+  st.조각.forEach(p => {
+    const li = document.createElement("li");
+    if (p.id === st.고름) li.className = "on";
+    const meta = document.createElement("div"); meta.className = "meta";
+    meta.append(p.방식 + " · " + p.글자.length + "자");
+    if (p.방식 === "열" && p.원상자) {
+      const 덜 = document.createElement("button"); 덜.textContent = "－"; 덜.title = "칸 하나 적게";
+      const 더 = document.createElement("button"); 더.textContent = "＋"; 더.title = "칸 하나 많게";
+      덜.onclick = e => { e.stopPropagation(); 칸바꾸기(p, -1); };
+      더.onclick = e => { e.stopPropagation(); 칸바꾸기(p, +1); };
+      meta.append(덜, 더);
+    }
+    const x = document.createElement("button"); x.textContent = "지우기";
+    x.onclick = e => { e.stopPropagation(); 지우기(p.id); };
+    meta.append(x);
+    const t = document.createElement("div"); t.className = "txt"; t.innerHTML = 표시글(p) || "<i>(글자 없음)</i>";
+    li.append(meta, t);
+    li.onclick = () => { st.고름 = p.id; 그리기목록(); 다시그리기(); };
+    ul.append(li);
+  });
+  const 표 = $("markIn").checked, 문턱 = 설정 ? 설정.표시문턱 : 0.9;
+  // 같은 열에 이어지는 조각은 한 줄로(원문 한 열 = 한 줄)
+  $("out").value = st.조각.map((p, i) => {
+    const 글 = 표 ? 옛한글읽기.확신표시(p.글자, p.확신, 문턱).글월 : p.글자.join("");
+    return (i && !같은열(st.조각[i - 1].범위, p.범위) ? "\n" : "") + 글;
+  }).join("");
+}
+$("markIn").onchange = 그리기목록;
+$("showText").onchange = 다시그리기;
+
+function 지우기(id) { st.조각 = st.조각.filter(p => p.id !== id); if (st.고름 === id) st.고름 = null; 그리기목록(); 다시그리기(); }
+$("clearBtn").onclick = () => { st.조각 = []; st.고름 = null; 그리기목록(); 다시그리기(); };
+$("copyBtn").onclick = async () => {
+  try { await navigator.clipboard.writeText($("out").value); 알림("복사했습니다"); }
+  catch (e) { $("out").select(); document.execCommand("copy"); 알림("복사했습니다"); }
+};
+
+// ── 상자 치기 ─────────────────────────────────────────────────────────
+function 점(e) {
+  const r = $("over").getBoundingClientRect();
+  return [(e.clientX - r.left) * $("over").width / r.width, (e.clientY - r.top) * $("over").height / r.height];
+}
+function 상자로(a, b) {
+  return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
+}
+$("over").addEventListener("pointerdown", e => {
+  if (e.button !== 0 || !st.g) return;
+  끌기 = { 시작: 점(e), 지금: null };
+  $("over").setPointerCapture(e.pointerId); e.preventDefault();
+});
+$("over").addEventListener("pointermove", e => { if (끌기) { 끌기.지금 = 점(e); 다시그리기(); } });
+$("over").addEventListener("pointerup", async e => {
+  if (!끌기) return;
+  const a = 끌기.시작, b = 점(e); 끌기 = null; 다시그리기();
+  const 상자 = 상자로(a, b);
+  if (상자[2] - 상자[0] < 6 || 상자[3] - 상자[1] < 6) { 누른자리고르기(a); return; }
+  await 상자읽기(상자);
+});
+$("over").addEventListener("pointercancel", () => { 끌기 = null; 다시그리기(); });
+
+function 누른자리고르기(pt) {
+  const 맞은 = st.조각.find(p => p.상자.some(s => pt[0] >= s[0] && pt[0] < s[2] && pt[1] >= s[1] && pt[1] < s[3]));
+  st.고름 = 맞은 ? 맞은.id : null;
+  그리기목록(); 다시그리기();
+}
+
+function 방식() { return document.querySelector("input[name=mode]:checked").value; }
+function 옵션() {
+  const r = +$("ratioIn").value;
+  return { 자간비: r > 0.2 ? r : st.자간비, 열간격: st.열간격, 열들: st.열들, 글자수: +$("nIn").value || null };
+}
+
+let 바쁨 = false;
+async function 상자읽기(상자) {
+  if (바쁨) return;
+  바쁨 = true;
+  try {
+    await 준비();
+    const m = 방식(), o = 옵션();
+    if (!$("keepIn").checked) { 옛조각 = st.조각; st.조각 = []; st.고름 = null; }   // 새 상자 = 새로 읽기(앞 조각은 실패하면 되돌림)
+    알림("읽는 중…");
+    const t0 = performance.now();
+    if (m === "글자") {
+      const r = await 영역읽기.글자읽기(모델, st.g, 상자);
+      if (!r.글자.length) { 되돌리기(); 알림("읽은 글자가 없습니다", true); return; }
+      글자끼우기(r);
+    } else if (m === "열") {
+      상자 = 칸에맞추기(상자);
+      const r = await 영역읽기.열읽기(모델, st.g, 상자, o);
+      if (!r.글자.length) { 되돌리기(); 알림(r.까닭 || "읽은 글자가 없습니다", true); return; }
+      열넣기(r, 상자);
+      $("nIn").value = "";       // 글자 수는 한 번만 씀
+    } else {
+      const r = await 영역읽기.영역읽기(모델, st.g, 상자, o);
+      if (!r.열들.length) { 되돌리기(); 알림(r.까닭 || "읽은 열이 없습니다", true); return; }
+      // 열마다 열 상자처럼 — 같은 열의 그 높이만 바꿈
+      r.열들.forEach(z => 열넣기(z, z.원상자, "영역"));
+    }
+    옛조각 = null;
+    그리기목록(); 다시그리기();
+    알림("읽었습니다 (" + ((performance.now() - t0) / 1000).toFixed(1) + "초)");
+  } catch (e) { 되돌리기(); 알림("못 읽었습니다: " + (e.message || e), true); console.error(e); }
+  finally { 바쁨 = false; }
+}
+let 옛조각 = null;
+function 되돌리기() {
+  if (옛조각) { st.조각 = 옛조각; 옛조각 = null; 그리기목록(); 다시그리기(); }
+}
+
+function 조각더하기(방식, r, 원상자, 칸수) {
+  if (!r.글자.length) return null;
+  const p = { id: st.다음id++, 방식, 글자: r.글자.slice(), 확신: Array.from(r.확신), 상자: r.상자.slice(),
+              범위: 범위(r.상자), 원상자, 칸수 };
+  st.조각.push(p); st.고름 = p.id;
+  return p;
+}
+
+function 같은열(a, b) {
+  const 가로 = Math.min(a[2], b[2]) - Math.max(a[0], b[0]);
+  return 가로 > 0.5 * Math.min(a[2] - a[0], b[2] - b[0]);
+}
+
+/** 열 상자의 위 · 아래 끝이 이미 읽은 칸을 가로지르면 그 칸 끝까지 늘림(칸 가운데가 상자 안인 것만) — 글자가 반쪽으로 잘려 빠지지 않게 */
+function 칸에맞추기(상자) {
+  let y0 = 상자[1], y1 = 상자[3];
+  st.조각.forEach(p => {
+    if (!같은열(p.범위, 상자)) return;
+    p.상자.forEach(s => {
+      const cy = (s[1] + s[3]) / 2;
+      if (cy >= 상자[1] && cy < 상자[3]) { y0 = Math.min(y0, s[1]); y1 = Math.max(y1, s[3]); }
+    });
+  });
+  return [상자[0], y0, 상자[2], y1];
+}
+
+/** 열 상자 — 같은 열의 조각에서 상자 높이 안에 든 글자만 빼고(위 · 아래 남은 것은 따로 둠) 새로 읽은 것을 넣음 */
+function 열넣기(r, 상자, 방식) {
+  const 새 = 범위(r.상자), 남긴 = [];
+  st.조각.forEach(p => {
+    if (!같은열(p.범위, 새)) { 남긴.push(p); return; }
+    const 위 = [], 아래 = [];
+    p.상자.forEach((s, i) => {
+      const cy = (s[1] + s[3]) / 2;
+      if (cy < 상자[1]) 위.push(i); else if (cy >= 상자[3]) 아래.push(i);
+    });
+    if (위.length + 아래.length === p.상자.length) { 남긴.push(p); return; }
+    [위, 아래].forEach(ix => {
+      if (!ix.length) return;
+      const 상 = ix.map(i => p.상자[i]);
+      남긴.push({ id: st.다음id++, 방식: p.방식, 글자: ix.map(i => p.글자[i]), 확신: ix.map(i => p.확신[i]),
+                 상자: 상, 범위: 범위(상), 원상자: null, 칸수: null });
+    });
+  });
+  st.조각 = 남긴;
+  const p = 조각더하기(방식 || "열", r, 상자, r.칸수 || r.글자.length);
+  if (p && 방식 === "영역") p.방식 = "열";   // −/＋ 로 칸수를 고칠 수 있게
+}
+
+async function 칸바꾸기(p, d) {
+  if (바쁨) return;
+  const n = Math.max(1, (p.칸수 || p.글자.length) + d);
+  바쁨 = true;
+  try {
+    const o = 옵션(); o.글자수 = n;
+    // 지금 읽은 글자들의 높이로 좁힘 — 처음 상자에 들었던 빈 곳 · 얼룩까지 n 칸에 넣지 않게
+    const 상 = [p.원상자[0], Math.max(p.원상자[1], p.범위[1] - 4), p.원상자[2], Math.min(p.원상자[3], p.범위[3] + 4)];
+    const r = await 영역읽기.열읽기(모델, st.g, 상, o);
+    p.원상자 = 상;
+    Object.assign(p, { 글자: r.글자, 확신: Array.from(r.확신), 상자: r.상자, 범위: 범위(r.상자), 칸수: r.칸수 });
+    그리기목록(); 다시그리기();
+    알림(n + "칸으로 다시 읽었습니다");
+  } finally { 바쁨 = false; }
+}
+
+/** 글자 상자 — 가운데가 상자 안에 드는 칸들을 이 글자 하나로 바꿈. 없으면 같은 열 조각에 위아래 차례로 끼움 */
+function 글자끼우기(r) {
+  const b = r.상자[0], mx = (b[0] + b[2]) / 2, my = (b[1] + b[3]) / 2;
+  for (const p of st.조각) {
+    const 안 = [];
+    p.상자.forEach((s, i) => {
+      const cx = (s[0] + s[2]) / 2, cy = (s[1] + s[3]) / 2;
+      if (cx >= b[0] && cx < b[2] && cy >= b[1] && cy < b[3]) 안.push(i);
+    });
+    if (안.length) {
+      const i = 안[0], k = 안.length;
+      p.글자.splice(i, k, r.글자[0]); p.확신.splice(i, k, r.확신[0]); p.상자.splice(i, k, b);
+      p.범위 = 범위(p.상자); st.고름 = p.id;
+      return;
+    }
+  }
+  const 열 = st.조각.find(p => mx >= p.범위[0] && mx < p.범위[2] && my >= p.범위[1] - 200 && my < p.범위[3] + 200);
+  if (열) {
+    let i = 0;
+    while (i < 열.상자.length && (열.상자[i][1] + 열.상자[i][3]) / 2 < my) i++;
+    열.글자.splice(i, 0, r.글자[0]); 열.확신.splice(i, 0, r.확신[0]); 열.상자.splice(i, 0, b);
+    열.범위 = 범위(열.상자); st.고름 = 열.id;
+    return;
+  }
+  조각더하기("글자", r, b);
+}
+
+// ── 쪽 전체 자동 읽기 ─────────────────────────────────────────────────
+$("autoBtn").onclick = async () => {
+  if (바쁨 || !st.g) return;
+  바쁨 = true;
+  try {
+    await 준비();
+    알림("쪽 전체를 읽는 중… (몇 초)");
+    const t0 = performance.now();
+    const 열들 = await 영역읽기.쪽전체(모델, st.g, 옵션().자간비);
+    st.조각 = st.조각.filter(p => p.방식 !== "자동");
+    열들.forEach(z => 조각더하기("자동", z, null));
+    st.고름 = null;
+    $("keepIn").checked = true;    // 자동 결과 위에 고쳐 넣는 흐름 — 새 상자가 자동 결과를 지우지 않게
+    그리기목록(); 다시그리기();
+    알림("자동으로 " + 열들.length + "열 읽었습니다 (" + ((performance.now() - t0) / 1000).toFixed(1)
+         + "초). 틀린 열에 '열' 상자, 틀린 글자에 '글자' 상자를 치세요('앞 조각 남기기' 켜짐).");
+  } catch (e) { 알림("못 읽었습니다: " + (e.message || e), true); console.error(e); }
+  finally { 바쁨 = false; }
+};
+
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+  const p = st.조각.find(q => q.id === st.고름);
+  if (!p) return;
+  if (e.key === "Delete" || e.key === "Backspace") { 지우기(p.id); e.preventDefault(); }
+  else if (p.방식 === "열" && p.원상자 && (e.key === "+" || e.key === "=")) 칸바꾸기(p, +1);
+  else if (p.방식 === "열" && p.원상자 && e.key === "-") 칸바꾸기(p, -1);
+});
+
+$("loadBtn").onclick = 불러오기;
+$("src").addEventListener("keydown", e => { if (e.key === "Enter") 불러오기(); });
+$("pageNo").addEventListener("keydown", e => { if (e.key === "Enter") 불러오기(); });
+
+// 주소에 ?file=…&page=… 가 있으면 바로 불러옴(소도구에서 새 창으로 열 때)
+(() => {
+  const q = new URLSearchParams(location.search);
+  if (q.get("file")) {
+    // 쪽 번호가 있으면 출발한 '페이지:파일/쪽' 주소 모양으로 보여 줌(`해석` 이 그대로 읽음)
+    const 쪽있음 = q.get("page") && /\.(pdf|djvu|tiff?)$/i.test(q.get("file"));
+    const 이름 = 쪽있음 ? "페이지:" + q.get("file") + "/" + q.get("page") : q.get("file");
+    $("src").value = q.get("host") && q.get("host") !== "ko.wikisource.org"
+      ? "https://" + q.get("host") + "/wiki/" + (쪽있음 ? "Page:" + q.get("file") + "/" + q.get("page") : "File:" + q.get("file"))
+      : 이름;
+    if (q.get("page")) $("pageNo").value = q.get("page");
+    불러오기();
+  }
+})();
+</script>
+</body>
+</html>
