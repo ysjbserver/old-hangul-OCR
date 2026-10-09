@@ -145,8 +145,10 @@ class 혼용모델(모델):
         self.dev = "onnx"
         self._기억 = (None, {})
 
+    상위 = 64             # 한자 확률은 상자마다 위 64개만 기억(나머지는 모두 1/65 이하 → 0 으로 둠). 11,000종을 다 들고 있으면 메모리가 폭발(Toolforge 512MB)
+
     def _머리들(self, im, boxes, batch):
-        # 마지막 그림 하나의 (갈래 · 초 · 중 · 종 · 한자) 확률을 상자별로 기억 — 부름 사이에도(옛한글 모델과 같은 까닭)
+        # 마지막 그림 하나의 (갈래 · 초 · 중 · 종 · 한자 위 64개 번호 · 확률)을 상자별로 기억 — 부름 사이에도(옛한글 모델과 같은 까닭)
         batch = min(batch, self.뭉치)
         열쇠그림 = (im.size, im.mode, hashlib.blake2b(im.tobytes(), digest_size=16).digest())
         if self._기억[0] != 열쇠그림:
@@ -154,44 +156,55 @@ class 혼용모델(모델):
         기억 = self._기억[1]
         열쇠들 = [tuple(int(v) for v in b) for b in boxes]
         새것 = list(dict.fromkeys(k for k in 열쇠들 if k not in 기억))
+        K = self.상위
         for i in range(0, len(새것), batch):
             덩이 = 새것[i:i + batch]
             x = self.crops(im, 덩이)
-            p = [_펴기(z) for z in self.세션.run(None, {"x": x})]
-            for j, k in enumerate(덩이):
-                기억[k] = tuple(a[j] for a in p)
-        return [np.stack([기억[k][m] for k in 열쇠들]) for m in range(5)]
+            sK, sL, sV, sT, sH = [_펴기(z) for z in self.세션.run(None, {"x": x})]
+            k = min(K, sH.shape[1])
+            번호 = np.argpartition(-sH, k - 1, axis=1)[:, :k]
+            값 = np.take_along_axis(sH, 번호, axis=1)
+            차례 = np.argsort(-값, axis=1, kind="stable")
+            번호 = np.take_along_axis(번호, 차례, axis=1).astype(np.int32)
+            값 = np.take_along_axis(값, 차례, axis=1)
+            for j, 열 in enumerate(덩이):
+                기억[열] = (sK[j], sL[j], sV[j], sT[j], 번호[j], 값[j])
+        return [np.stack([기억[k][m] for k in 열쇠들]) for m in range(6)]
 
     def read(self, im, boxes, batch=None):
         if not boxes:
             z = np.zeros(0, dtype=np.int64)
             return z, z, z, np.zeros(0)
-        sK, sL, sV, sT, sH = self._머리들(im, list(boxes), batch or self.뭉치)
+        sK, sL, sV, sT, 번호, 값 = self._머리들(im, list(boxes), batch or self.뭉치)
         한 = sK[:, 1] > sK[:, 0]
-        l = np.where(한, sH.argmax(1) + self.nL, sL.argmax(1))
+        l = np.where(한, 번호[:, 0] + self.nL, sL.argmax(1))
         v = np.where(한, self.v빈, sV.argmax(1))
         t = np.where(한, self.t빈, sT.argmax(1))
-        c = np.where(한, np.minimum(sK[:, 1], sH.max(1)),
+        c = np.where(한, np.minimum(sK[:, 1], 값[:, 0]),
                      np.minimum(np.minimum(sK[:, 0], sL.max(1)), np.minimum(sV.max(1), sT.max(1))))
         return l, v, t, c
 
     def 확률(self, im, boxes, batch=None):
         """`대조.확률읽기` 용 — 세 머리 꼴(초 · 중 · 종)로. 갈래로 한글 · 한자를 가르고(`read` 와 같은 쪽), 그쪽 머리 확률에 갈래 확률을 곱함.
-        한글: 초 [갈래0 × 초, 0…] · 중 [중, 0] · 종 [종, 0] / 한자: 초 [0…, 갈래1 × 한자] · 중 · 종은 빈 자리 하나만 1 →
-        '초 × 중 × 종' 이 곧 그 글자의 확률이고 1순위가 `read` 와 같음."""
+        한글: 초 [갈래0 × 초, 0…] · 중 [중, 0] · 종 [종, 0] / 한자: 초 [0…, 갈래1 × 한자(위 64개만)] · 중 · 종은 빈 자리 하나만 1 →
+        '초 × 중 × 종' 이 곧 그 글자의 확률이고 1순위가 `read` 와 같음. 초성 표는 float32(한자 11,000열 × 상자 수라 큼)."""
         if not boxes:
             z = np.zeros((0, 1))
             return z, z, z
-        sK, sL, sV, sT, sH = (a.astype(np.float64) for a in self._머리들(im, list(boxes), batch or self.뭉치))
-        n, nH = len(sK), sH.shape[1]
-        한 = (sK[:, 1] > sK[:, 0])[:, None]
-        L = np.zeros((n, self.nL + nH)); V = np.zeros((n, len(self.Vs))); T = np.zeros((n, len(self.Ts)))
-        L[:, :self.nL] = np.where(한, 0.0, sL * sK[:, :1])
-        L[:, self.nL:] = np.where(한, sH * sK[:, 1:], 0.0)
-        V[:, :sV.shape[1]] = np.where(한, 0.0, sV)
-        T[:, :sT.shape[1]] = np.where(한, 0.0, sT)
-        V[:, self.v빈] = np.where(한[:, 0], 1.0, V[:, self.v빈])
-        T[:, self.t빈] = np.where(한[:, 0], 1.0, T[:, self.t빈])
+        sK, sL, sV, sT, 번호, 값 = self._머리들(im, list(boxes), batch or self.뭉치)
+        n = len(sK)
+        한 = sK[:, 1] > sK[:, 0]
+        L = np.zeros((n, self.nL + len(self.Hs)), dtype=np.float32)
+        V = np.zeros((n, len(self.Vs))); T = np.zeros((n, len(self.Ts)))
+        하 = ~한
+        L[하, :self.nL] = (sL[하].astype(np.float64) * sK[하, :1]).astype(np.float32)
+        V[하, :sV.shape[1]] = sV[하]
+        T[하, :sT.shape[1]] = sT[하]
+        한줄 = np.flatnonzero(한)
+        if len(한줄):
+            L[한줄[:, None], self.nL + 번호[한줄]] = (값[한줄].astype(np.float64) * sK[한줄, 1:2]).astype(np.float32)
+            V[한줄, self.v빈] = 1.0
+            T[한줄, self.t빈] = 1.0
         return L, V, T
 
     def codes(self, letters, decompose):
