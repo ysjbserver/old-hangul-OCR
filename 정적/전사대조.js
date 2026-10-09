@@ -1,12 +1,12 @@
 /*
- * 전사대조 — 위키문헌 '페이지:' 편집 창에서 **이미 전사된 글**을 그 쪽 스캔과 맞대어,
- * 전사문이 틀렸을 만한 자리를 편집 상자 안에 칠하는 소도구. Toolforge 서버(`https://<도구 주소>/compare.js`)가 내줌:
+ * 전사대조 — 위키문헌 '페이지:' 편집 창에서 **이미 전사된 글**을 그 쪽 스캔과 맞대어, 전사문이 틀렸을 만한 자리를 편집 상자 안에 칠하는 소도구.
  *
+ * Toolforge 서버(`https://<도구 주소>/compare.js`)가 내줌:
  *   mw.loader.load("https://<도구 주소>/ocr.js");        ← 인식 (전사)
  *   mw.loader.load("https://<도구 주소>/compare.js");    ← 교정 (전사대조) — 이 줄을 더하면 켜짐
  *
  * 셈은 전부 서버(`근원/부품/대조.py`) — 이 파일은 화면(칠하기 · 후보 목록 · 바꾸기)만.
- * 서버가 내주는 이 파일의 맨 앞 줄이 `window.옛한글OCR서버` 를 채움.
+ * 서버가 내주는 이 파일의 맨 앞 줄은 `window.옛한글OCR서버` 를 채움.
  */
 (function (전역) {
 "use strict";
@@ -136,6 +136,17 @@ function 공용도구() {
     칸.appendChild(행);
     return 고름;
   };
+  // 띄어쓰기 자동 감지 — 종이에 띄어쓰기가 없는 문헌에서 헛띄움이 생기면 끔(인식에만 해당)
+  var 띄움행 = 만들기("div", "", "display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin:4px 0");
+  var 띄움칸 = document.createElement("input");
+  띄움칸.type = "checkbox";
+  띄움칸.checked = true;
+  var 띄움글 = 만들기("label", "", "display:inline-flex;gap:6px;align-items:center");
+  띄움글.appendChild(띄움칸);
+  띄움글.appendChild(document.createTextNode("띄어쓰기 자동 감지"));
+  띄움행.appendChild(만들기("span", "", "min-width:3.2em"));
+  띄움행.appendChild(띄움글);
+  띄움행.appendChild(만들기("span", "인식 결과에 띄어쓰기를 넣습니다. 띄어쓰기 없이 찍은 문헌에서 엉뚱한 곳이 띄어지면 끄세요.", "font-size:12px;color:#72777d"));
   var 모델선택 = 항목("모델", [["hangul", "근대 순한글"], ["hanmun", "근대 국한문 (시험 중)"]],
                     "한글로만 된 문헌일 경우 순한글을 선택하는 것이 정확도가 높습니다.");
   var 단선택 = 항목("단", [["auto", "자동"], ["1", "1단"], ["2", "2단"], ["3", "3단"], ["4", "4단"], ["5", "5단"]],
@@ -146,6 +157,7 @@ function 공용도구() {
     var 글 = [];
     if (모델선택.value !== "hangul") 글.push("국한문");
     if (단선택.value !== "auto") 글.push(단선택.value + "단");
+    if (!띄움칸.checked) 글.push("띄어쓰기 끔");
     설정단추.textContent = "설정 ▾" + (글.length ? " (" + 글.join(" · ") + ")" : "");
     설정단추.setAttribute("aria-expanded", 칸.style.display !== "none" ? "true" : "false");
   };
@@ -164,6 +176,9 @@ function 공용도구() {
   }).catch(function () {});
   모델선택.addEventListener("change", function () { 저장("모델", 모델선택.value); 요약(); });
   단선택.addEventListener("change", function () { 저장("단", 단선택.value); 요약(); });
+  칸.appendChild(띄움행);
+  if (저장("띄움") === "끔") 띄움칸.checked = false;
+  띄움칸.addEventListener("change", function () { 저장("띄움", 띄움칸.checked ? "켬" : "끔"); 요약(); });
   설정단추.addEventListener("click", function () {
     칸.style.display = 칸.style.display === "none" ? "block" : "none";
     요약();
@@ -178,6 +193,7 @@ function 공용도구() {
     뿌리: 뿌리, 줄: 줄, 로그묶음: 로그묶음,
     모델: function () { return (모델선택.value === "hanmun" && !한문칸.disabled) ? "hanmun" : "hangul"; },
     단: function () { return 단선택.value === "auto" ? null : parseInt(단선택.value, 10); },
+    띄움: function () { return 띄움칸.checked; },
   });
 }
 
@@ -194,7 +210,7 @@ function 단글(단) { return 단 ? 단 + "단(직접 고름)" : "자동"; }
 
 function 선택글() {
   var 공 = window.옛한글OCR공용;
-  return 공 ? (공.모델() === "hanmun" ? "근대 국한문" : "근대 순한글") + " · 단 " + 단글(공.단()) : "";
+  return 공 ? (공.모델() === "hanmun" ? "근대 국한문" : "근대 순한글") + " · 단 " + 단글(공.단()) + " · 띄어쓰기 " + (공.띄움() ? "자동 감지" : "끔") : "";
 }
 
 function 로그쓰기(줄들) {

@@ -110,7 +110,7 @@ function 로그단추(공) {
 
 // ── 공용 도구 줄 — 인식 · 교정 · 영역 지정 단추를 한 줄에 모으고, 옆의 '설정' 메뉴에 모델 · 단을 둠 ──
 // ⚠ `소도구.js` 와 `전사대조.js` 에 **같은 꼴**로 들어 있음 — 한쪽을 고치면 다른 쪽도(어느 쪽이 먼저 떠도 한 줄을 같이 씀)
-// 고른 값은 `window.옛한글OCR공용.모델()` · `.단()` 으로 읽음 — 모델 "hangul"(근대 순한글, 기본) | "hanmun"(근대 국한문, 서버판만) ·
+// 고른 값은 `window.옛한글OCR공용.모델()` · `.단()` 으로 읽음 — 모델 "hangul"(근대 순한글) | "hanmun"(근대 국한문) ·
 // 단 null(자동 — 파일을 살펴 정한 값) | 1~5
 function 공용도구() {
   var 옛 = window.옛한글OCR공용;
@@ -160,6 +160,17 @@ function 공용도구() {
     칸.appendChild(행);
     return 고름;
   };
+  // 띄어쓰기 자동 감지 — 종이에 띄어쓰기가 없는 문헌에서 헛띄움이 생기면 끔(인식에만 해당)
+  var 띄움행 = 만들기("div", "", "display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin:4px 0");
+  var 띄움칸 = document.createElement("input");
+  띄움칸.type = "checkbox";
+  띄움칸.checked = true;
+  var 띄움글 = 만들기("label", "", "display:inline-flex;gap:6px;align-items:center");
+  띄움글.appendChild(띄움칸);
+  띄움글.appendChild(document.createTextNode("띄어쓰기 자동 감지"));
+  띄움행.appendChild(만들기("span", "", "min-width:3.2em"));
+  띄움행.appendChild(띄움글);
+  띄움행.appendChild(만들기("span", "인식 결과에 띄어쓰기를 넣습니다. 띄어쓰기 없이 찍은 문헌에서 엉뚱한 곳이 띄어지면 끄세요.", "font-size:12px;color:#72777d"));
   var 모델선택 = 항목("모델", [["hangul", "근대 순한글"], ["hanmun", "근대 국한문"]],
                     "한글로만 된 문헌일 경우 순한글을 선택하는 것이 정확도가 높습니다.");
   var 단선택 = 항목("단", [["auto", "자동"], ["1", "1단"], ["2", "2단"], ["3", "3단"], ["4", "4단"], ["5", "5단"]],
@@ -170,6 +181,7 @@ function 공용도구() {
     var 글 = [];
     if (모델선택.value !== "hangul") 글.push("국한문");
     if (단선택.value !== "auto") 글.push(단선택.value + "단");
+    if (!띄움칸.checked) 글.push("띄어쓰기 끔");
     설정단추.textContent = "설정 ▾" + (글.length ? " (" + 글.join(" · ") + ")" : "");
     설정단추.setAttribute("aria-expanded", 칸.style.display !== "none" ? "true" : "false");
   };
@@ -188,6 +200,9 @@ function 공용도구() {
   }).catch(function () {});
   모델선택.addEventListener("change", function () { 저장("모델", 모델선택.value); 요약(); });
   단선택.addEventListener("change", function () { 저장("단", 단선택.value); 요약(); });
+  칸.appendChild(띄움행);
+  if (저장("띄움") === "끔") 띄움칸.checked = false;
+  띄움칸.addEventListener("change", function () { 저장("띄움", 띄움칸.checked ? "켬" : "끔"); 요약(); });
   설정단추.addEventListener("click", function () {
     칸.style.display = 칸.style.display === "none" ? "block" : "none";
     요약();
@@ -202,6 +217,7 @@ function 공용도구() {
     뿌리: 뿌리, 줄: 줄, 로그묶음: 로그묶음,
     모델: function () { return (모델선택.value === "hanmun" && !한문칸.disabled) ? "hanmun" : "hangul"; },
     단: function () { return 단선택.value === "auto" ? null : parseInt(단선택.value, 10); },
+    띄움: function () { return 띄움칸.checked; },
   });
 }
 
@@ -218,14 +234,13 @@ function 단글(단) { return 단 ? 단 + "단(직접 고름)" : "자동"; }
 
 function 선택글() {
   var 공 = window.옛한글OCR공용;
-  return 공 ? (공.모델() === "hanmun" ? "근대 국한문" : "근대 순한글") + " · 단 " + 단글(공.단()) : "";
+  return 공 ? (공.모델() === "hanmun" ? "근대 국한문" : "근대 순한글") + " · 단 " + 단글(공.단()) + " · 띄어쓰기 " + (공.띄움() ? "자동 감지" : "끔") : "";
 }
 
 /**
  * 편집 중인 쪽의 파일 이름과 쪽 번호. "페이지:셩경젼셔 신약.pdf/393" → {파일, 쪽: 393}
  * ⚠ 이름공간 이름은 언어마다 달라 `wgCanonicalNamespace` 로 확인
- * ⚠ 순서대로 편집(`prp_editinsequence`)은 쪽을 옮겨도 `mw.config` 를 안 바꾸고 `location.hash` 에
- *   "페이지:파일/쪽" 만 적음 → 그때는 hash 를 먼저 봄
+ * 순서대로 편집(`prp_editinsequence`)은 쪽을 옮겨도 `mw.config` 를 안 바꾸고 `location.hash` 에 "페이지:파일/쪽" 만 적음 → 그때는 hash 를 먼저 봄
  */
 function 순서편집제목() {
   if (!/[?&]prp_editinsequence=(1|true|yes|on)(&|$)/i.test(location.search)) return null;
@@ -301,7 +316,7 @@ async function 읽기시작() {
     재기("판형 살피기", t);
     알림("서버에서 문자를 인식하는 중…");
     var t1 = performance.now();
-    r = await 서버로("api/read", { file: 쪽.파일, page: 쪽.쪽, model: 고른모델, tiers: 고른단 || "auto" });
+    r = await 서버로("api/read", { file: 쪽.파일, page: 쪽.쪽, model: 고른모델, tiers: 고른단 || "auto", spacing: 공.띄움() });
     살핀 = 단바꾸기(살핀, 고른단);
     재기("인식(서버 왕복)", t1);
     if (r.초 !== undefined) 때["└ 서버 셈"] = r.초 * 1000;

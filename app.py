@@ -24,7 +24,7 @@
   GET  /api/tables?model=   그 모델의 글자표(영역 지정 화면이 번호를 글자로 바꿈)
   GET  /api/health          모델 · 판 정보
   ★ read · compare · boxes 는 선택 값 둘을 더 받음 — model("hangul" 근대 순한글 · 기본 / "hanmun" 근대 국한문),
-    tiers(몇 단짜리인지 — 없으면 "자동": 파일을 살펴 정한 값)
+    tiers(몇 단짜리인지 — 없으면 "자동": 파일을 살펴 정한 값), spacing(/api/read 만 — false 면 띄어쓰기 자동 감지를 끔)
 """
 import hashlib
 import json
@@ -339,7 +339,7 @@ class 손님오류(Exception):
         self.코드, self.덧 = 코드, 덧 or {}
 
 
-def 읽기(파일, 쪽, 문턱=표시문턱, 모델이름=None, 단=None):
+def 읽기(파일, 쪽, 문턱=표시문턱, 모델이름=None, 단=None, 띄움=True):
     """OCR 한 쪽 — 브라우저판 `읽기.js` 의 `한쪽` 과 같은 셈(파이썬 정본으로)."""
     s = 단바꾸기(살핀값(파일), 단)
     모델 = 모델얻기(모델이름)
@@ -352,7 +352,7 @@ def 읽기(파일, 쪽, 문턱=표시문턱, 모델이름=None, 단=None):
     with 계산:
         geo = scan.page_geometry(ip, r, 단, 읽기=True, 가장자리=True, 표준자간=표준)
         등급, 까닭 = page.쪽건강(None, geo, 표준=s.get("판짜임"))
-        줄들 = align.read_page_lines(모델, geo, 3, 띄움=align.SPACE) if geo is not None else []
+        줄들 = align.read_page_lines(모델, geo, 3, 띄움=align.SPACE and 띄움) if geo is not None else []
     n = sum(len(z[0]) for z in 줄들)
     if not n:
         return dict(판정=dict(등급="못씀" if geo is None else 등급, 까닭=까닭 or ["읽어 내지 못했습니다"]),
@@ -531,7 +531,7 @@ def app(env, start):
         파일, 쪽 = _파일쪽(몸)
         if 경로 == "/api/read":
             문턱 = float(몸.get("threshold") or 표시문턱)
-            return _응답(start, 읽기(파일, 쪽, 문턱, 몸.get("model"), 몸.get("tiers")))
+            return _응답(start, 읽기(파일, 쪽, 문턱, 몸.get("model"), 몸.get("tiers"), 몸.get("spacing") is not False))
         if 경로 == "/api/compare":
             본문 = 몸.get("text") if 몸.get("text") is not None else 몸.get("본문")
             if not isinstance(본문, str):
