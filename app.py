@@ -21,6 +21,7 @@
   POST /api/compare         {file, page, text}      → 전사대조 결과
   POST /api/boxes           {file, page, boxes}     → 상자마다 글자(영역 지정 화면)
   POST /api/edge            {file, page, x0, x1}    → 열의 글자 경계 확률(영역 지정 화면)
+  POST /api/area-read       {file, page, ratio, width, height, model} → 쪽 전체의 글자·확신·상자(영역 지정 화면)
   GET  /api/tables?model=   그 모델의 글자표(영역 지정 화면이 번호를 글자로 바꿈)
   GET  /api/health          모델 · 판 정보
   ★ read · compare · boxes 는 선택 값 둘을 더 받음 — model("hangul" 근대 순한글 · 기본 / "hanmun" 근대 국한문),
@@ -385,6 +386,37 @@ def 맞대기(파일, 쪽, 본문, 모델이름=None, 단=None):
     return 답
 
 
+def 영역자동읽기(파일, 쪽, 자간비=None, 모델이름=None, 너비확인=None, 높이확인=None):
+    """영역 화면의 한 단 자동 읽기. 자간비는 화면에서 고른 값이며 파일 판형은 재지 않는다."""
+    모델 = 모델얻기(모델이름)
+    try:
+        r = float(자간비) if 자간비 is not None else scan.YX_RATIO
+    except (TypeError, ValueError):
+        raise 손님오류("ratio(자간비)는 양수여야 합니다")
+    if not np.isfinite(r) or r <= 0:
+        raise 손님오류("ratio(자간비)는 양수여야 합니다")
+    im, _ = 그림(파일, 쪽)
+    if ((너비확인 is not None and 너비확인 != im.width) or
+            (높이확인 is not None and 높이확인 != im.height)):
+        raise 손님오류("서버와 화면의 스캔 크기가 다릅니다 — 쪽을 다시 불러오세요")
+    t0 = time.time()
+    with 계산:
+        geo = scan.page_geometry(스캔(파일, 쪽), r, 1, 읽기=True, 가장자리=True)
+        줄들 = []
+        if geo is not None:
+            열들 = align.열마다읽기(모델, geo, 3)
+            남 = align.가장자리다듬기(geo, 열들) if geo.get("가장자리") else range(len(열들))
+            for i in 남:
+                if 열들[i] is None:
+                    continue
+                _, 글자, 확신, 상자, _ = 열들[i]
+                남길 = [j for j, c in enumerate(글자) if c not in align.PUNCT_DROP]
+                줄들.append(dict(글자=[글자[j] for j in 남길],
+                                  확신=[float(확신[j]) for j in 남길],
+                                  상자=[[int(v) for v in 상자[j]] for j in 남길]))
+    return dict(줄들=줄들, 너비=im.width, 높이=im.height, 초=round(time.time() - t0, 3))
+
+
 def 상자읽기(파일, 쪽, 상자들, 모델이름=None):
     모델 = 모델얻기(모델이름)
     im, _ = 그림(파일, 쪽)
@@ -541,6 +573,8 @@ def app(env, start):
             if len(상자) > 20000:
                 raise 손님오류("상자가 너무 많습니다")
             return _응답(start, 상자읽기(파일, 쪽, 상자, 몸.get("model")))
+        if 경로 == "/api/area-read":
+            return _응답(start, 영역자동읽기(파일, 쪽, 몸.get("ratio"), 몸.get("model"), 몸.get("width"), 몸.get("height")))
         if 경로 == "/api/edge":
             return _응답(start, 경계읽기(파일, 쪽, int(몸["x0"]), int(몸["x1"])))
         return _응답(start, {"오류": "없는 주소"}, 404)

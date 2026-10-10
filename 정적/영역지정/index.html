@@ -631,9 +631,19 @@ $("autoBtn").onclick = async () => {
   바쁨 = true;
   try {
     await 준비();
-    알림("쪽 전체를 읽는 중… (몇 초)");
+    알림("쪽 전체를 읽는 중…");
     const t0 = performance.now();
-    const 열들 = await 영역읽기.쪽전체(모델, st.g, 옵션().자간비);
+    let 열들;
+    if (서버) {
+      const 답 = await 서버로("api/area-read", {
+        file: st.file, page: st.page || 1, model: 모델이름,
+        ratio: 옵션().자간비, width: st.g.너비, height: st.g.높이,
+      });
+      if (답.너비 !== st.g.너비 || 답.높이 !== st.g.높이) throw new Error("서버와 화면의 스캔 크기가 다릅니다 — 쪽을 다시 불러오세요");
+      열들 = 답.줄들;
+    } else {
+      열들 = await 영역읽기.쪽전체(모델, st.g, 옵션().자간비);
+    }
     st.조각 = st.조각.filter(p => p.방식 !== "자동");
     열들.forEach(z => 조각더하기("자동", z, null));
     st.고름 = null;
