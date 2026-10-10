@@ -22,8 +22,8 @@ function 확실(c) { return c.합의 !== false && c.갈래 !== "빠짐" && c.갈
 function 보일것(c) { return 어긋남보기 || 확실(c); }
 function 바꿀수(c) { return (c.갈래 === "바뀜" || c.갈래 === "모르는자모") && c.스캔; }
 
-var 이름 = { "바뀜": "글자가 다름", "모르는자모": "모르는 자모", "깨진글자": "깨진 글자", "빠짐": "스캔에 글자가 더 있음", "더들어감": "전사문에 글자가 더 있음" };
-var 색 = { "바뀜": "rgba(255,80,80,.40)", "모르는자모": "rgba(255,160,0,.40)", "깨진글자": "rgba(170,80,255,.38)", "빠짐": "rgba(80,140,255,.35)", "더들어감": "rgba(80,140,255,.35)" };
+var 이름 = { "바뀜": "글자가 다름", "모르는자모": "모르는 자모", "깨진글자": "깨진 글자", "누락": "전사문에 글자 누락 의심", "빠짐": "스캔에 글자가 더 있음", "더들어감": "전사문에 글자가 더 있음" };
+var 색 = { "바뀜": "rgba(255,80,80,.40)", "모르는자모": "rgba(255,160,0,.40)", "깨진글자": "rgba(170,80,255,.38)", "누락": "rgba(80,140,255,.35)", "빠짐": "rgba(80,140,255,.35)", "더들어감": "rgba(80,140,255,.35)" };
 
 function 알림(t) { if (상태) 상태.textContent = t; }
 
@@ -147,7 +147,7 @@ function 공용도구() {
   띄움행.appendChild(만들기("span", "", "min-width:3.2em"));
   띄움행.appendChild(띄움글);
   띄움행.appendChild(만들기("span", "인식 결과에 띄어쓰기를 넣습니다. 띄어쓰기 없이 찍은 문헌에서 엉뚱한 곳이 띄어지면 끄세요.", "font-size:12px;color:#72777d"));
-  var 모델선택 = 항목("모델", [["hangul", "근대 순한글"], ["hanmun", "근대 국한문 (시험 중)"]],
+  var 모델선택 = 항목("모델", [["hangul", "근대 순한글"], ["hanmun", "근대 국한문"]],
                     "한글로만 된 문헌일 경우 순한글을 선택하는 것이 정확도가 높습니다.");
   var 단선택 = 항목("단", [["auto", "자동"], ["1", "1단"], ["2", "2단"], ["3", "3단"], ["4", "4단"], ["5", "5단"]],
                   "자동을 선택하면 파일을 처음 열 때 쪽을 몇 장 받아 살펴 정합니다.");
@@ -415,6 +415,7 @@ function 따라가기() {
   var 옛끝 = 옛.length - b, 차 = 새.length - 옛.length;
   후보들.forEach(function (c) {
     if (c.끝남) return;
+    if (c.갈래 === "누락" && a <= c.시작 && c.시작 <= 옛끝) { c.끝남 = "손댐"; return; }
     if (c.끝 <= a) return;
     if (c.시작 >= 옛끝) { c.시작 += 차; c.끝 += 차; return; }
     c.끝남 = "손댐";
@@ -446,7 +447,7 @@ function 자리보기(c) {
     var y = 위치재기(상자, c.시작);
     상자.scrollTop = Math.max(0, y - 상자.clientHeight / 3);
     상자.focus({ preventScroll: true });
-    상자.setSelectionRange(c.시작, Math.max(c.끝, c.시작 + 1));
+    상자.setSelectionRange(c.시작, c.갈래 === "누락" ? c.시작 : Math.max(c.끝, c.시작 + 1));
     상자.scrollTop = Math.max(0, y - 상자.clientHeight / 3);
   }
   if (깔개) 깔개.그리기();
@@ -541,7 +542,7 @@ function 줄그리기(몸, c, k) {
     본.appendChild(document.createTextNode(c.앞));
     var b = document.createElement("b");
     b.style.cssText = "background:" + 색[c.갈래];
-    b.textContent = c.전사;
+    b.textContent = c.갈래 === "누락" ? "〔" + c.스캔 + " 누락?〕" : c.전사;
     본.appendChild(b);
     본.appendChild(document.createTextNode(c.뒤));
     if (c.갈래 === "바뀜" || c.갈래 === "모르는자모") {
@@ -556,6 +557,7 @@ function 줄그리기(몸, c, k) {
       설.style.cssText = "margin-left:14px;color:#54595d;font-size:13px";
       설.textContent = c.갈래 === "빠짐" ? "이 근처에서 전사문에 글자가 " + c.칸 + "자 빠졌을 수 있습니다"
                                        : "이 근처에서 전사문에 글자가 " + c.칸 + "자 더 들어갔을 수 있습니다";
+      if (c.갈래 === "누락") 설.textContent = "이 사이에 " + c.칸 + "글자 누락 의심 · 스캔: " + c.스캔 + " · 다음 글자 앞을 표시했습니다";
       본.appendChild(설);
     }
     글.appendChild(머리); 글.appendChild(본);
