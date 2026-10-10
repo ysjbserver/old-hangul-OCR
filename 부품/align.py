@@ -543,6 +543,7 @@ def _줄읽기(mdl, geo, x0, x1, y0, y1):
         return None
     a, b = r
     최고 = None
+    후보, 상자들 = [], []
     for hm in BUNJU_H:
         h = geo["pitch"] * hm
         n = max(1, int(round((b - a) / h)))
@@ -550,7 +551,13 @@ def _줄읽기(mdl, geo, x0, x1, y0, y1):
         if not cuts:
             cuts = [int(a + (b - a) * k / n) for k in range(n + 1)]
         bx = [(x0, p, x1, q) for p, q in zip(cuts[:-1], cuts[1:])]
-        pL, pV, pT, cf = mdl.read(geo["image"], bx)
+        후보.append((n, bx, len(상자들)))
+        상자들.extend(bx)
+    # 후보 순서와 점수 계산은 유지하고 모델 호출만 묶는다.
+    전체L, 전체V, 전체T, 전체cf = mdl.read(geo["image"], 상자들)
+    for n, bx, 시작 in 후보:
+        끝 = 시작 + len(bx)
+        pL, pV, pT, cf = (v[시작:끝] for v in (전체L, 전체V, 전체T, 전체cf))
         lg = np.log(np.clip(cf, 1e-6, None))
         if 최고 is None or lg.mean() > 최고[0] / len(최고[1]):
             최고 = (float(lg.sum()), [mdl.letter(pL[j], pV[j], pT[j]) for j in range(n)], [float(c) for c in cf], bx)
@@ -564,6 +571,13 @@ def 분주읽기(mdl, geo, out):
     로그 확신 평균이 `BUNJU_GAIN` 넘게 낫고 기하평균 확신이 `BUNJU_CONF` 넘을 때만 바꾼다(전사문 `{{분주|오른|왼}}` 차례와 같음).
     `out` 을 제자리에서 고친다. 열 점수(첫 값)는 그대로.
     """
+    if hasattr(mdl, "그림고정"):
+        with mdl.그림고정(geo["image"]):
+            return _분주읽기(mdl, geo, out)
+    return _분주읽기(mdl, geo, out)
+
+
+def _분주읽기(mdl, geo, out):
     g = np.asarray(geo["image"])
     for i, o in enumerate(out):
         if o is None or not geo["spans"][i]:

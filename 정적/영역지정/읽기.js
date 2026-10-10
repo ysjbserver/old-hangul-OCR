@@ -605,6 +605,22 @@ function 광곽(g, cols, 읽기) {
     if (ga[0] !== null && T < ga[0] && ga[0] < T + H * 0.1) T = ga[0];
     if (ga[1] !== null && B - H * 0.1 < ga[1] && ga[1] < B) B = ga[1];
   }
+  if (읽기 && B기본) { // 기본 아래끝을 여러 본문 열이 가로지르면 마지막 글자를 함께 읽는다.
+    const W = g.너비;
+    const w = Math.max(1, 자름(중앙값(cols.map(c => c[1] - c[0]))));
+    let near = 0;
+    for (const c of cols) {
+      const p = new Float64Array(H);
+      for (let y = Math.max(T, B - w); y < Math.min(H, B + w); y++) {
+        for (let x = c[0]; x < c[1]; x++) if (g.값[y * W + x] < INK) p[y]++;
+      }
+      let above = 0, below = 0;
+      for (let y = Math.max(T, B - w); y < B; y++) if (p[y] > (c[1] - c[0]) * GLYPH) above++;
+      for (let y = B; y < Math.min(H, B + w); y++) if (p[y] > (c[1] - c[0]) * GLYPH) below++;
+      if (above >= w * 0.15 && below >= w * 0.15) near++;
+    }
+    if (near >= Math.max(3, cols.length * 0.3)) B = H;
+  }
   if (B - T < H * 0.4) { T = 자름(H * 0.06); B = 자름(H * 0.95); }
   return [T, B];
 }
@@ -736,13 +752,24 @@ function 이어잡기(p, a, b, w, T, B, pitch) {
  * `scan.spans_between` — T~B 안에서 열마다 글자가 시작하고 끝나는 y.
  * 뒷면 비침·계선 때문에 열 폭의 GLYPH 이상이 잉크인 줄만 글자 줄로 봄
  */
-function 글자구간(prof, cols, T, B, pitch, 이어, 첫글자) {
+function 글자구간(prof, cols, T, B, pitch, 이어, 첫글자, 꼬리선) {
   const Ts = Array.isArray(T) ? T : cols.map(function () { return T; });   // 열마다 목록이어도 됨(`열광곽`)
   const Bs = Array.isArray(B) ? B : cols.map(function () { return B; });
   const spans = cols.map(function (c, i) {
     const p = prof[i], need = (c[1] - c[0]) * GLYPH, t = Ts[i], bb = Bs[i];
     let a = -1, b = -1;
-    for (let y = t; y < bb; y++) if (p[y] > need) { if (a < 0) a = y; b = y; }
+    const hit = [];
+    for (let y = t; y < bb; y++) if (p[y] > need) { if (a < 0) a = y; b = y; if (꼬리선) hit.push(y); }
+    // 본문과 멀리 떨어진 아래쪽의 얇고 넓은 가로줄만 뺀다.
+    if (꼬리선 && hit.length > 1) {
+      let k = -1;
+      for (let j = 1; j < hit.length; j++) if (hit[j] - hit[j - 1] > pitch * 3) k = j;
+      if (k > 0 && hit[k] > p.length * 0.8 && hit[hit.length - 1] - hit[k] < pitch * 0.15) {
+        let sum = 0;
+        for (let j = k; j < hit.length; j++) sum += p[hit[j]];
+        if (sum / (hit.length - k) > (c[1] - c[0]) * 0.8) b = hit[k - 1];
+      }
+    }
     if (a < 0) return null;
     return (이어 && SPAN_EXTEND) ? 이어잡기(p, a, b + 1, c[1] - c[0], t, bb, pitch) : [a, b + 1];
   });
@@ -1172,7 +1199,8 @@ function 쪽기하(g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, �
   } else {
     let TT = T, BB = B;
     if (쪽광곽) { const 열TB = 열광곽(g, cols0, T, B, xpitch, pitch); TT = 열TB[0]; BB = 열TB[1]; }
-    spans = 글자구간(prof, cols0, TT, BB, pitch, !!읽기, !!읽기);
+    const 꼬리선 = !!읽기 && !쪽광곽 && !cols0.slice(0, -1).some((a, i) => 세로줄있나(g, (a[0] + a[1]) / 2, (cols0[i + 1][0] + cols0[i + 1][1]) / 2, T, B));
+    spans = 글자구간(prof, cols0, TT, BB, pitch, !!읽기, !!읽기, 꼬리선);
     cols = cols0; sm = sm0;
   }
   if (spans && 찾.짧은열 && 찾.짧은열.length && !div) {
@@ -1941,6 +1969,7 @@ async function 줄읽기(모델, geo, x0, x1, y0, y1) {
   if (r === null || r[1] - r[0] < geo.pitch * 0.3) return null;
   const a = r[0], b = r[1];
   let 최고 = null;
+  const 후보 = [], 상자들 = [];
   for (let hi = 0; hi < BUNJU_H.length; hi++) {
     const h = geo.pitch * BUNJU_H[hi];
     const n = Math.max(1, 반올림((b - a) / h));
@@ -1951,7 +1980,13 @@ async function 줄읽기(모델, geo, x0, x1, y0, y1) {
     }
     const bx = [];
     for (let k = 0; k + 1 < cuts.length; k++) bx.push([x0, cuts[k], x1, cuts[k + 1]]);
-    const 읽 = await 모델.읽기(g, bx);
+    후보.push({ n, bx, 시작: 상자들.length });
+    상자들.push(...bx);
+  }
+  const 전체 = await 모델.읽기(g, 상자들);
+  for (const { n, bx, 시작 } of 후보) {
+    const 읽 = {};
+    for (const 이름 of ['초', '중', '종', '확신']) 읽[이름] = 전체[이름].slice(시작, 시작 + bx.length);
     let s = 0;
     for (let j = 0; j < bx.length; j++) s += Math.log(Math.max(읽.확신[j], 1e-6));
     if (최고 === null || s / bx.length > 최고.합 / 최고.글.length) {

@@ -516,6 +516,15 @@ def page_frame(g, cols, 읽기=False):
             T = 위
         if 아래 is not None and B - H * 0.1 < 아래 < B:
             B = 아래
+    if 읽기 and B기본:
+        # 기본 아래끝을 여러 본문 열이 가로지르면 마지막 글자를 함께 읽는다.
+        w = max(1, int(np.median([b - a for a, b in cols])))
+        near = 0
+        for a, b in cols:
+            p = (g[:, a:b] < INK).sum(axis=1)
+            near += int(np.count_nonzero(p[max(T, B - w):B] > (b - a) * GLYPH) >= w * 0.15 and np.count_nonzero(p[B:min(H, B + w)] > (b - a) * GLYPH) >= w * 0.15)
+        if near >= max(3, len(cols) * 0.3):
+            B = H
     if B - T < H * 0.4:
         T, B = int(H * 0.06), int(H * 0.95)
     return T, B
@@ -640,7 +649,7 @@ def _이어잡기(p, a, b, w, T, B, pitch):
     return a, 끝
 
 
-def spans_between(prof, cols, T, B, pitch, 이어=False, 첫글자=False):
+def spans_between(prof, cols, T, B, pitch, 이어=False, 첫글자=False, 꼬리선=False):
     """
     T~B 안에서 열마다 글자가 실제로 시작하고 끝나는 y 범위.
 
@@ -655,6 +664,14 @@ def spans_between(prof, cols, T, B, pitch, 이어=False, 첫글자=False):
     for i, (x0, x1) in enumerate(cols):
         p, t, b = prof[i], Ts[i], Bs[i]
         hit = np.where(p[t:b] > (x1 - x0) * GLYPH)[0]
+        # 본문과 멀리 떨어진 아래쪽의 얇고 넓은 가로줄은 글자 구간에서 뺀다.
+        if 꼬리선 and len(hit) > 1:
+            gaps = np.flatnonzero(np.diff(hit) > pitch * 3)
+            if len(gaps):
+                k = int(gaps[-1]) + 1
+                tail = hit[k:]
+                if t + tail[0] > len(p) * 0.8 and tail[-1] - tail[0] < pitch * 0.15 and np.mean(p[t + tail]) > (x1 - x0) * 0.8:
+                    hit = hit[:k]
         s = None if len(hit) == 0 else (t + int(hit[0]), t + int(hit[-1]) + 1)
         if s and 이어 and SPAN_EXTEND:
             s = _이어잡기(p, s[0], s[1], x1 - x0, t, b, pitch)
@@ -1173,7 +1190,7 @@ def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 
         TT, BB = T, B
         if 쪽광곽:
             TT, BB = _열광곽(g, cols, T, B, xpitch, pitch)
-        spans = spans_between(prof, cols, TT, BB, pitch, 이어=이어, 첫글자=bool(읽기))
+        spans = spans_between(prof, cols, TT, BB, pitch, 이어=이어, 첫글자=bool(읽기), 꼬리선=bool(읽기) and not 쪽광곽 and not any(세로줄있나(g, (a[0] + a[1]) / 2, (b[0] + b[1]) / 2, T, B) for a, b in zip(cols[:-1], cols[1:])))
         sm = [smooth(p, max(2.0, pitch / 9)) for p in prof]
     if spans and 정보.get("짧은열") and not div:
         for i, c in enumerate(cols):

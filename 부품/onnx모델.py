@@ -14,6 +14,7 @@ ONNX 로 읽는 모델 — torch 없이 도는 곳(Toolforge 서버)에서 `ocr.
 import hashlib
 import json
 import os
+from contextlib import contextmanager
 
 import numpy as np
 from PIL import Image
@@ -63,11 +64,27 @@ class 모델:
                                  .resize((self.size, self.size)), dtype=np.float32)
         return (X / 255 - 0.5) / 0.5
 
+    def _그림열쇠(self, im):
+        고정 = getattr(self, "_고정그림", None)
+        if 고정 is not None and 고정[0] is im:
+            return 고정[1]
+        return (im.size, im.mode, hashlib.blake2b(im.tobytes(), digest_size=16).digest())
+
+    @contextmanager
+    def 그림고정(self, im):
+        """그림을 바꾸지 않는 계산 구간에서만 내용 해시를 재사용한다. 모델 계산 잠금 안에서 사용."""
+        이전 = getattr(self, "_고정그림", None)
+        self._고정그림 = (im, self._그림열쇠(im))
+        try:
+            yield
+        finally:
+            self._고정그림 = 이전
+
     def _머리들(self, im, boxes, batch):
         # 뭉치는 self.뭉치 를 넘지 않게 — 크면 ORT 중간값 메모리가 커짐. 결과는 안 바뀜.
         batch = min(batch, self.뭉치)
         # 같은 상자는 한 번만 읽음 — 부름 사이에도 기억(그림 내용이 열쇠, 마지막 그림 하나만). 결과는 그대로.
-        열쇠그림 = (im.size, im.mode, hashlib.blake2b(im.tobytes(), digest_size=16).digest())
+        열쇠그림 = self._그림열쇠(im)
         if self._기억[0] != 열쇠그림:
             self._기억 = (열쇠그림, {})
         기억 = self._기억[1]
@@ -150,7 +167,7 @@ class 혼용모델(모델):
     def _머리들(self, im, boxes, batch):
         # 마지막 그림 하나의 (갈래 · 초 · 중 · 종 · 한자 위 64개 번호 · 확률)을 상자별로 기억 — 부름 사이에도(옛한글 모델과 같은 까닭)
         batch = min(batch, self.뭉치)
-        열쇠그림 = (im.size, im.mode, hashlib.blake2b(im.tobytes(), digest_size=16).digest())
+        열쇠그림 = self._그림열쇠(im)
         if self._기억[0] != 열쇠그림:
             self._기억 = (열쇠그림, {})
         기억 = self._기억[1]
