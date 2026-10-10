@@ -223,6 +223,41 @@ def 쪽자간기하(slug, ip, 설정=None):
     return scan.page_geometry(ip, 쪽, 단, False, False, None, 끝띠=True)
 
 
+def 본문기하(geo):
+    """양쪽 바깥의 긴 세로선 안에서 본문 잉크가 있는 열만 남긴 추가 후보.
+
+    한 단 판형에만 적용하며 열 좌표·구간·자간은 그대로 유지한다.
+    원래 기하와 비교해 더 잘 맞는 후보만 사용해야 한다.
+    """
+    if geo is None or geo["단"] != 1:
+        return None
+    g = np.asarray(geo["image"])
+    h, w = g.shape
+    rows = g[int(h * 0.2):int(h * 0.8)]
+    xs = np.flatnonzero((rows < 160).mean(0) >= 0.6)
+    groups = np.split(xs, np.flatnonzero(np.diff(xs) > 1) + 1)
+    groups = [z for z in groups if len(z) >= 3]
+    left = [z for z in groups if z[-1] < w * 0.2]
+    right = [z for z in groups if z[0] > w * 0.8]
+    if not left or not right:
+        return None
+    a, b = int(left[-1][-1]) + 1, int(right[0][0])
+    keep = []
+    for i, (x0, x1) in enumerate(geo["cols"]):
+        if not a < (x0 + x1) / 2 < b:
+            continue
+        ink = (rows[:, x0:x1] < scan.INK).sum(1)
+        if np.count_nonzero(ink > max(2, (x1 - x0) * 0.08)) >= geo["pitch"] * 0.5:
+            keep.append(i)
+    if len(keep) < 3 or len(keep) == len(geo["cols"]):
+        return None
+    out = geo.copy()
+    for key in ("cols", "crop_cols", "spans", "sm", "est"):
+        out[key] = [geo[key][i] for i in keep]
+    out["본문범위"] = [a, b]
+    return out
+
+
 def 기하(slug, ip, 읽기=False, 끝띠=False, 판심=None, 설정=None):
     """
     쪽 기하. 읽기=False 는 자르는 경로(`page.geometry(…, 읽기=False)`), True 는 읽는 경로의 기하(가장자리 후보 열 없음).
@@ -368,7 +403,8 @@ def 맞대기(mdl, geo, 글자들, span=3, 경계=False):
     일치 = r["일치"]
     열순서 = {x: i for i, x in enumerate(sorted(set(열)))}
     열진단 = []
-    for x in sorted(열):
+    기하열 = {c[0]: i for i, c in enumerate(geo["crop_cols"])}
+    for x in sorted(set(열)):
         js = [j for j in range(n) if 열[j] == x]
         알려진 = [j for j in js if 아는[j]]
         맞은 = sum(bool(같음[j]) for j in 알려진)
@@ -378,7 +414,7 @@ def 맞대기(mdl, geo, 글자들, span=3, 경계=False):
             첫상자=int(min(js)), 마지막상자=int(max(js)),
             상자범위=[int(min(boxes[j][0] for j in js)), int(max(boxes[j][2] for j in js)),
                       int(min(boxes[j][1] for j in js)), int(max(boxes[j][3] for j in js))],
-            예상칸=(int(geo["est"][열순서[x]]) if 열순서[x] < len(geo.get("est", [])) else None),
+            예상칸=(int(geo["est"][기하열[x]]) if x in 기하열 else None),
             흔들림=x in 흔들린열))
     상자진단 = []
     for i, b in enumerate(boxes):
@@ -484,7 +520,8 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     (일치가 `다시볼일치` 에 닿으면 그만).
     기하들의 원소: False = 자르는 기하 · True = 읽는 기하 · "끝띠" = 제본 그림자 띠를 지운 자르는 기하 ·
     "판심" = 판심 걸러내기를 끈 읽는 기하 · "쪽자간" = 이 쪽 그림으로 잰 자간비로 자른 끝띠 기하(`쪽자간기하`).
-    뒤의 셋은 후보로만 — 앞 기하와 같으면(띠 · 뗀 판심 열이 없으면) 건너뜀.
+    "본문" = 읽는 기하의 좌표를 유지하고 광곽 밖·빈 열을 제외한 후보(`본문기하`).
+    추가 후보들은 앞 기하와 같으면 건너뛰며 더 잘 맞을 때만 선택한다.
     큰빼기 = 큰 활자 틀(`{{더크게|에스라}}` 같은 책 이름) 안 글자를 빼고 맞대기. None 이면 그대로 해 보고, 일치가 모자라고
     원문에 큰 활자 틀이 있으면 빼고도 해 봐서 잘 맞는 쪽.
     """
@@ -509,10 +546,11 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
         for 판 in 기하들:
             if best and (best[0].get("일치") or 0) >= 다시볼일치:
                 break                             # 자르는 기하로 잘 맞았으면 그만
-            if 판 == "쪽자간":
-                if "쪽자간" not in 본열:
-                    본열["쪽자간"] = 쪽자간기하(slug, ip, 설정)
-                geo = 본열["쪽자간"]
+            if 판 in ("쪽자간", "본문"):
+                if 판 not in 본열:
+                    본열[판] = (쪽자간기하(slug, ip, 설정) if 판 == "쪽자간" else
+                                본문기하(본열.get("읽기자료") or 기하(slug, ip, True, 설정=설정)))
+                geo = 본열[판]
                 if geo is None:
                     continue
                 이전 = None
@@ -522,8 +560,10 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                         continue
                     이전 = len(글자들)
                     r = 맞대기(mdl, geo, 글자들, 경계=경계)
-                    r["기하"], r["제목"], r["큰빼기"] = "쪽자간", kh, 빼기
-                    시도기록.append(dict(기하="쪽자간", 제목=kh, 큰빼기=빼기, 경계=경계,
+                    r["기하"], r["제목"], r["큰빼기"] = 판, kh, 빼기
+                    if 판 == "본문":
+                        r["_본문기하"] = geo
+                    시도기록.append(dict(기하=판, 제목=kh, 큰빼기=빼기, 경계=경계,
                                       전사글자수=len(글자들), 일치=r.get("일치"),
                                       사유=r.get("사유"), 후보수=len(r.get("후보", [])),
                                       상세=기하요약(geo)))
@@ -547,6 +587,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                 continue                          # 뗀 판심 열이 없는 쪽 — 읽는 기하와 같음
             if 읽기 and not 판심:
                 본열["읽기"] = geo["cols"]
+                본열["읽기자료"] = geo
             if not 읽기 and not 끝띠:
                 본열["자르기"] = geo["cols"]
             이전 = None
@@ -571,7 +612,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     return best
 
 
-def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간"), 합의=True, 밀림=False, 깨진=False,
+def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문"), 합의=True, 밀림=False, 깨진=False,
          설정=None, 누락=True):
     """
     위키 원문(편집 상자의 본문) 한 쪽을 그 쪽 스캔과 맞댄다.
@@ -586,6 +627,7 @@ def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들
     반환 dict — 후보마다 원문 자리(시작 · 끝)와 그림(data: 주소)을 붙인다.
     """
     r, 글자들 = _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 설정=설정)
+    본문 = r.pop("_본문기하", None)
     if r.get("사유"):
         return r
     if not 밀림:
@@ -594,7 +636,7 @@ def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들
     낱 = [c for c in r["후보"] if c["갈래"] in 낱갈래]
     for c in r["후보"]:
         c["합의"] = c["갈래"] not in 낱갈래 or not 합의
-    for 이름, 옵 in (("B", dict(경계=True, 기하들=기하들)), ("C", dict(경계=True, 기하들=(True, "판심")))):
+    for 이름, 옵 in (("B", dict(경계=True, 기하들=기하들)), ("C", dict(경계=True, 기하들=(True, "판심", "본문")))):
         남은 = [c for c in 낱 if not c["합의"]]
         if not 합의 or not 남은:
             break
@@ -615,7 +657,7 @@ def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들
     # 글자 수를 전사문에 맞추지 않은 독립 읽기. 기존 밀림 후보는 계속 끈다.
     if 누락:
         import 누락대조
-        geo = 기하(slug, ip, 읽기=True, 설정=설정)
+        geo = 본문 if 본문 is not None else 기하(slug, ip, 읽기=True, 설정=설정)
         if geo is not None:
             for c in 누락대조.후보찾기(mdl, geo, 글자들, raw):
                 c["상자번호"] = -1
