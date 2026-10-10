@@ -1133,7 +1133,110 @@ def _글자폭몫(g, crop_cols, spans):
     return float(np.median(v)) if len(v) >= 3 else None
 
 
-def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 표준자간=None, 이어=None, 끝띠=None, 판심=None):
+def _빈띠(g, x0, x1, lo, hi, 최소):
+    """본문 폭 전체에 잉크가 거의 없는 연속 행. 좁은 글자 사이 빈틈은 제외한다."""
+    quiet = (g[:, x0:x1] < INK).mean(axis=1) < 0.003
+    out, start = [], None
+    for y in range(lo, hi + 1):
+        if y < hi and quiet[y]:
+            if start is None:
+                start = y
+        elif start is not None:
+            if y - start >= 최소:
+                out.append((start, y))
+            start = None
+    return out
+
+
+def 빈단경계(g):
+    """가름선 없는 두 단. 양쪽에 넓고 긴 본문이 있는 큰 빈 띠만 인정한다."""
+    h, w = g.shape
+    xp, cols = find_columns(g)
+    if not xp or len(cols) < 12:
+        return None
+    gaps = _빈띠(g, min(a for a, b in cols), max(b for a, b in cols),
+                 int(h * 0.25), int(h * 0.75), xp * 0.7)
+    if not gaps or 고랑곡선(g, cols, 채움=0.6)[int(h*0.25):int(h*0.75)].max(initial=0) >= 0.4:
+        return None                     # 가름선과 빈 띠가 함께 있는 복잡한 판형은 기존 경로에 맡긴다
+    found = []
+    for a, b in gaps:
+        panels = []
+        for lo, hi in ((0, a), (b, h)):
+            xx, cs = find_columns(g[lo:hi])
+            if not xx or len(cs) < 12:
+                break
+            long = 0
+            for l, r in cs:
+                hit = np.flatnonzero((g[lo:hi, l:r] < INK).sum(axis=1) > max(2, (r-l)*0.1))
+                if len(hit) and hit[-1] - hit[0] >= xx * 8:
+                    long += 1
+            if long < len(cs) * 0.65 or max(v for u, v in cs) - min(u for u, v in cs) < w * 0.65:
+                break
+            panels.append((lo, hi, xx, cs))
+        if len(panels) == 2:
+            found.append((a, b, panels))
+    # 큰 빈 띠가 여럿인 복잡한 판형은 자동으로 두 단으로 나누지 않는다.
+    return found[0] if len(found) == 1 else None
+
+
+def _빈단기하(path, g, ratio):
+    split = 빈단경계(g)
+    if split is None:
+        return None
+    a, b, panels = split
+    cols, crop_cols, spans, sm, est, pitches, ratios, counts = [], [], [], [], [], [], [], []
+    for lo, hi, xp, cs in panels:
+        x0, x1 = min(l for l, r in cs), max(r for l, r in cs)
+        # 넓고 진한 장식 바로 아래의 여백만 머리 경계로 쓴다. 작은 제목은 남긴다.
+        ink = (g[lo:hi, x0:x1] < INK).mean(axis=1)
+        top = lo
+        for s, e in _빈띠(g[lo:hi], x0, x1, int((hi-lo)*0.1), int((hi-lo)*0.3), xp*0.5):
+            if float(ink[max(0, s-int(xp)):s].max(initial=0)) > 0.35:
+                top = lo + e
+        prof = ink_profile(g, cs)
+        rough = spans_between(prof, cs, top, hi, xp * YX_RATIO)
+        if rough is None:
+            return None
+        crops = [(max(0, int((l+r)/2-xp*0.45)), min(g.shape[1], int((l+r)/2+xp*0.45))) for l, r in cs]
+        q = _글자폭몫(g, crops, rough)
+        gw = 0.9 * q if RATIO_FIT and q is not None else None
+        values = []
+        for p, sp in zip(prof, rough):
+            if sp is None or sp[1] - sp[0] < xp * 6:
+                continue
+            p = smooth(p, max(2.0, xp / 12))
+            best, bt = -1.0, None
+            for t in np.linspace(0.55, 1.45, 120):
+                score = _fold_contrast(p, sp[0], sp[1], xp*t)
+                if score > best:
+                    best, bt = score, float(t)
+            if gw and bt and bt > gw * RATIO_FIT_OVER:
+                best, bt = -1.0, None
+                for t in np.linspace(gw*RATIO_FIT[0], gw*RATIO_FIT[1], 120):
+                    score = _fold_contrast(p, sp[0], sp[1], xp*t)
+                    if score > best:
+                        best, bt = score, float(t)
+            elif bt and RATIO_HALF and bt/2 >= 0.55 and _fold_contrast(p, sp[0], sp[1], xp*bt/2) >= RATIO_HALF*best:
+                bt /= 2
+            if bt:
+                values.append(bt)
+        r = float(np.median(values)) if len(values) >= 3 else ratio
+        pitch = xp * r
+        sp = spans_between(prof, cs, top, hi, pitch, 이어=True, 첫글자=True)
+        if sp is None:
+            return None
+        cols.extend(cs); spans.extend(sp)
+        crop_cols.extend(crops)
+        sm.extend(smooth(p, max(2.0, pitch/9)) for p in prof)
+        est.extend(0 if s is None else max(1, int(round((s[1]-s[0])/pitch))) for s in sp)
+        pitches.append(pitch); ratios.append(r); counts.append(len(cs))
+    return dict(cols=cols, crop_cols=crop_cols, spans=spans, sm=sm, est=est,
+                pitch=float(np.median(pitches)), xpitch=float(np.median([p[2] for p in panels])),
+                단=2, 가장자리=False, 본열수=int(np.median(counts)), 빈단=[a, b],
+                단별자간비=ratios, 단별열수=counts, image=Image.open(path).convert('L'))
+
+
+def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 표준자간=None, 이어=None, 끝띠=None, 판심=None, 빈단=True):
     """
     쪽 이미지 → 열·글자 구간·세로 자간. 못 읽으면 None.
     무거운 계산은 여기 한 번뿐이고, 뒤 단계는 이 결과를 돌려쓴다.
@@ -1149,11 +1252,16 @@ def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 
     가장자리=False 는 후보를 안 붙인다(`to_text` 로 잴 때 — 겹친 후보를 가릴 장치가 없음).
     이어=None 이면 `읽기` 를 따른다. 이어=True 는 자를 때 가는 글자 이어 붙이기(`_이어잡기`)만 켠다(자동 라벨용).
     판심=False 는 판심 걸러내기만 끈다(가장자리 후보 없이).
+    빈단=True 는 읽기에서만 선 없는 두 단을 찾는다. 사람이 1단을 강제할 때는 False.
     """
     이어 = bool(읽기) if 이어 is None else bool(이어)
     g = np.array(Image.open(path).convert("L"))
     if isinstance(단, (list, tuple)):             # 가름줄 판형 — 위 `_가름판_geometry`
         return _가름판_geometry(path, g, ratio, 단)
+    if 읽기 and 단 == 1 and 빈단:
+        split = _빈단기하(path, g, ratio)
+        if split is not None:
+            return split
     후보 = bool(읽기) and 단 == 1 and 가장자리
     # 판심=False 는 판심 걸러내기만 끔(가장자리 후보 없이)
     정보 = {}

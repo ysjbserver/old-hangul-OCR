@@ -1157,10 +1157,104 @@ function 글자폭몫(g, crop_cols, spans) {
  * `scan.page_geometry` — 쪽 그림 → 열·글자 구간·세로 자간. 못 읽으면 null.
  * 무거운 계산은 여기 한 번뿐이고 뒤 단계는 이 결과를 돌려쓴다.
  */
-function 쪽기하(g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, 판심) {
+function 빈띠(g, x0, x1, lo, hi, 최소) {
+  const out = []; let start = null;
+  for (let y = lo; y <= hi; y++) {
+    let ink = 0;
+    if (y < hi) for (let x = x0; x < x1; x++) if (g.값[y*g.너비+x] < INK) ink++;
+    if (y < hi && ink/(x1-x0) < 0.003) { if (start === null) start = y; }
+    else if (start !== null) { if (y-start >= 최소) out.push([start,y]); start = null; }
+  }
+  return out;
+}
+
+/** scan.빈단경계 — 넓고 긴 본문 두 벌 사이의 큰 빈 띠만 단 경계로 인정한다. */
+function 빈단경계(g) {
+  const H = g.높이, W = g.너비, found = [], f = 열찾기(g, true, null);
+  if (!f.자간 || f.열.length < 12) return null;
+  const x0 = Math.min(...f.열.map(c=>c[0])), x1 = Math.max(...f.열.map(c=>c[1]));
+  const gaps = 빈띠(g,x0,x1,자름(H*0.25),자름(H*0.75),f.자간*0.7);
+  if (!gaps.length) return null;
+  const gutters = 고랑곡선(g,f.열,4,0.6);
+  for (let y = 자름(H*0.25); y < 자름(H*0.75); y++) if (gutters[y] >= 0.4) return null;
+  for (const [a,b] of gaps) {
+    const panels = [];
+    for (const [lo,hi] of [[0,a],[b,H]]) {
+      const part = {너비:W,높이:hi-lo,값:g.값.subarray(lo*W,hi*W)}, v = 열찾기(part,true,null);
+      if (!v.자간 || v.열.length < 12) break;
+      let long = 0;
+      for (const [l,r] of v.열) {
+        let first = -1, last = -1;
+        for (let y = lo; y < hi; y++) {
+          let n = 0; for (let x = l; x < r; x++) if (g.값[y*W+x] < INK) n++;
+          if (n > Math.max(2,(r-l)*0.1)) { if (first < 0) first = y; last = y; }
+        }
+        if (first >= 0 && last-first >= v.자간*8) long++;
+      }
+      const width = Math.max(...v.열.map(c=>c[1]))-Math.min(...v.열.map(c=>c[0]));
+      if (long < v.열.length*0.65 || width < W*0.65) break;
+      panels.push([lo,hi,v.자간,v.열]);
+    }
+    if (panels.length === 2) found.push({gap:[a,b],panels:panels});
+  }
+  return found.length === 1 ? found[0] : null;
+}
+
+function 빈단기하(g, ratio) {
+  const split = 빈단경계(g); if (!split) return null;
+  const cols = [], crop_cols = [], spans = [], sm = [], est = [], pitches = [], ratios = [], counts = [];
+  for (const [lo,hi,xp,cs] of split.panels) {
+    const W = g.너비, x0 = Math.min(...cs.map(c=>c[0])), x1 = Math.max(...cs.map(c=>c[1]));
+    const part = {너비:W,높이:hi-lo,값:g.값.subarray(lo*W,hi*W)};
+    let top = lo;
+    for (const [s,e] of 빈띠(part,x0,x1,자름((hi-lo)*0.1),자름((hi-lo)*0.3),xp*0.5)) {
+      let max = 0;
+      for (let y = Math.max(0,s-자름(xp)); y < s; y++) {
+        let n = 0; for (let x = x0; x < x1; x++) if (part.값[y*W+x] < INK) n++;
+        max = Math.max(max,n/(x1-x0));
+      }
+      if (max > 0.35) top = lo+e;
+    }
+    const prof = 잉크무늬(g,cs), rough = 글자구간(prof,cs,top,hi,xp*YX_RATIO);
+    if (rough === null) return null;
+    const crops = cs.map(([l,r])=>[Math.max(0,자름((l+r)/2-xp*0.45)),Math.min(W,자름((l+r)/2+xp*0.45))]);
+    const q = 글자폭몫(g,crops,rough), gw = RATIO_FIT && q !== null ? 0.9*q : null, values = [];
+    for (let i = 0; i < prof.length; i++) {
+      const sp = rough[i]; if (!sp || sp[1]-sp[0] < xp*6) continue;
+      const p = 고르기(prof[i],Math.max(2.0,xp/12)); let best = -1.0, bt = null;
+      for (let k = 0; k < 120; k++) {
+        const t = k === 119 ? 1.45 : k*((1.45-0.55)/119)+0.55;
+        const score = 접어또렷함(p,sp[0],sp[1],xp*t);
+        if (score > best) { best = score; bt = t; }
+      }
+      if (gw && bt && bt > gw*RATIO_FIT_OVER) {
+        best = -1.0; bt = null;
+        const a = gw*RATIO_FIT[0], b = gw*RATIO_FIT[1];
+        for (let k = 0; k < 120; k++) {
+          const t = k === 119 ? b : k*((b-a)/119)+a, score = 접어또렷함(p,sp[0],sp[1],xp*t);
+          if (score > best) { best = score; bt = t; }
+        }
+      } else if (bt && RATIO_HALF && bt/2 >= 0.55 && 접어또렷함(p,sp[0],sp[1],xp*bt/2) >= RATIO_HALF*best) bt /= 2;
+      if (bt) values.push(bt);
+    }
+    const r = values.length >= 3 ? 중앙값(values) : ratio, pitch = xp*r;
+    const sp = 글자구간(prof,cs,top,hi,pitch,true,true);
+    if (sp === null) return null;
+    cols.push(...cs); crop_cols.push(...crops); spans.push(...sp);
+    sm.push(...prof.map(p=>고르기(p,Math.max(2.0,pitch/9))));
+    est.push(...sp.map(s=>s === null ? 0 : Math.max(1,반올림((s[1]-s[0])/pitch))));
+    pitches.push(pitch); ratios.push(r); counts.push(cs.length);
+  }
+  return {그림:g,cols:cols,crop_cols:crop_cols,spans:spans,sm:sm,est:est,
+    pitch:중앙값(pitches),xpitch:중앙값(split.panels.map(p=>p[2])),단:2,가장자리:false,
+    본열수:자름(중앙값(counts)),빈단:split.gap,단별자간비:ratios,단별열수:counts};
+}
+
+function 쪽기하(g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, 판심, 빈단) {
   ratio = ratio || YX_RATIO;
   if (Array.isArray(단)) return 가름판기하(g, ratio, 단);   // 가름줄 판형
   단 = 단 || 1;
+  if (읽기 && 단 === 1 && 빈단 !== false) { const split = 빈단기하(g,ratio); if (split) return split; }
   const 후보 = !!읽기 && 단 === 1 && 가장자리 !== false;   // 가장자리=false — 후보 열 없이(`전사대조.js` 가 씀)
   const 찾 = 열찾기(g, 판심 === undefined || 판심 === null ? !후보 : !!판심, 읽기 ? 표준자간 : null, 끝띠);   // 판심=false — 판심 걸러내기만 끔(전사대조 후보)
   const xpitch = 찾.자간;
@@ -1484,7 +1578,8 @@ function 자를계획(geo, centers, span, 빈열허용, 그림자) {
       const y0 = sp[0], y1 = sp[1];
       const smi = 그림자 ? 그림자[i] : geo.sm[i];   // `그림자` = 검출기로 바꾼 것(`align.CUT_LEARN`)
       const cands = 자를후보(smi, y0, y1, geo.pitch);
-      for (let n = Math.max(1, centers[i] - span); n <= centers[i] + span; n++) {
+      const reach = geo.빈단 && !빈열허용 ? Math.max(span,Math.min(8,반올림(centers[i]*0.2))) : span;
+      for (let n = Math.max(1, centers[i] - reach); n <= centers[i] + reach; n++) {
         const r = 열가르기(smi, y0, y1, n, cands);
         if (!r.자리) continue;
         const bx = [];

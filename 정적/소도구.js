@@ -317,7 +317,7 @@ async function 읽기시작() {
     알림("서버에서 문자를 인식하는 중…");
     var t1 = performance.now();
     r = await 서버로("api/read", { file: 쪽.파일, page: 쪽.쪽, model: 고른모델, tiers: 고른단 || "auto", spacing: 공.띄움() });
-    살핀 = 단바꾸기(살핀, 고른단);
+    살핀 = r.살핀 || 단바꾸기(살핀, 고른단);
     재기("인식(서버 왕복)", t1);
     if (r.초 !== undefined) 때["└ 서버 셈"] = r.초 * 1000;
     초 = ((performance.now() - t1) / 1000).toFixed(1);
@@ -375,6 +375,8 @@ function 로그본문(살핀, r, 때, 처음) {
   if (살핀) 줄.push(["판형 살핀 값", 판형글(살핀.단) + (살핀.자간비 ? " · 자간비 " + 살핀.자간비.toFixed(3) : " · 자간비 없음(기본값)")
                        + (살핀.판짜임 ? " · 판짜임 " + JSON.stringify(살핀.판짜임) : "")]);
   if (r) {
+    if (살핀 && 살핀.빈단) 줄.push(["선 없는 단", "경계 " + 살핀.빈단.join("~") + "px · 단별 자간비 "
+        + 살핀.단별자간비.map(function (v) { return v.toFixed(3); }).join(" · ")]);
     줄.push(["읽은 것", r.상자수 + (서버 ? "자" : "상자") + " · 표시 " + (r.표시비 * 100).toFixed(1) + "%"
              + (r.글월 ? " · 줄 " + r.글월.split("\n").length : "")]);
     if (r.글월) 줄.push(["줄마다 글자 수", r.글월.split("\n").map(function (l) { return l.replace(/\s/g, "").length; }).join(" ")]);

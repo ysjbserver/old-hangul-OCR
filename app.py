@@ -341,6 +341,7 @@ class 손님오류(Exception):
 
 def 읽기(파일, 쪽, 문턱=표시문턱, 모델이름=None, 단=None, 띄움=True):
     """OCR 한 쪽 — 브라우저판 `읽기.js` 의 `한쪽` 과 같은 셈(파이썬 정본으로)."""
+    자동단 = 단 in (None, "", "auto", "자동")
     s = 단바꾸기(살핀값(파일), 단)
     모델 = 모델얻기(모델이름)
     ip = 스캔(파일, 쪽)
@@ -350,9 +351,12 @@ def 읽기(파일, 쪽, 문턱=표시문턱, 모델이름=None, 단=None, 띄움
     r = s.get("읽기자간비") or s.get("자간비") or scan.YX_RATIO
     표준 = s["판짜임"]["자간"] if s.get("판짜임") and page.SCAN_PITCH else None
     with 계산:
-        geo = scan.page_geometry(ip, r, 단, 읽기=True, 가장자리=True, 표준자간=표준)
+        geo = scan.page_geometry(ip, r, 단, 읽기=True, 가장자리=True, 표준자간=표준, 빈단=자동단)
         등급, 까닭 = page.쪽건강(None, geo, 표준=s.get("판짜임"))
         줄들 = align.read_page_lines(모델, geo, 3, 띄움=align.SPACE and 띄움) if geo is not None else []
+    if geo is not None and geo.get("빈단"):
+        s = dict(s, 단=geo["단"], 자간비=geo["pitch"] / geo["xpitch"],
+                 빈단=geo["빈단"], 단별자간비=geo["단별자간비"])
     n = sum(len(z[0]) for z in 줄들)
     if not n:
         return dict(판정=dict(등급="못씀" if geo is None else 등급, 까닭=까닭 or ["읽어 내지 못했습니다"]),

@@ -99,7 +99,9 @@ def build_plans(geo, centers, span, allow_empty=True, 그림자=None):
         if sp is not None:
             y0, y1 = sp
             cands = scan.cut_points(sm, y0, y1, geo["pitch"])
-            for n in range(max(1, centers[i] - span), centers[i] + span + 1):
+            # 선 없는 단은 문장부호 때문에 그림 주기가 흔들린다. 긴 열만 칸수 탐색을 넓힌다.
+            reach = max(span, min(8, int(round(centers[i]*0.2)))) if geo.get("빈단") and not allow_empty else span
+            for n in range(max(1, centers[i] - reach), centers[i] + reach + 1):
                 cuts, cost = scan.split_column(sm, y0, y1, n, cands)
                 if not cuts:
                     continue
