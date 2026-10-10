@@ -301,6 +301,40 @@ def 연한본문기하(geo):
     return out
 
 
+def 본문열기하(geo):
+    """광곽 안의 잉크로 열을 다시 찾는 추가 후보. 모델 입력 그림은 유지한다.
+
+    바깥 그림자와 이웃 쪽이 열 문턱을 높이거나 짧은 본문 열이 빠진 경우를
+    보완한다. 기존 기하보다 전사문과 더 잘 맞을 때만 사용한다.
+    """
+    body = 본문기하(geo)
+    if body is None:
+        return None
+    g = np.asarray(geo["image"])
+    h, w = g.shape
+    a, b = body["본문범위"]
+    T, B = scan.page_frame(g, body["cols"], True)
+    if not (h * 0.05 < T < h * 0.3 and h * 0.7 < B < h * 0.98):
+        return None
+    # 열을 찾는 그림만 밝기 40 낮춤: 기본 잉크 120과 함께 160 미만을 포함한다.
+    masked = np.full_like(g, 255)
+    masked[T:B, a:b] = np.clip(g[T:B, a:b].astype(int) - 40, 0, 255)
+    xpitch, cols = scan.find_columns(masked, 판심떼기=False, 표준자간=geo["xpitch"])
+    if not xpitch or len(cols) < 3 or abs(xpitch - geo["xpitch"]) > geo["xpitch"] * 0.15:
+        return None
+    pitch = xpitch * geo["pitch"] / geo["xpitch"]
+    out = geo.copy()
+    out.update(cols=cols, xpitch=xpitch, pitch=pitch, 본문범위=[a, b],
+               crop_cols=[(max(a, int((x0 + x1) / 2 - xpitch * 0.45)),
+                           min(b, int((x0 + x1) / 2 + xpitch * 0.45))) for x0, x1 in cols],
+               sm=[scan.smooth(p, max(2, pitch / 9)) for p in scan.ink_profile(g, cols)],
+               spans=[None] * len(cols), est=[0] * len(cols))
+    out = 연한본문기하(out)
+    if out is None or (out["cols"] == body["cols"] and out["spans"] == body["spans"]):
+        return None
+    return out
+
+
 def 기하(slug, ip, 읽기=False, 끝띠=False, 판심=None, 설정=None):
     """
     쪽 기하. 읽기=False 는 자르는 경로(`page.geometry(…, 읽기=False)`), True 는 읽는 경로의 기하(가장자리 후보 열 없음).
@@ -565,6 +599,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     "판심" = 판심 걸러내기를 끈 읽는 기하 · "쪽자간" = 이 쪽 그림으로 잰 자간비로 자른 끝띠 기하(`쪽자간기하`).
     "본문" = 읽는 기하의 좌표를 유지하고 광곽 밖·빈 열을 제외한 후보(`본문기하`).
     "연한본문" = 본문 기하의 글자 구간을 옅은 잉크까지 포함해 다시 찾은 후보(`연한본문기하`).
+    "본문열" = 광곽 안에서 열 위치와 구간을 다시 찾은 후보(`본문열기하`).
     추가 후보들은 앞 기하와 같으면 건너뛰며 더 잘 맞을 때만 선택한다.
     큰빼기 = 큰 활자 틀(`{{더크게|에스라}}` 같은 책 이름) 안 글자를 빼고 맞대기. None 이면 그대로 해 보고, 일치가 모자라고
     원문에 큰 활자 틀이 있으면 빼고도 해 봐서 잘 맞는 쪽.
@@ -590,7 +625,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
         for 판 in 기하들:
             if best and (best[0].get("일치") or 0) >= 다시볼일치:
                 break                             # 자르는 기하로 잘 맞았으면 그만
-            if 판 in ("쪽자간", "본문", "연한본문"):
+            if 판 in ("쪽자간", "본문", "연한본문", "본문열"):
                 if 판 not in 본열:
                     if 판 == "쪽자간":
                         본열[판] = 쪽자간기하(slug, ip, 설정)
@@ -599,6 +634,8 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                             본열["본문"] = 본문기하(본열.get("읽기자료") or 기하(slug, ip, True, 설정=설정))
                         if 판 == "연한본문":
                             본열[판] = 연한본문기하(본열["본문"])
+                        elif 판 == "본문열":
+                            본열[판] = 본문열기하(본열.get("읽기자료") or 기하(slug, ip, True, 설정=설정))
                 geo = 본열[판]
                 if geo is None:
                     continue
@@ -610,7 +647,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                     이전 = len(글자들)
                     r = 맞대기(mdl, geo, 글자들, 경계=경계)
                     r["기하"], r["제목"], r["큰빼기"] = 판, kh, 빼기
-                    if 판 in ("본문", "연한본문"):
+                    if 판 in ("본문", "연한본문", "본문열"):
                         r["_본문기하"] = geo
                     시도기록.append(dict(기하=판, 제목=kh, 큰빼기=빼기, 경계=경계,
                                       전사글자수=len(글자들), 일치=r.get("일치"),
@@ -661,7 +698,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     return best
 
 
-def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문", "연한본문"), 합의=True, 밀림=False, 깨진=False,
+def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문", "연한본문", "본문열"), 합의=True, 밀림=False, 깨진=False,
          설정=None, 누락=True):
     """
     위키 원문(편집 상자의 본문) 한 쪽을 그 쪽 스캔과 맞댄다.
@@ -685,7 +722,7 @@ def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들
     낱 = [c for c in r["후보"] if c["갈래"] in 낱갈래]
     for c in r["후보"]:
         c["합의"] = c["갈래"] not in 낱갈래 or not 합의
-    for 이름, 옵 in (("B", dict(경계=True, 기하들=기하들)), ("C", dict(경계=True, 기하들=(True, "판심", "본문", "연한본문")))):
+    for 이름, 옵 in (("B", dict(경계=True, 기하들=기하들)), ("C", dict(경계=True, 기하들=(True, "판심", "본문", "연한본문", "본문열")))):
         남은 = [c for c in 낱 if not c["합의"]]
         if not 합의 or not 남은:
             break

@@ -295,8 +295,7 @@ function 로그본문(살핀, 답, 때, 처음) {
         (답.debug.크기 ? 답.debug.크기.join("×") : "?") + " · 캐시 " + (답.debug.캐시 || "?")]);
       줄.push(["서버 판", (답.debug.주소 || "주소 없음") + " · " + JSON.stringify(답.debug.판 || {})]);
       줄.push(["서버 OCR", (답.debug.OCR글자수 == null ? "개수 없음" : 답.debug.OCR글자수 + "자") +
-        " · 해시 " + (답.debug.OCR해시 || "?") +
-        (답.debug.OCR미리보기 ? " · 앞 80자 " + 답.debug.OCR미리보기 : "")]);
+        " · 해시 " + (답.debug.OCR해시 || "?")]);
       if (답.debug.OCR전체 != null) 줄.push(["서버 OCR 전체", 답.debug.OCR전체]);
       if (답.debug.시도기록) 줄.push(["맞대기 시도 기록", JSON.stringify(답.debug.시도기록)]);
       var 상 = 답.debug.상세 || {};
