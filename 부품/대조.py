@@ -335,6 +335,83 @@ def 본문열기하(geo):
     return out
 
 
+def 조각열기하(geo):
+    """폭 선별에서 버려진 두 조각을 광곽 안의 빠진 끝 열 후보로 복구한다.
+
+    한 단에서 정상 간격의 끝 열만 추가하며 더 잘 맞을 때만 선택한다.
+    기존 열과 모델 입력은 유지하고 일반 OCR·자동 라벨에는 적용하지 않는다.
+    """
+    if geo is None or geo["단"] != 1 or len(geo["cols"]) < 3:
+        return None
+    g = np.asarray(geo["image"])
+    h, w = g.shape
+    rows = g[int(h * 0.2):int(h * 0.8)]
+    # 기울어진 광곽도 찾되 본문 획은 바깥 위치 조건으로 제외한다.
+    xs = np.flatnonzero((rows < 160).mean(0) >= 0.4)
+    groups = np.split(xs, np.flatnonzero(np.diff(xs) > 1) + 1)
+    groups = [z for z in groups if len(z) >= 3]
+    left = [z for z in groups if z[-1] < w * 0.2
+            and z[-1] < min(c[0] for c in geo["cols"]) - geo["xpitch"] * 0.85]
+    right = [z for z in groups if z[0] > w * 0.8
+             and z[0] > max(c[1] for c in geo["cols"]) + geo["xpitch"] * 0.35]
+    if not left or not right:
+        return None
+    lo, hi = int(left[-1][-1]) + 1, int(right[0][0])
+    ink = (g[int(h * 0.12):int(h * 0.88)] < scan.INK).sum(0)
+    xs = np.flatnonzero(ink > ink.max() * 0.12)
+    runs = [z for z in np.split(xs, np.flatnonzero(np.diff(xs) > 1) + 1) if len(z) > 10]
+    if len(runs) < 3:
+        return None
+    width = float(np.median([len(z) for z in runs]))
+    centers = [(a + b) / 2 for a, b in geo["cols"]]
+    pitch, xpitch = geo["pitch"], geo["xpitch"]
+    extra = []
+    for a, b in zip(runs, runs[1:]):
+        x0, x1 = int(a[0]), int(b[-1]) + 1
+        center = (x0 + x1) / 2
+        if not (len(a) <= width * 0.55 and len(b) <= width * 0.55
+                and b[0] - a[-1] - 1 <= max(2, width * 0.05)
+                and width * 0.55 < x1 - x0 <= width * 1.25
+                and lo < x0 < x1 < hi
+                and (center < min(centers) or center > max(centers))
+                and xpitch * 0.85 <= min(abs(center - c) for c in centers) <= xpitch * 1.15):
+            continue
+        extra.append((x0, x1))
+    if not extra:
+        return None
+    cols = sorted(geo["cols"] + extra, key=lambda c: -sum(c))
+    T, B = scan.page_frame(g, cols, True)
+    if not (h * 0.05 < T < h * 0.3 and h * 0.7 < B < h * 0.98):
+        return None
+    Ts, Bs = scan._열광곽(g, cols, T, B, xpitch, pitch)
+    out = geo.copy()
+    for key in ("cols", "crop_cols", "spans", "sm", "est"):
+        out[key] = []
+    for i, col in enumerate(cols):
+        if col in geo["cols"]:
+            j = geo["cols"].index(col)
+            for key in ("cols", "crop_cols", "spans", "sm", "est"):
+                out[key].append(geo[key][j])
+            continue
+        x0, x1 = col
+        p = scan.ink_profile(g, [col])[0]
+        hit = np.flatnonzero(p[Ts[i]:Bs[i]] > (x1 - x0) * scan.GLYPH)
+        if not len(hit):
+            return None
+        span = scan._이어잡기(p, Ts[i] + int(hit[0]), Ts[i] + int(hit[-1]) + 1,
+                           x1 - x0, Ts[i], Bs[i], pitch)
+        if span[0] - Ts[i] < pitch * 0.5:
+            span = (Ts[i], span[1])
+        out["cols"].append(col)
+        center = (x0 + x1) / 2
+        out["crop_cols"].append((max(lo, int(center - xpitch * 0.45)),
+                                 min(hi, int(center + xpitch * 0.45))))
+        out["spans"].append(span)
+        out["sm"].append(scan.smooth(p, max(2, pitch / 9)))
+        out["est"].append(max(1, int(round((span[1] - span[0]) / pitch))))
+    return out
+
+
 def 기하(slug, ip, 읽기=False, 끝띠=False, 판심=None, 설정=None):
     """
     쪽 기하. 읽기=False 는 자르는 경로(`page.geometry(…, 읽기=False)`), True 는 읽는 경로의 기하(가장자리 후보 열 없음).
@@ -600,6 +677,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     "본문" = 읽는 기하의 좌표를 유지하고 광곽 밖·빈 열을 제외한 후보(`본문기하`).
     "연한본문" = 본문 기하의 글자 구간을 옅은 잉크까지 포함해 다시 찾은 후보(`연한본문기하`).
     "본문열" = 광곽 안에서 열 위치와 구간을 다시 찾은 후보(`본문열기하`).
+    "조각열" = 폭 선별에서 버려진 조각으로 광곽 안의 끝 열을 복구한 후보(`조각열기하`).
     추가 후보들은 앞 기하와 같으면 건너뛰며 더 잘 맞을 때만 선택한다.
     큰빼기 = 큰 활자 틀(`{{더크게|에스라}}` 같은 책 이름) 안 글자를 빼고 맞대기. None 이면 그대로 해 보고, 일치가 모자라고
     원문에 큰 활자 틀이 있으면 빼고도 해 봐서 잘 맞는 쪽.
@@ -625,10 +703,12 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
         for 판 in 기하들:
             if best and (best[0].get("일치") or 0) >= 다시볼일치:
                 break                             # 자르는 기하로 잘 맞았으면 그만
-            if 판 in ("쪽자간", "본문", "연한본문", "본문열"):
+            if 판 in ("쪽자간", "본문", "연한본문", "본문열", "조각열"):
                 if 판 not in 본열:
                     if 판 == "쪽자간":
                         본열[판] = 쪽자간기하(slug, ip, 설정)
+                    elif 판 == "조각열":
+                        본열[판] = 조각열기하(본열.get("읽기자료") or 기하(slug, ip, True, 설정=설정))
                     else:
                         if "본문" not in 본열:
                             본열["본문"] = 본문기하(본열.get("읽기자료") or 기하(slug, ip, True, 설정=설정))
@@ -647,7 +727,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                     이전 = len(글자들)
                     r = 맞대기(mdl, geo, 글자들, 경계=경계)
                     r["기하"], r["제목"], r["큰빼기"] = 판, kh, 빼기
-                    if 판 in ("본문", "연한본문", "본문열"):
+                    if 판 in ("본문", "연한본문", "본문열", "조각열"):
                         r["_본문기하"] = geo
                     시도기록.append(dict(기하=판, 제목=kh, 큰빼기=빼기, 경계=경계,
                                       전사글자수=len(글자들), 일치=r.get("일치"),
@@ -698,7 +778,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     return best
 
 
-def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문", "연한본문", "본문열"), 합의=True, 밀림=False, 깨진=False,
+def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문", "연한본문", "본문열", "조각열"), 합의=True, 밀림=False, 깨진=False,
          설정=None, 누락=True):
     """
     위키 원문(편집 상자의 본문) 한 쪽을 그 쪽 스캔과 맞댄다.
@@ -722,7 +802,7 @@ def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들
     낱 = [c for c in r["후보"] if c["갈래"] in 낱갈래]
     for c in r["후보"]:
         c["합의"] = c["갈래"] not in 낱갈래 or not 합의
-    for 이름, 옵 in (("B", dict(경계=True, 기하들=기하들)), ("C", dict(경계=True, 기하들=(True, "판심", "본문", "연한본문", "본문열")))):
+    for 이름, 옵 in (("B", dict(경계=True, 기하들=기하들)), ("C", dict(경계=True, 기하들=(True, "판심", "본문", "연한본문", "본문열", "조각열")))):
         남은 = [c for c in 낱 if not c["합의"]]
         if not 합의 or not 남은:
             break
