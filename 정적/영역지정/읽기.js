@@ -384,6 +384,8 @@ function 열찾기(g, 판심뗌, 표준자간, 끝띠) {
     pitch = 중앙값(d);
   }
 
+  const 원자간 = pitch;
+  pitch = 빠진열자간(cen, pitch, 표준자간);
   const wmed2 = 중앙값(merged.map(function (r) { return r[1] - r[0]; }));
   const boxes = [merged[0].slice()];                    // ④ 빠진 열 채우기
   for (let i = 1; i < merged.length; i++) {
@@ -404,9 +406,62 @@ function 열찾기(g, 판심뗌, 표준자간, 끝띠) {
     }
     return [Math.max(0, a), Math.min(W, b)];
   });
+  let 복구 = null;
+  if (pitch !== 원자간) {
+    복구 = 빠진열다듬기(g, out, merged, pitch);
+    out = 복구.열;
+  }
   if (판심뗌) out = 판심떼기(out);                          // ⑤ 판심 걸러내기
   out.reverse();
-  return { 자간: pitch, 열: out };
+  return { 자간: pitch, 열: out, 본문범위: 복구 && 복구.범위, 짧은열: 복구 ? 복구.짧은열 : [] };
+}
+
+/** 표준 간격의 정수 배로 모이는 열 사이 거리에서 빠진 열을 감안한다. */
+function 빠진열자간(cen, pitch, standard) {
+  if (!standard || cen.length < 4 || Math.abs(pitch - standard) <= standard * 0.15) return pitch;
+  const good = []; let multiple = false;
+  for (let i = 1; i < cen.length; i++) {
+    const gap = cen[i] - cen[i - 1], k = Math.max(1, 반올림(gap / standard)), v = gap / k;
+    if (Math.abs(v - standard) <= standard * 0.12) { good.push(v); if (k >= 2) multiple = true; }
+  }
+  if (good.length < 3 || good.length / (cen.length - 1) < 0.8 || !multiple) return pitch;
+  return 중앙값(good);
+}
+
+/** 끼워 넣은 열의 잉크 중심을 긴 본문 열의 높이 안에서 다시 찾는다. */
+function 빠진열다듬기(g, cols, merged, pitch) {
+  const TB = 광곽(g, merged, true), bounds = [];
+  merged.forEach(function (c) {
+    const p = 열잉크(g, c[0], c[1]); let a = -1, b = -1;
+    for (let y = TB[0]; y < TB[1]; y++) if (p[y] > (c[1] - c[0]) * GLYPH) { if (a < 0) a = y; b = y; }
+    if (a >= 0 && b - a > pitch * 3) bounds.push([a, b + 1]);
+  });
+  if (bounds.length < 3) return { 열: cols, 범위: null, 짧은열: [] };
+  const top = Math.max(TB[0], 자름(중앙값(bounds.map(function (b) { return b[0]; })) - pitch * 0.75));
+  const bottom = Math.min(TB[1], Math.max.apply(null, bounds.map(function (b) { return b[1]; })));
+  const ink = new Float64Array(g.너비);
+  for (let y = top; y < bottom; y++) for (let x = 0; x < g.너비; x++) if (g.값[y * g.너비 + x] < INK) ink[x]++;
+  const recovered = [];
+  const out = cols.map(function (c) {
+    if (merged.some(function (m) { return m[0] === c[0] && m[1] === c[1]; })) return c;
+    const center = (c[0] + c[1]) / 2, lo = Math.max(0, 자름(center - pitch * 0.4)), hi = Math.min(g.너비, 자름(center + pitch * 0.4));
+    let peak = 0;
+    for (let x = lo; x < hi; x++) peak = Math.max(peak, ink[x]);
+    if (peak < pitch * 0.15) return c;
+    let runs = [];
+    for (let x = lo; x < hi; x++) if (ink[x] > peak * 0.12) {
+      const last = runs[runs.length - 1];
+      if (last && x - last[1] <= pitch * 0.08) last[1] = x;
+      else runs.push([x, x]);
+    }
+    runs = runs.filter(function (r) { return r[1] - r[0] >= pitch * 0.2; });
+    if (!runs.length) return c;
+    let r = runs[0];
+    runs.forEach(function (v) { if (Math.abs((v[0] + v[1]) / 2 - center) < Math.abs((r[0] + r[1]) / 2 - center)) r = v; });
+    const result = [r[0], r[1] + 1]; recovered.push(result);
+    return result;
+  });
+  return { 열: out, 범위: [top, bottom], 짧은열: recovered };
 }
 
 /**
@@ -681,7 +736,7 @@ function 이어잡기(p, a, b, w, T, B, pitch) {
  * `scan.spans_between` — T~B 안에서 열마다 글자가 시작하고 끝나는 y.
  * 뒷면 비침·계선 때문에 열 폭의 GLYPH 이상이 잉크인 줄만 글자 줄로 봄
  */
-function 글자구간(prof, cols, T, B, pitch, 이어) {
+function 글자구간(prof, cols, T, B, pitch, 이어, 첫글자) {
   const Ts = Array.isArray(T) ? T : cols.map(function () { return T; });   // 열마다 목록이어도 됨(`열광곽`)
   const Bs = Array.isArray(B) ? B : cols.map(function () { return B; });
   const spans = cols.map(function (c, i) {
@@ -695,12 +750,32 @@ function 글자구간(prof, cols, T, B, pitch, 이어) {
   if (!real.length) return null;
   let Emax = -Infinity;
   for (let i = 0; i < real.length; i++) if (real[i][1] > Emax) Emax = real[i][1];
-  return spans.map(function (s, i) {
+  const out = spans.map(function (s, i) {
     if (!s) return null;
     let a = s[0], b = s[1];
     if (a - Ts[i] < pitch * 0.5) a = Ts[i];                 // 첫 글자가 흐려도 위에서 시작
     if (Emax - b < pitch * 0.6) b = Math.min(Emax, Bs[i]);  // 끝도 마찬가지 (열 광곽 너머로는 안 감)
     return [a, b];
+  });
+  if (첫글자 && 이어 && SPAN_EXTEND) 첫글자잇기(prof, cols, out, Ts, pitch);
+  return out;
+}
+
+/** 이웃 열의 시작 높이와 맞는 가는 첫 글자를 빈 줄 너머에서 복구한다. */
+function 첫글자잇기(prof, cols, spans, Ts, pitch) {
+  const starts = spans.filter(function (s) { return s; }).map(function (s) { return s[0]; });
+  if (starts.length < 3) return;
+  const anchor = 중앙값(starts);
+  spans.forEach(function (s, i) {
+    if (!s || !(anchor + pitch * 0.6 < s[0] && s[0] <= anchor + pitch * 1.5)) return;
+    const p = prof[i], w = cols[i][1] - cols[i][0]; let end = s[0];
+    for (let y = s[0] - 1, lim = Math.max(Ts[i], 자름(s[0] - 1.5 * pitch)); y >= lim; y--) {
+      if (p[y] > w * SPAN_LOW) end = y;
+      else if (end - y > 0.8 * pitch) break;
+    }
+    let n = 0;
+    for (let y = end; y < s[0]; y++) if (p[y] > w * SPAN_LOW) n++;
+    if (Math.abs(end - anchor) <= pitch * 0.35 && n >= Math.max(3, pitch * 0.1)) spans[i] = [end, s[1]];
   });
 }
 
@@ -1071,7 +1146,9 @@ function 쪽기하(g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, �
   }
   const pitch = xpitch * ratio;
   let prof = 잉크무늬(g, cols0);
-  const TB = 광곽(g, cols0, 읽기), T = TB[0], B = TB[1];
+  const TB = 광곽(g, cols0, 읽기);
+  let T = TB[0], B = TB[1];
+  if (찾.본문범위) { T = Math.max(T, 찾.본문범위[0]); B = Math.min(B, 찾.본문범위[1]); }
   const 쪽광곽 = !!읽기 && FRAME_LOCAL && 광곽합의(g, cols0) !== null;   // 열마다 다듬을 수 있나(`열광곽`)
   if (후보 && EDGE_MOVE) {
     cols0 = 줄에서비키기(g, cols0, xpitch, T, B);
@@ -1095,8 +1172,16 @@ function 쪽기하(g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, �
   } else {
     let TT = T, BB = B;
     if (쪽광곽) { const 열TB = 열광곽(g, cols0, T, B, xpitch, pitch); TT = 열TB[0]; BB = 열TB[1]; }
-    spans = 글자구간(prof, cols0, TT, BB, pitch, !!읽기);
+    spans = 글자구간(prof, cols0, TT, BB, pitch, !!읽기, !!읽기);
     cols = cols0; sm = sm0;
+  }
+  if (spans && 찾.짧은열 && 찾.짧은열.length && !div) {
+    cols.forEach(function (c, i) {
+      if (!찾.짧은열.some(function (v) { return c[0] === v[0] && c[1] === v[1]; })) return;
+      let a = -1, b = -1;
+      for (let y = T; y < B; y++) if (prof[i][y] > (c[1] - c[0]) * SPAN_LOW) { if (a < 0) a = y; b = y; }
+      if (a >= 0) spans[i] = [a, b + 1];
+    });
   }
   if (spans === null) return null;
   const est = spans.map(function (s) {

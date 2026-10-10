@@ -258,6 +258,49 @@ def 본문기하(geo):
     return out
 
 
+def 연한본문기하(geo):
+    """본문 열의 구간을 옅은 잉크까지 포함해 다시 찾는 추가 후보.
+
+    열 좌표·상자 폭·자르기 그림자·모델 입력은 유지한다.
+    광곽 가까이의 얇고 고립된 획은 옆 고랑까지 찬 경우에만 제외한다.
+    """
+    if geo is None or geo["단"] != 1 or "본문범위" not in geo:
+        return None
+    g = np.asarray(geo["image"])
+    h = g.shape[0]
+    T, B = scan.page_frame(g, geo["cols"], True)
+    if not (h * 0.05 < T < h * 0.3 and h * 0.7 < B < h * 0.98):
+        return None
+    Ts, Bs = scan._열광곽(g, geo["cols"], T, B, geo["xpitch"], geo["pitch"])
+    pitch, 순 = geo["pitch"], sorted(geo["cols"])
+    spans = []
+    for i, (x0, x1) in enumerate(geo["cols"]):
+        p = (g[:, x0:x1] < 160).sum(axis=1).astype(float)
+        lo, hi = Ts[i], Bs[i]
+        hit = np.flatnonzero(p[lo:hi] > (x1 - x0) * scan.GLYPH)
+        if len(hit):
+            groups = np.split(hit, np.flatnonzero(np.diff(hit) > 1) + 1)
+            first = groups[0]
+            if (len(groups) > 1 and first[0] < pitch * 0.35
+                    and first[-1] - first[0] + 1 < pitch * 0.2
+                    and groups[1][0] - first[-1] > pitch * 0.6
+                    and scan._고랑찬몫(g, 순, (x0, x1),
+                                      lo + int(first[0]) - 8, lo + int(first[-1]) + 9) >= 0.6):
+                hit = np.concatenate(groups[1:])
+        s = None if len(hit) == 0 else (lo + int(hit[0]), lo + int(hit[-1]) + 1)
+        if s:
+            s = scan._이어잡기(p, *s, x1 - x0, lo, hi, pitch)
+            if s[0] - lo < pitch * 0.5:
+                s = (lo, s[1])
+        spans.append(s)
+    if spans == geo["spans"]:
+        return None
+    out = geo.copy()
+    out["spans"] = spans
+    out["est"] = [0 if s is None else max(1, int(round((s[1] - s[0]) / pitch))) for s in spans]
+    return out
+
+
 def 기하(slug, ip, 읽기=False, 끝띠=False, 판심=None, 설정=None):
     """
     쪽 기하. 읽기=False 는 자르는 경로(`page.geometry(…, 읽기=False)`), True 는 읽는 경로의 기하(가장자리 후보 열 없음).
@@ -521,6 +564,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     기하들의 원소: False = 자르는 기하 · True = 읽는 기하 · "끝띠" = 제본 그림자 띠를 지운 자르는 기하 ·
     "판심" = 판심 걸러내기를 끈 읽는 기하 · "쪽자간" = 이 쪽 그림으로 잰 자간비로 자른 끝띠 기하(`쪽자간기하`).
     "본문" = 읽는 기하의 좌표를 유지하고 광곽 밖·빈 열을 제외한 후보(`본문기하`).
+    "연한본문" = 본문 기하의 글자 구간을 옅은 잉크까지 포함해 다시 찾은 후보(`연한본문기하`).
     추가 후보들은 앞 기하와 같으면 건너뛰며 더 잘 맞을 때만 선택한다.
     큰빼기 = 큰 활자 틀(`{{더크게|에스라}}` 같은 책 이름) 안 글자를 빼고 맞대기. None 이면 그대로 해 보고, 일치가 모자라고
     원문에 큰 활자 틀이 있으면 빼고도 해 봐서 잘 맞는 쪽.
@@ -546,10 +590,15 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
         for 판 in 기하들:
             if best and (best[0].get("일치") or 0) >= 다시볼일치:
                 break                             # 자르는 기하로 잘 맞았으면 그만
-            if 판 in ("쪽자간", "본문"):
+            if 판 in ("쪽자간", "본문", "연한본문"):
                 if 판 not in 본열:
-                    본열[판] = (쪽자간기하(slug, ip, 설정) if 판 == "쪽자간" else
-                                본문기하(본열.get("읽기자료") or 기하(slug, ip, True, 설정=설정)))
+                    if 판 == "쪽자간":
+                        본열[판] = 쪽자간기하(slug, ip, 설정)
+                    else:
+                        if "본문" not in 본열:
+                            본열["본문"] = 본문기하(본열.get("읽기자료") or 기하(slug, ip, True, 설정=설정))
+                        if 판 == "연한본문":
+                            본열[판] = 연한본문기하(본열["본문"])
                 geo = 본열[판]
                 if geo is None:
                     continue
@@ -561,7 +610,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                     이전 = len(글자들)
                     r = 맞대기(mdl, geo, 글자들, 경계=경계)
                     r["기하"], r["제목"], r["큰빼기"] = 판, kh, 빼기
-                    if 판 == "본문":
+                    if 판 in ("본문", "연한본문"):
                         r["_본문기하"] = geo
                     시도기록.append(dict(기하=판, 제목=kh, 큰빼기=빼기, 경계=경계,
                                       전사글자수=len(글자들), 일치=r.get("일치"),
@@ -612,7 +661,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     return best
 
 
-def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문"), 합의=True, 밀림=False, 깨진=False,
+def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문", "연한본문"), 합의=True, 밀림=False, 깨진=False,
          설정=None, 누락=True):
     """
     위키 원문(편집 상자의 본문) 한 쪽을 그 쪽 스캔과 맞댄다.
@@ -636,7 +685,7 @@ def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들
     낱 = [c for c in r["후보"] if c["갈래"] in 낱갈래]
     for c in r["후보"]:
         c["합의"] = c["갈래"] not in 낱갈래 or not 합의
-    for 이름, 옵 in (("B", dict(경계=True, 기하들=기하들)), ("C", dict(경계=True, 기하들=(True, "판심", "본문")))):
+    for 이름, 옵 in (("B", dict(경계=True, 기하들=기하들)), ("C", dict(경계=True, 기하들=(True, "판심", "본문", "연한본문")))):
         남은 = [c for c in 낱 if not c["합의"]]
         if not 합의 or not 남은:
             break

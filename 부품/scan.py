@@ -84,7 +84,7 @@ def _끝띠지우기(ink, 높이, W, 몫):
     return out
 
 
-def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None):
+def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None, 정보=None):
     """
     활자 조판이라 열 간격이 일정하다는 성질을 쓴다.
     ① 잉크로 대략 열을 잡고 ② 여백의 쪽번호를 폭으로 걸러내고
@@ -153,6 +153,8 @@ def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None):
             merged.append(r)
     cen = [(a + b) / 2 for a, b in merged]
     if len(cen) > 2: pitch = float(np.median(np.diff(cen)))
+    원자간 = pitch
+    pitch = _빠진열자간(cen, pitch, 표준자간)
 
     wmed2 = float(np.median([b - a for a, b in merged]))
     boxes = [tuple(merged[0])]                           # ④ 사이에 빠진 열 채우기
@@ -170,10 +172,68 @@ def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None):
             c = (a + b) / 2; a, b = int(c - wmed2/2), int(c + wmed2/2)
         out.append((max(0, a), min(W, b)))
 
+    if pitch != 원자간:
+        out, 범위, 짧은열 = _빠진열다듬기(g, out, merged, pitch)
+        if 정보 is not None and 범위:
+            정보["본문범위"] = 범위
+            정보["짧은열"] = [out[i] for i in 짧은열]
+
     # ⑤ 판심 걸러내기 — 판심(쪽 이름·쪽 번호 줄)은 광곽 밖이라 이웃 열과 간격이 확 벌어진다. 양 끝에서 그런 열을 뗀다.
     if 판심떼기:
         out = _drop_margin_column(out)
     return pitch, list(reversed(out))
+
+
+def _빠진열자간(cen, pitch, standard):
+    """열 사이 거리가 표준 간격의 정수 배로 모이면 빠진 열을 감안해 간격을 잰다."""
+    if not standard or len(cen) < 4 or abs(pitch - standard) <= standard * 0.15:
+        return pitch
+    gaps = np.diff(cen)
+    k = np.maximum(1, np.rint(gaps / standard))
+    normalized = gaps / k
+    good = np.abs(normalized - standard) <= standard * 0.12
+    if np.count_nonzero(good) < 3 or np.mean(good) < 0.8 or not np.any(k[good] >= 2):
+        return pitch
+    return float(np.median(normalized[good]))
+
+
+def _빠진열다듬기(g, cols, merged, pitch):
+    """끼워 넣은 열의 잉크 중심을 긴 본문 열의 높이 안에서 다시 찾는다."""
+    H, W = g.shape
+    T, B = page_frame(g, merged, True)
+    bounds = []
+    for (a, b), p in zip(merged, ink_profile(g, merged)):
+        ys = np.flatnonzero(p[T:B] > (b - a) * GLYPH)
+        if len(ys) and ys[-1] - ys[0] > pitch * 3:
+            bounds.append((T + int(ys[0]), T + int(ys[-1]) + 1))
+    if len(bounds) < 3:
+        return cols, None, []
+    top = max(T, int(np.median([a for a, b in bounds]) - pitch * 0.75))
+    bottom = min(B, max(b for a, b in bounds))
+    ink = (g[top:bottom] < INK).sum(axis=0)
+    out, recovered = [], []
+    for i, (a, b) in enumerate(cols):
+        if (a, b) in [tuple(c) for c in merged]:
+            out.append((a, b)); continue
+        c = (a + b) / 2
+        lo, hi = max(0, int(c - pitch * 0.4)), min(W, int(c + pitch * 0.4))
+        band = ink[lo:hi]
+        peak = float(band.max()) if len(band) else 0
+        if peak < pitch * 0.15:
+            out.append((a, b)); continue
+        runs = []
+        for y in np.flatnonzero(band > peak * 0.12):
+            if runs and y - runs[-1][1] <= pitch * 0.08:
+                runs[-1][1] = int(y)
+            else:
+                runs.append([int(y), int(y)])
+        runs = [r for r in runs if r[1] - r[0] >= pitch * 0.2]
+        if not runs:
+            out.append((a, b)); continue
+        r = min(runs, key=lambda r: abs(lo + (r[0] + r[1]) / 2 - c))
+        out.append((lo + r[0], lo + r[1] + 1))
+        recovered.append(i)
+    return out, (top, bottom), recovered
 
 
 def _열수(runs, pitch):
@@ -228,6 +288,26 @@ def _가장자리후보(cols, pitch, W):
     out = [x for x in 오른 if x] + list(cols) + [x for x in 왼 if x]
     out.sort(key=lambda ab: -(ab[0] + ab[1]))    # 오른쪽 → 왼쪽 (같으면 붙인 차례)
     return out
+
+
+def _첫글자잇기(prof, cols, spans, Ts, pitch):
+    """이웃 열의 시작 높이와 맞는 가는 첫 글자를 빈 줄 너머에서 복구한다."""
+    real = [s[0] for s in spans if s]
+    if len(real) < 3:
+        return spans
+    anchor = float(np.median(real))
+    for i, s in enumerate(spans):
+        if not s or not anchor + pitch * 0.6 < s[0] <= anchor + pitch * 1.5:
+            continue
+        p, w, end = prof[i], cols[i][1] - cols[i][0], s[0]
+        for y in range(s[0] - 1, max(Ts[i], int(s[0] - 1.5 * pitch)) - 1, -1):
+            if p[y] > w * SPAN_LOW:
+                end = y
+            elif end - y > 0.8 * pitch:
+                break
+        if abs(end - anchor) <= pitch * 0.35 and np.count_nonzero(p[end:s[0]] > w * SPAN_LOW) >= max(3, pitch * 0.1):
+            spans[i] = (end, s[1])
+    return spans
 
 
 def 칸모양(g, b):
@@ -560,7 +640,7 @@ def _이어잡기(p, a, b, w, T, B, pitch):
     return a, 끝
 
 
-def spans_between(prof, cols, T, B, pitch, 이어=False):
+def spans_between(prof, cols, T, B, pitch, 이어=False, 첫글자=False):
     """
     T~B 안에서 열마다 글자가 실제로 시작하고 끝나는 y 범위.
 
@@ -591,6 +671,8 @@ def spans_between(prof, cols, T, B, pitch, 이어=False):
         if a - Ts[i] < pitch * 0.5:   a = Ts[i]        # 첫 글자가 흐릿해도 위에서 시작한 것으로
         if Emax - b < pitch * 0.6:    b = min(Emax, Bs[i])   # 끝도 마찬가지 (열 광곽 너머로는 안 감)
         out.append((a, b))
+    if 첫글자 and 이어 and SPAN_EXTEND:
+        out = _첫글자잇기(prof, cols, out, Ts, pitch)
     return out
 
 
@@ -1057,7 +1139,8 @@ def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 
         return _가름판_geometry(path, g, ratio, 단)
     후보 = bool(읽기) and 단 == 1 and 가장자리
     # 판심=False 는 판심 걸러내기만 끔(가장자리 후보 없이)
-    xpitch, cols = find_columns(g, 판심떼기=(not 후보) if 판심 is None else 판심, 표준자간=표준자간 if 읽기 else None, 끝띠=끝띠)
+    정보 = {}
+    xpitch, cols = find_columns(g, 판심떼기=(not 후보) if 판심 is None else 판심, 표준자간=표준자간 if 읽기 else None, 끝띠=끝띠, 정보=정보)
     if not cols or not xpitch:
         return None
     본열수 = None
@@ -1067,6 +1150,8 @@ def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 
     pitch = xpitch * ratio
     prof = ink_profile(g, cols)
     T, B = page_frame(g, cols, 읽기)
+    if 정보.get("본문범위"):
+        T, B = max(T, 정보["본문범위"][0]), min(B, 정보["본문범위"][1])
     쪽광곽 = bool(읽기) and FRAME_LOCAL and _frame_read(g, cols) is not None   # 열마다 다듬을 수 있나(`_열광곽`)
     if 후보 and EDGE_MOVE:
         cols = _줄에서비키기(g, cols, xpitch, T, B)
@@ -1088,8 +1173,14 @@ def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 
         TT, BB = T, B
         if 쪽광곽:
             TT, BB = _열광곽(g, cols, T, B, xpitch, pitch)
-        spans = spans_between(prof, cols, TT, BB, pitch, 이어=이어)
+        spans = spans_between(prof, cols, TT, BB, pitch, 이어=이어, 첫글자=bool(읽기))
         sm = [smooth(p, max(2.0, pitch / 9)) for p in prof]
+    if spans and 정보.get("짧은열") and not div:
+        for i, c in enumerate(cols):
+            if c in 정보["짧은열"]:
+                hit = np.flatnonzero(prof[i][T:B] > (c[1] - c[0]) * SPAN_LOW)
+                if len(hit):
+                    spans[i] = (T + int(hit[0]), T + int(hit[-1]) + 1)
     if spans is None:
         return None
     est = [0 if s is None else max(1, int(round((s[1] - s[0]) / pitch))) for s in spans]
