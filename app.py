@@ -30,6 +30,7 @@
 import hashlib
 import json
 import os
+import re
 import sys
 
 # 서버가 불러오는 부품의 바이트코드 캐시를 만들지 않음.
@@ -425,16 +426,64 @@ def 영역자동읽기(파일, 쪽, 자간비=None, 모델이름=None, 너비확
     return dict(줄들=줄들, 너비=im.width, 높이=im.height, 초=round(time.time() - t0, 3))
 
 
+# 외부 영역 지정 요청만 제한. 모델 내부의 4px 여백과 경계 계산은 그대로 둠.
+상자최대화소 = 1_048_576
+상자합계최대화소 = 16_777_216
+경계최대확대 = 4
+경계최대높이 = 8192
+
+
+def _좌표(v, 이름):
+    if type(v) is int or (type(v) is float and v.is_integer()):
+        return int(v)
+    raise 손님오류(이름 + "는 유한한 정수 좌표여야 합니다")
+
+
+def _상자목록(상자들):
+    if not isinstance(상자들, list):
+        raise 손님오류("boxes는 상자 목록이어야 합니다")
+    if len(상자들) > 20000:
+        raise 손님오류("상자가 너무 많습니다")
+    결과, 합계 = [], 0
+    for i, b in enumerate(상자들):
+        이름 = f"boxes[{i}]"
+        if not isinstance(b, list) or len(b) != 4:
+            raise 손님오류(이름 + "는 [x0, y0, x1, y1]이어야 합니다")
+        x0, y0, x1, y1 = [_좌표(v, 이름) for v in b]
+        if not (0 <= x0 < x1 and 0 <= y0 < y1):
+            raise 손님오류(이름 + "의 좌표 순서나 크기가 올바르지 않습니다")
+        화소 = (x1 - x0 + 8) * (y1 - y0 + 8)  # 모델.crops의 사방 4px 여백 포함
+        합계 += 화소
+        if 화소 > 상자최대화소 or 합계 > 상자합계최대화소:
+            raise 손님오류("상자 크기 또는 합계가 처리 한도를 넘습니다")
+        결과.append([x0, y0, x1, y1])
+    return 결과
+
+
 def 상자읽기(파일, 쪽, 상자들, 모델이름=None):
-    모델 = 모델얻기(모델이름)
+    상자들 = _상자목록(상자들)
     im, _ = 그림(파일, 쪽)
+    for i, b in enumerate(상자들):
+        if b[2] > im.width or b[3] > im.height:
+            raise 손님오류(f"boxes[{i}]가 이미지 경계를 벗어납니다")
+    모델 = 모델얻기(모델이름)
     with 계산:
-        kL, kV, kT, cf = 모델.read(im, [list(map(int, b)) for b in 상자들])
+        kL, kV, kT, cf = 모델.read(im, 상자들)
     return dict(초=[int(v) for v in kL], 중=[int(v) for v in kV], 종=[int(v) for v in kT], 확신=[float(v) for v in cf])
 
 
 def 경계읽기(파일, 쪽, x0, x1):
+    x0, x1 = _좌표(x0, "x0"), _좌표(x1, "x1")
+    if not 0 <= x0 < x1:
+        raise 손님오류("열 좌표는 0 <= x0 < x1이어야 합니다")
+    배율 = onnx모델.경계폭 / (x1 - x0)
+    if 배율 > 경계최대확대:
+        raise 손님오류("열이 너무 좁습니다: 경계 검출 확대는 최대 4배입니다")
     _, g = 그림(파일, 쪽)
+    if x1 > g.shape[1]:
+        raise 손님오류("열 좌표가 이미지 경계를 벗어납니다")
+    if max(8, int(round(g.shape[0] * 배율))) > 경계최대높이:
+        raise 손님오류("경계 검출 이미지 높이가 처리 한도를 넘습니다")
     with 계산:
         p = align._검출기.경계확률(g, x0, x1)
     return dict(확률=[float(v) for v in p], 높이=int(g.shape[0]))
@@ -465,12 +514,55 @@ def _json기본(o):
 옛영역길 = "/region"                 # 옛 주소 — /area/ 로 넘겨 줌(물음표 뒤도 그대로)
 
 
+공개호스트 = "old-hangul-ocr.toolforge.org"
+로컬호스트 = {"localhost", "127.0.0.1", "::1"}
+
+
+def _주소검증(주소):
+    """urlsplit이 지우는 제어문자도 먼저 거름. 주소는 HTTP(S), 호스트, 선택 경로만."""
+    if not isinstance(주소, str) or not re.fullmatch(r"[A-Za-z0-9._~:/%\[\]-]+", 주소):
+        raise ValueError("주소 문자")
+    u = urllib.parse.urlsplit(주소)
+    host = u.hostname
+    if u.scheme not in ("http", "https") or not host or u.username or u.password or u.query or u.fragment:
+        raise ValueError("주소 형식")
+    if host != "::1" and not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*", host):
+        raise ValueError("호스트 형식")
+    if u.netloc.endswith(":") or (u.port is not None and not 1 <= u.port <= 65535):
+        raise ValueError("포트")
+    return u
+
+
 def _바탕주소(env):
-    if os.environ.get("OCR_BASE"):
-        return os.environ["OCR_BASE"].rstrip("/") + "/"
+    # OCR_BASE는 운영자가 정한 주소. 설정되어 있으면 요청 헤더를 전혀 사용하지 않음.
+    base = os.environ.get("OCR_BASE")
+    if base:
+        try:
+            _주소검증(base)
+        except ValueError:
+            raise 손님오류("OCR_BASE 주소 설정이 올바르지 않습니다", 500)
+        return base.rstrip("/") + "/"
+    # 프록시 출처 인증으로 취급하지 않음: 전달 헤더도 아래 허용 목록으로 제한.
     host = env.get("HTTP_X_FORWARDED_HOST") or env.get("HTTP_HOST") or "localhost"
-    proto = env.get("HTTP_X_FORWARDED_PROTO") or ("https" if host.endswith("toolforge.org") else env.get("wsgi.url_scheme", "http"))
-    return f"{proto}://{host}/"
+    proto = env.get("HTTP_X_FORWARDED_PROTO") or env.get("wsgi.url_scheme", "http")
+    try:
+        u = _주소검증(f"{proto}://{host}")
+        if proto not in ("http", "https") or u.path or u.hostname not in 로컬호스트 | {공개호스트}:
+            raise ValueError("허용되지 않은 주소")
+        if u.hostname == 공개호스트:
+            if u.port not in (None, 443):
+                raise ValueError("공개 포트")
+            proto = "https"            # TLS 종료 뒤 WSGI가 http여도 공개 주소는 HTTPS
+    except ValueError:
+        raise 손님오류("서버 주소 헤더가 올바르지 않습니다")
+    return f"{proto}://{u.netloc.lower()}/"
+
+
+def _서버문장(env, 유지=False):
+    # JSON 문자열 리터럴: 따옴표/역슬래시/줄바꿈/U+2028/U+2029를 JS 데이터로 인코딩.
+    주소 = json.dumps(_바탕주소(env), ensure_ascii=True)
+    앞 = "window.옛한글OCR서버 || " if 유지 else ""
+    return f"window.옛한글OCR서버 = {앞}{주소};\n".encode("utf-8")
 
 
 def _경로(env):
@@ -535,7 +627,7 @@ def app(env, start):
         if 경로 in ("/", "/index.html"):
             return _정적(start, "index.html")
         if 경로 in 소도구들:
-            앞 = f'window.옛한글OCR서버 = window.옛한글OCR서버 || "{_바탕주소(env)}";\n'.encode("utf-8")
+            앞 = _서버문장(env, 유지=True)
             return _정적(start, 소도구들[경로], 앞)
         if 경로 == 옛영역길 or 경로.startswith(옛영역길 + "/"):
             새 = "/area/" + 경로[len(옛영역길):].lstrip("/")
@@ -549,7 +641,7 @@ def app(env, start):
             if 경로.startswith(길):
                 이름 = 경로[len(길):] or "index.html"
                 if 이름 == "서버.js":                # 영역 지정 화면을 서버 모드로(모델은 서버에서)
-                    b = f'window.옛한글OCR서버 = "{_바탕주소(env)}";\n'.encode("utf-8")
+                    b = _서버문장(env)
                     start("200 OK", 공통머리 + [("Content-Type", "text/javascript; charset=utf-8"), ("Content-Length", str(len(b)))])
                     return [b]
                 return _정적(start, os.path.join("영역지정", 이름))
@@ -567,6 +659,8 @@ def app(env, start):
         if 방식 != "POST":
             return _응답(start, {"오류": "없는 주소"}, 404)
         몸 = _몸(env)
+        if 경로 in ("/api/boxes", "/api/edge") and not isinstance(몸, dict):
+            raise 손님오류("요청 본문은 JSON 객체여야 합니다")
         파일, 쪽 = _파일쪽(몸)
         if 경로 == "/api/read":
             문턱 = float(몸.get("threshold") or 표시문턱)
@@ -577,14 +671,12 @@ def app(env, start):
                 raise 손님오류("text(본문)가 없습니다")
             return _응답(start, 맞대기(파일, 쪽, 본문, 몸.get("model"), 몸.get("tiers")))
         if 경로 == "/api/boxes":
-            상자 = 몸.get("boxes") or []
-            if len(상자) > 20000:
-                raise 손님오류("상자가 너무 많습니다")
+            상자 = 몸.get("boxes", [])
             return _응답(start, 상자읽기(파일, 쪽, 상자, 몸.get("model")))
         if 경로 == "/api/area-read":
             return _응답(start, 영역자동읽기(파일, 쪽, 몸.get("ratio"), 몸.get("model"), 몸.get("width"), 몸.get("height")))
         if 경로 == "/api/edge":
-            return _응답(start, 경계읽기(파일, 쪽, int(몸["x0"]), int(몸["x1"])))
+            return _응답(start, 경계읽기(파일, 쪽, 몸.get("x0"), 몸.get("x1")))
         return _응답(start, {"오류": "없는 주소"}, 404)
     except 손님오류 as e:
         return _응답(start, dict({"오류": str(e)}, **e.덧), e.코드)
