@@ -301,6 +301,61 @@ def 연한본문기하(geo):
     return out
 
 
+def 책머리기하(geo):
+    """광곽 없는 한 단의 가로 책 이름을 분리하고 빠진 첫 짧은 열을 복구하는 후보.
+
+    여러 본문 열의 위끝이 모이고, 그보다 위에 같은 높이의 고립 글자가
+    둘 이상 있을 때만 시험한다. 기존 기하를 변경하지 않으며 전사문과
+    더 잘 맞을 때만 채택한다. 독립 OCR의 기본 자르기에는 적용하지 않는다.
+    """
+    if geo is None or geo.get("단") != 1 or len(geo.get("cols", [])) < 8:
+        return None
+    g = np.asarray(geo["image"])
+    cols, spans, pitch = geo["cols"], geo["spans"], geo["pitch"]
+    if scan._frame_read(g, cols) is not None:
+        return None                            # 광곽 안의 제목/주석은 이 후보의 대상이 아님
+    starts = [s[0] for s in spans if s]
+    if len(starts) < 8 or pitch <= 0:
+        return None
+    top = float(np.median(starts))
+    if sum(abs(s - top) <= pitch for s in starts) < len(starts) * 0.6:
+        return None
+    prof = scan.ink_profile(g, cols)
+    heads = []
+    for i, ((a, b), sp) in enumerate(zip(cols, spans)):
+        if sp is None or sp[0] >= top - pitch * 0.8:
+            continue
+        hit = np.flatnonzero(prof[i][sp[0]:min(sp[1], round(top + pitch))]
+                             > (b - a) * scan.SPAN_LOW) + sp[0]
+        gaps = np.flatnonzero(np.diff(hit) > pitch * 0.55)
+        if len(gaps):
+            j = int(gaps[0])
+            if hit[j] - hit[0] < pitch * 1.2 and abs(hit[j + 1] - top) <= pitch:
+                heads.append((i, int(hit[0]), int(hit[j + 1])))
+    if len(heads) < 2 or max(h[1] for h in heads) - min(h[1] for h in heads) > pitch * 0.5:
+        return None
+    out = dict(geo, cols=list(cols), crop_cols=list(geo["crop_cols"]),
+               spans=list(spans), sm=list(geo["sm"]))
+    for i, _, start in heads:
+        out["spans"][i] = (start, spans[i][1])
+    # 긴 본문의 투영에서는 놓치는 짧은 첫 열을 기존 간격에 맞춰 한 열만 조사한다.
+    center = sum(cols[0]) / 2 + geo["xpitch"]
+    width = float(np.median([b - a for a, b in cols]))
+    col = (round(center - width / 2), round(center + width / 2))
+    if 0 <= col[0] < col[1] <= g.shape[1]:
+        p = scan.ink_profile(g, [col])[0]
+        lo = max(0, round(top - pitch * 0.5))
+        hit = np.flatnonzero(p[lo:] > (col[1] - col[0]) * scan.SPAN_LOW) + lo
+        if len(hit) and pitch * 1.5 <= hit[-1] - hit[0] <= pitch * 12 and hit[0] <= top + pitch:
+            half = (geo["crop_cols"][0][1] - geo["crop_cols"][0][0]) / 2
+            out["cols"].insert(0, col)
+            out["crop_cols"].insert(0, (max(0, round(center - half)), min(g.shape[1], round(center + half))))
+            out["spans"].insert(0, (int(hit[0]), int(hit[-1]) + 1))
+            out["sm"].insert(0, scan.smooth(p, max(2, pitch / 9)))
+    out["est"] = [0 if s is None else max(1, int(round((s[1] - s[0]) / pitch))) for s in out["spans"]]
+    return out
+
+
 def 연한구간기하(geo):
     """흐린 글자 때문에 짧아진 여러 열의 구간을 옅은 잉크로 다시 찾는다.
 
@@ -714,6 +769,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     "본문열" = 광곽 안에서 열 위치와 구간을 다시 찾은 후보(`본문열기하`).
     "조각열" = 폭 선별에서 버려진 조각으로 광곽 안의 끝 열을 복구한 후보(`조각열기하`).
     "연한구간" = 앞 후보 중 가장 잘 맞은 기하의 흐린 글자 구간을 복구한 후보(`연한구간기하`).
+    "책머리" = 광곽 없는 한 단에서 고립 책 이름을 빼고 첫 짧은 본문 열을 복구한 후보(`책머리기하`).
     추가 후보들은 앞 기하와 같으면 건너뛰며 더 잘 맞을 때만 선택한다.
     큰빼기 = 큰 활자 틀(`{{더크게|에스라}}` 같은 책 이름) 안 글자를 빼고 맞대기. None 이면 그대로 해 보고, 일치가 모자라고
     원문에 큰 활자 틀이 있으면 빼고도 해 봐서 잘 맞는 쪽.
@@ -739,12 +795,14 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
         for 판 in 기하들:
             if best and (best[0].get("일치") or 0) >= 다시볼일치:
                 break                             # 자르는 기하로 잘 맞았으면 그만
-            if 판 in ("쪽자간", "본문", "연한본문", "본문열", "조각열", "연한구간"):
+            if 판 in ("쪽자간", "본문", "연한본문", "본문열", "조각열", "연한구간", "책머리"):
                 if 판 not in 본열:
                     if 판 == "쪽자간":
                         본열[판] = 쪽자간기하(slug, ip, 설정)
                     elif 판 == "연한구간":
                         본열[판] = 연한구간기하(bestgeo)
+                    elif 판 == "책머리":
+                        본열[판] = 책머리기하(본열.get("읽기자료") or 기하(slug, ip, True, 설정=설정))
                     elif 판 == "조각열":
                         본열[판] = 조각열기하(본열.get("읽기자료") or 기하(slug, ip, True, 설정=설정))
                     else:
@@ -765,7 +823,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                     이전 = len(글자들)
                     r = 맞대기(mdl, geo, 글자들, 경계=경계)
                     r["기하"], r["제목"], r["큰빼기"] = 판, kh, 빼기
-                    if 판 in ("본문", "연한본문", "본문열", "조각열", "연한구간"):
+                    if 판 in ("본문", "연한본문", "본문열", "조각열", "연한구간", "책머리"):
                         r["_본문기하"] = geo
                     시도기록.append(dict(기하=판, 제목=kh, 큰빼기=빼기, 경계=경계,
                                       전사글자수=len(글자들), 일치=r.get("일치"),
@@ -818,7 +876,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     return best
 
 
-def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문", "연한본문", "본문열", "조각열", "연한구간"), 합의=True, 밀림=False, 깨진=False,
+def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문", "연한본문", "본문열", "조각열", "연한구간", "책머리"), 합의=True, 밀림=False, 깨진=False,
          설정=None, 누락=True):
     """
     위키 원문(편집 상자의 본문) 한 쪽을 그 쪽 스캔과 맞댄다.
@@ -842,12 +900,13 @@ def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들
     낱 = [c for c in r["후보"] if c["갈래"] in 낱갈래]
     for c in r["후보"]:
         c["합의"] = c["갈래"] not in 낱갈래 or not 합의
-    # 흐린 구간 복구를 채택한 쪽만 같은 복구로 재확인한다.
+    # 흐린 구간/책머리 후보를 채택한 쪽만 같은 복구로 재확인한다.
     # 채택하지 않은 쪽의 기존 교정 후보 합의는 유지한다.
-    합의기하들 = 기하들 if r.get("기하") == "연한구간" else tuple(p for p in 기하들 if p != "연한구간")
+    조건후보 = ("연한구간", "책머리")
+    합의기하들 = tuple(p for p in 기하들 if p not in 조건후보 or p == r.get("기하"))
     읽기합의 = (True, "판심", "본문", "연한본문", "본문열", "조각열")
-    if r.get("기하") == "연한구간":
-        읽기합의 += ("연한구간",)
+    if r.get("기하") in 조건후보:
+        읽기합의 += (r["기하"],)
     for 이름, 옵 in (("B", dict(경계=True, 기하들=합의기하들)), ("C", dict(경계=True, 기하들=읽기합의))):
         남은 = [c for c in 낱 if not c["합의"]]
         if not 합의 or not 남은:
