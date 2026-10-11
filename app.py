@@ -31,6 +31,10 @@ import hashlib
 import json
 import os
 import sys
+
+# 서버가 불러오는 부품의 바이트코드 캐시를 만들지 않음.
+sys.dont_write_bytecode = True
+
 import tempfile
 import threading
 import time

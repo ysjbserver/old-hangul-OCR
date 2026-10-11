@@ -301,6 +301,41 @@ def 연한본문기하(geo):
     return out
 
 
+def 연한구간기하(geo):
+    """흐린 글자 때문에 짧아진 여러 열의 구간을 옅은 잉크로 다시 찾는다.
+
+    열 위치·모델 입력·자간·경계 후보는 유지하고 구간만 늘린다.
+    기존 맞대기가 낮을 때 추가 후보로 비교하며 더 잘 맞는 결과만 선택한다.
+    """
+    if geo is None or geo["단"] != 1 or len(geo["cols"]) < 3:
+        return None
+    g = np.asarray(geo["image"])
+    h = g.shape[0]
+    T, B = scan.page_frame(g, geo["cols"])
+    if not (h * 0.05 < T < h * 0.3 and h * 0.7 < B < h * 0.98):
+        return None
+    prof = [(g[:, a:b] < 160).sum(axis=1).astype(float) for a, b in geo["cols"]]
+    spans = scan.spans_between(prof, geo["cols"], T, B, geo["pitch"])
+    if spans is None:
+        return None
+    extended, restored = [], 0
+    for old, new in zip(geo["spans"], spans):
+        if old is None or new is None:
+            extended.append(old)
+            continue
+        # 여러 열에서 맨 위의 글자가 세 자간 넘게 빠진 경우만 다시 비교한다.
+        # 짧은 열·광곽 부근의 작은 변화로 추가 추론이 늘지 않게 한다.
+        a, b = min(old[0], new[0]), max(old[1], new[1])
+        restored += int(old[0] - a > geo["pitch"] * 3 and a <= T + geo["pitch"])
+        extended.append((a, b))
+    if restored < 2:
+        return None
+    out = geo.copy()
+    out["spans"] = extended
+    out["est"] = [0 if s is None else max(1, round((s[1] - s[0]) / geo["pitch"])) for s in extended]
+    return out
+
+
 def 본문열기하(geo):
     """광곽 안의 잉크로 열을 다시 찾는 추가 후보. 모델 입력 그림은 유지한다.
 
@@ -678,6 +713,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     "연한본문" = 본문 기하의 글자 구간을 옅은 잉크까지 포함해 다시 찾은 후보(`연한본문기하`).
     "본문열" = 광곽 안에서 열 위치와 구간을 다시 찾은 후보(`본문열기하`).
     "조각열" = 폭 선별에서 버려진 조각으로 광곽 안의 끝 열을 복구한 후보(`조각열기하`).
+    "연한구간" = 앞 후보 중 가장 잘 맞은 기하의 흐린 글자 구간을 복구한 후보(`연한구간기하`).
     추가 후보들은 앞 기하와 같으면 건너뛰며 더 잘 맞을 때만 선택한다.
     큰빼기 = 큰 활자 틀(`{{더크게|에스라}}` 같은 책 이름) 안 글자를 빼고 맞대기. None 이면 그대로 해 보고, 일치가 모자라고
     원문에 큰 활자 틀이 있으면 빼고도 해 봐서 잘 맞는 쪽.
@@ -685,7 +721,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     if 제목 is None and 아는문헌(slug):
         제목 = corpus.heading_printed(slug)
     시도 = [제목] if 제목 is not None else [False, True]
-    best = None
+    best = bestgeo = None
     본열 = {}
     시도기록 = []
 
@@ -703,10 +739,12 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
         for 판 in 기하들:
             if best and (best[0].get("일치") or 0) >= 다시볼일치:
                 break                             # 자르는 기하로 잘 맞았으면 그만
-            if 판 in ("쪽자간", "본문", "연한본문", "본문열", "조각열"):
+            if 판 in ("쪽자간", "본문", "연한본문", "본문열", "조각열", "연한구간"):
                 if 판 not in 본열:
                     if 판 == "쪽자간":
                         본열[판] = 쪽자간기하(slug, ip, 설정)
+                    elif 판 == "연한구간":
+                        본열[판] = 연한구간기하(bestgeo)
                     elif 판 == "조각열":
                         본열[판] = 조각열기하(본열.get("읽기자료") or 기하(slug, ip, True, 설정=설정))
                     else:
@@ -727,7 +765,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                     이전 = len(글자들)
                     r = 맞대기(mdl, geo, 글자들, 경계=경계)
                     r["기하"], r["제목"], r["큰빼기"] = 판, kh, 빼기
-                    if 판 in ("본문", "연한본문", "본문열", "조각열"):
+                    if 판 in ("본문", "연한본문", "본문열", "조각열", "연한구간"):
                         r["_본문기하"] = geo
                     시도기록.append(dict(기하=판, 제목=kh, 큰빼기=빼기, 경계=경계,
                                       전사글자수=len(글자들), 일치=r.get("일치"),
@@ -735,6 +773,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                                       상세=기하요약(geo)))
                     if best is None or (r.get("일치") or -1) > (best[0].get("일치") or -1):
                         best = (r, 글자들)
+                        bestgeo = geo
                 continue
             판심 = 판 == "판심"
             읽기, 끝띠 = 판 is True or 판심, 판 == "끝띠"
@@ -772,13 +811,14 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                                   상세=기하요약(geo)))
                 if best is None or (r.get("일치") or -1) > (best[0].get("일치") or -1):
                     best = (r, 글자들)
+                    bestgeo = geo
     if best is None:
         return dict(사유="스캔에서 열을 못 찾았습니다"), []
     best[0]["시도기록"] = 시도기록
     return best
 
 
-def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문", "연한본문", "본문열", "조각열"), 합의=True, 밀림=False, 깨진=False,
+def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문", "연한본문", "본문열", "조각열", "연한구간"), 합의=True, 밀림=False, 깨진=False,
          설정=None, 누락=True):
     """
     위키 원문(편집 상자의 본문) 한 쪽을 그 쪽 스캔과 맞댄다.
@@ -802,7 +842,13 @@ def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들
     낱 = [c for c in r["후보"] if c["갈래"] in 낱갈래]
     for c in r["후보"]:
         c["합의"] = c["갈래"] not in 낱갈래 or not 합의
-    for 이름, 옵 in (("B", dict(경계=True, 기하들=기하들)), ("C", dict(경계=True, 기하들=(True, "판심", "본문", "연한본문", "본문열", "조각열")))):
+    # 흐린 구간 복구를 채택한 쪽만 같은 복구로 재확인한다.
+    # 채택하지 않은 쪽의 기존 교정 후보 합의는 유지한다.
+    합의기하들 = 기하들 if r.get("기하") == "연한구간" else tuple(p for p in 기하들 if p != "연한구간")
+    읽기합의 = (True, "판심", "본문", "연한본문", "본문열", "조각열")
+    if r.get("기하") == "연한구간":
+        읽기합의 += ("연한구간",)
+    for 이름, 옵 in (("B", dict(경계=True, 기하들=합의기하들)), ("C", dict(경계=True, 기하들=읽기합의))):
         남은 = [c for c in 낱 if not c["합의"]]
         if not 합의 or not 남은:
             break

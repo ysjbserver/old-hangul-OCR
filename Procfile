@@ -1,1 +1,1 @@
-web: gunicorn --bind=0.0.0.0:8000 --workers=1 --threads=4 --timeout=900 app:app
+web: env PYTHONDONTWRITEBYTECODE=1 gunicorn --bind=0.0.0.0:8000 --workers=1 --threads=4 --timeout=900 app:app
