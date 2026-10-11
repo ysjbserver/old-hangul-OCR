@@ -591,6 +591,10 @@ def _분주읽기(mdl, geo, out):
                 continue
             Y0, Y1 = min(y0, o[4][안[0]][1]), max(y1, o[4][안[-1]][3])
             옛 = float(np.mean(np.log(np.clip([o[2][j] for j in 안], 1e-6, None))))
+            # 새 로그 확신 평균은 최대 0 — 교체 불가능한 후보는 재인식하지 않는다.
+            # 경계의 부동소수점 차이는 보수적으로 남긴다. 읽기.js와 같은 조건.
+            if 옛 + BUNJU_GAIN > 1e-12:
+                continue
             오 = _줄읽기(mdl, geo, cx, hi, Y0, Y1)
             왼 = _줄읽기(mdl, geo, lo, cx, Y0, Y1)
             if 오 is None or 왼 is None:

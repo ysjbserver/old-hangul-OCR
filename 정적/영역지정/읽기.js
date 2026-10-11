@@ -2112,6 +2112,8 @@ async function 분주읽기(모델, geo, 열들) {
       let 옛 = 0;
       안.forEach(function (j) { 옛 += Math.log(Math.max(o.확신[j], 1e-6)); });
       옛 /= 안.length;
+      // 새 로그 확신 평균은 최대 0. 교체 불가능한 후보만 생략하며 경계는 남긴다(align.py).
+      if (옛 + BUNJU_GAIN > 1e-12) continue;
       const 오 = await 줄읽기(모델, geo, cx, hi, Y0, Y1);
       const 왼 = await 줄읽기(모델, geo, lo, cx, Y0, Y1);
       if (오 === null || 왼 === null) continue;
