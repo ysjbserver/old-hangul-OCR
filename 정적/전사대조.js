@@ -21,6 +21,7 @@ var 상태, 단추, 판, 깔개 = null, 후보들 = [], 어긋남보기 = false,
 function 확실(c) { return c.합의 !== false && c.갈래 !== "빠짐" && c.갈래 !== "더들어감"; }
 function 보일것(c) { return 어긋남보기 || 확실(c); }
 function 바꿀수(c) { return (c.갈래 === "바뀜" || c.갈래 === "모르는자모") && c.스캔; }
+function 넣을수(c) { return c.갈래 === "누락" && c.스캔; }
 
 var 이름 = { "바뀜": "글자가 다름", "모르는자모": "모르는 자모", "깨진글자": "깨진 글자", "누락": "전사문에 글자 누락 의심", "빠짐": "스캔에 글자가 더 있음", "더들어감": "전사문에 글자가 더 있음" };
 var 색 = { "바뀜": "rgba(255,80,80,.40)", "모르는자모": "rgba(255,160,0,.40)", "깨진글자": "rgba(170,80,255,.38)", "누락": "rgba(80,140,255,.35)", "빠짐": "rgba(80,140,255,.35)", "더들어감": "rgba(80,140,255,.35)" };
@@ -479,6 +480,27 @@ function 바꾸기(c) {
     알림("이 자리는 틀과 섞여 있어 자동으로 바꾸지 않습니다 — 직접 고쳐 주세요.");
     return;
   }
+  글넣기(상자, c);
+  c.끝남 = "바꿈";
+  if (깔개) 깔개.그리기();
+  목록그리기();
+}
+
+// 누락 의심 자리(다음 글자 앞)에 스캔 글자를 끼워 넣는다 — 앞뒤 원문이 맞댈 때와 같을 때만
+function 넣기(c) {
+  var 상자 = 편집상자();
+  if (상자.value.slice(c.시작 - c.앞원문.length, c.시작) !== c.앞원문
+      || 상자.value.slice(c.시작, c.시작 + c.뒤원문.length) !== c.뒤원문) {
+    알림("그 자리 글이 그사이 바뀌어 넣지 않았습니다 — 직접 고쳐 주세요.");
+    return;
+  }
+  글넣기(상자, c);
+  c.끝남 = "넣음";
+  if (깔개) 깔개.그리기();
+  목록그리기();
+}
+
+function 글넣기(상자, c) {
   상자.focus({ preventScroll: true });
   상자.setSelectionRange(c.시작, c.끝);
   // execCommand 로 넣어야 되돌리기(Ctrl+Z)가 된다. 안 되면 setRangeText.
@@ -489,9 +511,6 @@ function 바꾸기(c) {
     상자.dispatchEvent(new Event("input", { bubbles: true }));
   }
   따라가기();
-  c.끝남 = "바꿈";
-  if (깔개) 깔개.그리기();
-  목록그리기();
 }
 
 // ── 목록 ──
@@ -515,7 +534,7 @@ function 목록그리기() {
   if (끝난것.length) {
     var 셈 = {};
     끝난것.forEach(function (ck) { 셈[ck[0].끝남] = (셈[ck[0].끝남] || 0) + 1; });
-    var 말 = { "넘김": "넘긴 곳", "바꿈": "바꾼 곳", "손댐": "손댄 곳" };
+    var 말 = { "넘김": "넘긴 곳", "바꿈": "바꾼 곳", "넣음": "넣은 곳", "손댐": "손댄 곳" };
     var 접 = document.createElement("div");
     접.style.cssText = "padding:6px 4px;border-top:1px solid #eaecf0;font-size:13px;color:#36c;cursor:pointer";
     접.textContent = (끝난것보기 ? "▾ " : "▸ ")
@@ -590,6 +609,9 @@ function 줄그리기(몸, c, k) {
     단추하나("자리 보기", function () { 자리보기(c); });
     if (!c.끝남 && 바꿀수(c)) {
       단추하나("바꾸기 → " + c.스캔, function () { 바꾸기(c); });
+    }
+    if (!c.끝남 && 넣을수(c)) {
+      단추하나("넣기 → " + c.스캔, function () { 넣기(c); });
     }
     if (!c.끝남) 단추하나("넘기기", function () { c.끝남 = "넘김"; if (깔개) 깔개.그리기(); 목록그리기(); });
     줄.appendChild(단);
@@ -695,6 +717,10 @@ async function 시작() {
     답.초 = ((performance.now() - t0) / 1000).toFixed(1);
     후보들 = 답.후보.map(function (c) {
       c.원문 = 본문.slice(c.시작, c.끝);
+      if (c.갈래 === "누락") {           // 넣기 전에 앞뒤가 그대로인지 볼 원문 몇 자
+        c.앞원문 = 본문.slice(Math.max(0, c.시작 - 6), c.시작);
+        c.뒤원문 = 본문.slice(c.시작, c.시작 + 6);
+      }
       return c;
     });
     기준글 = 본문;

@@ -356,6 +356,26 @@ def 책머리기하(geo):
     return out
 
 
+def _광곽줄아래(p, T, pitch, w):
+    """열 잉크 p 에서 T 바로 아래(0.5 자간 안)의 광곽 가로줄 — 위에 글자 획이 없고 열 폭 60% 넘게 찬 얇은 줄(쌍줄이면
+    두 줄 묶어 0.12 자간 이하) 뒤에 0.1 자간 넘게 빈 줄이 이어질 때만 — 을 건너뛴 자리. 없으면 T.
+    첫 글자의 가로획은 뒤에 세로획이 이어져 두께 조건에 안 걸림."""
+    seg = p[T:T + int(pitch * 0.5)] / max(1, w)
+    hit = np.flatnonzero(seg > 0.6)
+    if not len(hit):
+        return T
+    start = run = hit[0]
+    while start > 0 and seg[start - 1] > 0.05:
+        start -= 1
+    while run + 1 < len(seg) and seg[run + 1] > 0.05:
+        run += 1
+    # 줄 위에는 작은 절 번호(十 · 六 — 열 폭의 30% 아래)만 있어도 됨. 글자 획이 위에 있으면 안 건드림
+    if seg[:start].max(initial=0) > 0.35 or run - start > pitch * 0.12:
+        return T
+    gap = p[T + run + 1:T + run + 1 + max(2, int(pitch * 0.1))] / max(1, w)
+    return T + run + 1 if len(gap) and gap.max() < 0.05 else T
+
+
 def 연한구간기하(geo):
     """흐린 글자 때문에 짧아진 여러 열의 구간을 옅은 잉크로 다시 찾는다.
 
@@ -373,15 +393,18 @@ def 연한구간기하(geo):
     spans = scan.spans_between(prof, geo["cols"], T, B, geo["pitch"])
     if spans is None:
         return None
+    # 자르는 광곽 T 가 광곽 가로줄보다 위면(권2 0030 — 기운 쌍줄이 열마다 193~224) 구간이 그 줄을 품어 열 머리에
+    # 헛상자가 생기고 한 칸씩 밀림 → 줄이 있는 열은 줄 바로 아래에서 시작(줄 아래 흐린 첫 글자는 그대로 품음).
+    Ts = [_광곽줄아래(p, T, geo["pitch"], b - a) for p, (a, b) in zip(prof, geo["cols"])]
     extended, restored = [], 0
-    for old, new in zip(geo["spans"], spans):
+    for i, (old, new) in enumerate(zip(geo["spans"], spans)):
         if old is None or new is None:
             extended.append(old)
             continue
         # 여러 열에서 맨 위의 글자가 세 자간 넘게 빠진 경우만 다시 비교한다.
         # 짧은 열·광곽 부근의 작은 변화로 추가 추론이 늘지 않게 한다.
-        a, b = min(old[0], new[0]), max(old[1], new[1])
-        restored += int(old[0] - a > geo["pitch"] * 3 and a <= T + geo["pitch"])
+        a, b = max(min(old[0], new[0]), Ts[i]), max(old[1], new[1])
+        restored += int(old[0] - a > geo["pitch"] * 3 and a <= Ts[i] + geo["pitch"])
         extended.append((a, b))
     if restored < 2:
         return None
@@ -970,7 +993,7 @@ def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들
             for c in 누락대조.후보찾기(mdl, geo, 글자들, raw):
                 c["상자번호"] = -1
                 if 그림:
-                    c["그림"] = 조각그림(geo["image"], [c["누락상자"]], 0)
+                    c["그림"] = 조각그림(geo["image"], c["누락이웃"], 1)   # 앞뒤 한 칸씩 함께
                 r["후보"].append(c)
     차례 = {"바뀜": 0, "모르는자모": 1, "깨진글자": 1, "누락": 2, "빠짐": 2, "더들어감": 2}
     r["후보"].sort(key=lambda c: (not c["합의"], 차례[c["갈래"]], -c["점수"]))
