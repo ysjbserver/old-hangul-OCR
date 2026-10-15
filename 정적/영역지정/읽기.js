@@ -1357,17 +1357,18 @@ function 접어또렷함(prof, y0, y1, period) {
 }
 
 let RATIO_FIT = [1.0, 1.7], RATIO_FIT_OVER = 2.0;   // scan.RATIO_FIT · RATIO_FIT_OVER — 행간 넓은 책의 두세 글자 주기 착각 막기(null = 끔)
+let RATIO_RECHECK = [1.15, 1.1];   // scan.RATIO_RECHECK — 문헌 중앙값이 앞 값을 넘으면 그 문헌의 쪽을 뒤 값을 위쪽 끝으로 다시 잼(null = 끔)
 let RATIO_HALF = 0.9;   // scan.RATIO_HALF — 고른 t 의 절반으로 접어도 최고 점수의 이 몫 넘게 또렷하면 t/2. null = 끔
 
 /** `scan.page_ratio` — 이 쪽의 세로 자간 ÷ 가로 자간(그림만 보고). 못 재면 null */
-function 쪽자간비(g, 단) {
+function 쪽자간비(g, 단, 상한) {
   const 찾 = 열찾기(g, true, null);
   const xpitch = 찾.자간;
   if (!찾.열.length || !xpitch) return null;
   const geo = 쪽기하(g, YX_RATIO, 단 || 1, false, null);   // ⚠ 자르는 경로의 기하 — 파이썬과 같게
   if (geo === null) return null;
   const prof = 잉크무늬(g, geo.cols);
-  const lo = 0.55, hi = 1.45, steps = 120, step = (hi - lo) / (steps - 1);
+  const lo = 0.55, hi = 상한 === undefined ? 1.45 : 상한, steps = 120, step = (hi - lo) / (steps - 1);
   const gw = (RATIO_FIT && geo.글자폭몫 !== undefined) ? 0.9 * geo.글자폭몫 * geo.xpitch / xpitch : null;   // 글자 폭 ÷ 열 간격
   const out = [];
   geo.spans.forEach(function (sp, i) {
@@ -1396,10 +1397,16 @@ function 쪽자간비(g, 단) {
   return out.length >= 3 ? 중앙값(out) : null;
 }
 
-/** `scan.estimate_ratio` — 쪽마다 잰 것(못 잰 쪽은 null)의 중앙값. 못 재면 null */
-function 문헌자간비(값들) {
-  const got = 값들.filter(function (v) { return v; });
-  return got.length ? 중앙값(got) : null;
+/** `scan.estimate_ratio` — 쪽마다 잰 것(못 잰 쪽은 null)의 중앙값. 못 재면 null.
+ *  `다시재기(상한)` 이 주어지고 중앙값이 RATIO_RECHECK[0] 을 넘으면 위쪽 끝을 RATIO_RECHECK[1] 로 낮춰 다시 잰 값(쪽마다 배열)의 중앙값 */
+function 문헌자간비(값들, 다시재기) {
+  const 중 = function (a) { const got = a.filter(function (v) { return v; }); return got.length ? 중앙값(got) : null; };
+  let r = 중(값들);
+  if (r !== null && RATIO_RECHECK && r > RATIO_RECHECK[0] && 다시재기) {
+    const r2 = 중(다시재기(RATIO_RECHECK[1]));
+    if (r2 !== null) r = r2;
+  }
+  return r;
 }
 
 /** `page.판짜임정하기` — 쪽마다 [열 자간, 열 수] 또는 null → {자간, 열수}. 8쪽 못 되면 null */
@@ -1462,10 +1469,13 @@ function 판형살피기(파일, 손) {
     const 판형 = 판형정하기(가름쪽.map(function (p) { return 가름[p] || null; }),
                           단쪽.map(function (p) { return 단[p] || null; }));
     알림("이 파일의 자간을 재는 중…");
-    const 자간 = 문헌자간비(단쪽.map(function (p) {
-      try { return 그림[p] ? 쪽자간비(그림[p], 판형) : null; }
-      catch (e) { console.warn("자간 재기 — " + p + "쪽", e); return null; }
-    }));
+    const 쪽재기 = function (상한) {
+      return 단쪽.map(function (p) {
+        try { return 그림[p] ? 쪽자간비(그림[p], 판형, 상한) : null; }
+        catch (e) { console.warn("자간 재기 — " + p + "쪽", e); return null; }
+      });
+    };
+    const 자간 = 문헌자간비(쪽재기(undefined), 쪽재기);
     const 값 = { 단: 판형 };
     if (자간) 값.자간비 = 자간;
     const 짜 = 판짜임정하기(짜임);
@@ -1651,7 +1661,7 @@ async function 쪽읽기(모델, geo, span) {
   }
   return { 글자: out, 확신: conf, 줄들: 줄들, 상자수: r.상자수, 남긴열: 남, 띄움: 띄움 };
 }
-let PUNCT_DROP = [",", "."];   // align.PUNCT_DROP — 결과에서 뺄 문장부호(설정 `부호빼기`)
+let PUNCT_DROP = [",", ".", "(", ")", "「", "」", "【", "】", "｢", "｣"];   // align.PUNCT_DROP — 결과에서 뺄 문장부호(설정 `부호빼기`)
 
 // ── 띄어쓰기 (`align.띄울자리`) ─────────────────────────
 // 한 열 안 이웃 글자의 잉크 빈틈 ÷ 칸 높이 중앙값 − 모양 고침 > 쪽마다 오츠 문턱이면 띄움. 열 끝은 못 봄
@@ -1771,6 +1781,33 @@ function 맞춤상자(g, boxes, geo) {
   });
 }
 
+// align._잉크몫 — 상자마다 잉크(INK 보다 어두운 화소)가 넓이에서 차지하는 몫이 BLANK_SKIP 이상인가
+function 잉크몫칸(g, boxes) {
+  const 값 = g.값, W = g.너비, H = g.높이;
+  return boxes.map(function (b) {
+    const x0 = Math.max(0, Math.trunc(b[0])), x1 = Math.min(W, Math.trunc(b[2]));
+    const y0 = Math.max(0, Math.trunc(b[1])), y1 = Math.min(H, Math.trunc(b[3]));
+    if (!(x1 > x0 && y1 > y0)) return 0 >= BLANK_SKIP;
+    let n = 0;
+    for (let y = y0; y < y1; y++) { const o = y * W; for (let x = x0; x < x1; x++) if (값[o + x] < INK) n++; }
+    return n / ((x1 - x0) * (y1 - y0)) >= BLANK_SKIP;
+  });
+}
+
+// align._고름점수 의 확신 부분 — 빈 칸을 뺀 평균 로그 확신(BLANK_INNER 면 글자 있는 첫 칸과 끝 칸 사이의 빈 칸만 뺌). 뺄 것이 없으면 m(그대로)
+function 고름확신(logc, 잉크, o, m) {
+  if (!잉크 || !o.개수) return m;
+  const f = 잉크.slice(o.시작, o.시작 + o.개수);
+  let a = -1, z = -1;
+  for (let j = 0; j < f.length; j++) if (f[j]) { if (a < 0) a = j; z = j; }
+  let s = 0, c = 0;
+  for (let j = 0; j < f.length; j++) {
+    const 센다 = f[j] || (BLANK_INNER && a >= 0 && (j < a || j > z));
+    if (센다) { s += logc[o.시작 + j]; c++; }
+  }
+  return c ? s / c : m;
+}
+
 async function 열마다읽기(모델, geo, span) {
   if (span === undefined) span = 3;
   const 그림자 = (CUT_LEARN && 모델.경계) ? await 경계프로파일(모델, geo) : null;
@@ -1780,18 +1817,22 @@ async function 열마다읽기(모델, geo, span) {
   const logc = new Float64Array(cf.length);
   for (let i = 0; i < cf.length; i++) logc[i] = Math.log(Math.max(cf[i], 1e-6));
 
+  // align.BLANK_SKIP — 잉크 몫이 이 값 미만인 빈 칸(시의 띄어쓰기 칸)은 칸수를 고르는 평균 확신에서 뺀다(열 점수는 그대로)
+  const 잉크칸 = (BLANK_SKIP !== null) ? 잉크몫칸(geo.그림, bp.상자) : null;
   const 열들 = [];
   for (let i = 0; i < bp.계획.length; i++) {
     const opts = bp.계획[i].filter(function (o) { return o.칸수 > 0; });
     if (!opts.length) { 열들.push(null); continue; }
     // ⚠ 파이썬 `max` 는 동점이면 먼저 나온 것 — 그래서 `>` (`>=` 아님)
-    let best = null, bestv = -Infinity;
+    // 고르는 점수 = 평균 로그 확신 − CUT_COST_W × 비용 ÷ 칸수. ⚠ 열 점수(`가장자리다듬기` 가 씀)는 비용을 뺀 평균 로그 확신 그대로
+    let best = null, bestv = -Infinity, bestm = NaN;
     for (let k = 0; k < opts.length; k++) {
       const o = opts[k];
       let s = 0;
       for (let j = 0; j < o.개수; j++) s += logc[o.시작 + j];
-      const v = o.개수 ? s / o.개수 : NaN;
-      if (v > bestv) { bestv = v; best = o; }
+      const m = o.개수 ? s / o.개수 : NaN;
+      const v = o.개수 ? 고름확신(logc, 잉크칸, o, m) - CUT_COST_W * o.비용 / Math.max(1, o.개수) : NaN;
+      if (v > bestv) { bestv = v; bestm = m; best = o; }
     }
     // 글자가 아닌 칸(작은 절 번호 · 광곽 가로줄)은 글자에서 뺀다 — 점수는 그대로
     const 글 = [], 확 = [], 상 = [];
@@ -1806,7 +1847,7 @@ async function 열마다읽기(모델, geo, span) {
       확.push(c);
       상.push(best.상자들[j]);
     }
-    열들.push({ 점수: bestv, 글자: 글, 확신: 확, 칸수: best.개수, 상자: 상 });
+    열들.push({ 점수: bestm, 글자: 글, 확신: 확, 칸수: best.개수, 상자: 상 });
   }
   if (HEADING) await 큰제목읽기(모델, geo, 열들, span);
   if (BUNJU) await 분주읽기(모델, geo, 열들);
@@ -2134,6 +2175,11 @@ let EDGE_DROP = 0.3, EDGE_MAX = 3, EDGE_OVERLAP = 0.6, EDGE_DROP_IN = 0.7;   // 
 let EDGE_BAR_RUN = 5;  // align.EDGE_BAR_RUN — 끝 열에 `ㅣ` 가 이만큼 넘게 연달아면 뗌 (null = 끔)
 let EDGE_BAR = 0.5;   // align.EDGE_BAR — 끝 열이 이 몫 넘게 `ㅣ` 면 광곽 세로줄로 보고 뗌 (null = 끔)
 let EDGE_GUIDE = 0.3;  // align.EDGE_GUIDE — 세로줄 너머 떼일 열들이 본문 같으면(확신 · 간격 자간 ±이 몫) 안 뗌 — 계선 판 (null = 끔)
+let CUT_COST_W = 1.0;        // align.CUT_COST_W — 열의 칸수를 고르는 점수 = 평균 로그 확신 − 이 무게 × 자르기 비용 ÷ 칸수 (0 = 확신만)
+let BLANK_SKIP = null, BLANK_INNER = false;   // align.BLANK_SKIP · BLANK_INNER — 칸수를 고를 때 빈 칸(잉크 몫 < BLANK_SKIP)을 평균 확신에서 뺌(null = 끔)
+let EDGE_GUIDE_CHAIN = true;   // align.EDGE_GUIDE_CHAIN — 세로줄 너머로 뗄 열 가운데 안쪽에서부터 본문 같은 열이 이어지는 만큼은 안 뗌(계선 판에서 끝 열 둘이 함께 떼이던 것)
+let EDGE_GUIDE_ONE = 0.8;      // align.EDGE_GUIDE_ONE — 세로줄 너머 **한 열만** 떼일 때도 본문 같은 꽉 찬 열이면 안 뗌(글자 수 ≥ 안쪽 열 중앙값 × 이 몫) (null = 끔)
+let EDGE_GUIDE_ONE_MIN = 12;  // align.EDGE_GUIDE_ONE_MIN — 안쪽 열 4개 이상 · 글자 수 중앙값이 이 이상인 본문 쪽에서만
 let NOTCHAR_CONF = 0.5, NOTCHAR_WIDTH = 0.5, NOTCHAR_ROW = 0.9, NOTCHAR_KEEP = ["ㅣ"];   // align.py 와 같은 값
 
 /**
@@ -2190,7 +2236,17 @@ function 가장자리다듬기(geo, 열들, δ, 최대, 겹침, 안δ) {
     const 줄 = function (i, j) { return 세로줄있나(geo.그림, 가(i), 가(j), T, B); };
     // 계선 판 — 떼일 열들이 본문 같으면(절반 이상 확신 ≥ 기준 − δ · 안쪽 열까지 자간 간격) 안 뗌
     const 본문같음 = function (떼일, 안쪽) {
-      if (EDGE_GUIDE === null || 떼일.length < 2) return false;   // 광곽 밖 한 열만 떼는 것은 그대로(여백 장 제목)
+      if (EDGE_GUIDE === null) return false;
+      if (떼일.length < 2) {   // 광곽 밖 한 열만 떼는 것은 그대로(여백 장 제목) — `EDGE_GUIDE_ONE` 이 켜지면 본문 같은 꽉 찬 열은 살림
+        if (EDGE_GUIDE_ONE === null || !떼일.length || 열들[떼일[0]] === null) return false;
+        const o = 열들[떼일[0]];
+        const 안길이 = [];
+        for (let t = 2; t < 남.length - 2; t++) if (열들[남[t]] !== null) 안길이.push(열들[남[t]].글자.length);
+        if (안길이.length < 4) return false;
+        const 중 = 중앙값(안길이);
+        if (중 < EDGE_GUIDE_ONE_MIN || o.글자.length < EDGE_GUIDE_ONE * 중 || o.점수 < 기준 - δ) return false;
+        return Math.abs(Math.abs(가(떼일[0]) - 가(안쪽)) - geo.xpitch) <= geo.xpitch * EDGE_GUIDE;
+      }
       let 좋음 = 0;
       for (const i of 떼일) if (열들[i] !== null && 열들[i].점수 >= 기준 - δ) 좋음++;
       const 잇 = 떼일.concat([안쪽]);
@@ -2199,13 +2255,43 @@ function 가장자리다듬기(geo, 열들, δ, 최대, 겹침, 안δ) {
       }
       return 좋음 * 2 >= 떼일.length;
     };
+    // 떼일 열 하나가 본문 같은가 — `EDGE_GUIDE_ONE` 의 조건 (align.py 의 `본문류`)
+    const 본문류 = function (i, 안쪽) {
+      if (EDGE_GUIDE === null || EDGE_GUIDE_ONE === null || 열들[i] === null) return false;
+      const o = 열들[i];
+      const 안길이 = [];
+      for (let t = 2; t < 남.length - 2; t++) if (열들[남[t]] !== null) 안길이.push(열들[남[t]].글자.length);
+      if (안길이.length < 4) return false;
+      const 중 = 중앙값(안길이);
+      if (중 < EDGE_GUIDE_ONE_MIN || o.글자.length < EDGE_GUIDE_ONE * 중 || o.점수 < 기준 - δ) return false;
+      return Math.abs(Math.abs(가(i) - 가(안쪽)) - geo.xpitch) <= geo.xpitch * EDGE_GUIDE;
+    };
     for (let t = Math.min(최대, 남.length - 5); t > 0; t--) {          // 앞(오른쪽) 끝
-      if (줄(남[t], 남[t - 1]) && !본문같음(남.slice(0, t), 남[t])) { 남.splice(0, t); d앞 = 안δ; break; }
+      if (줄(남[t], 남[t - 1]) && !본문같음(남.slice(0, t), 남[t])) {
+        let 살림 = 0;
+        if (EDGE_GUIDE_CHAIN) {            // 안쪽에서부터 본문 같은 열이 이어지는 만큼 살림
+          let 안쪽 = 남[t];
+          for (let k = t - 1; k >= 0; k--) {
+            if (!본문류(남[k], 안쪽)) break;
+            살림++; 안쪽 = 남[k];
+          }
+        }
+        남.splice(0, t - 살림); d앞 = 안δ; break;
+      }
     }
     for (let t = Math.min(최대, 남.length - 5); t > 0; t--) {          // 뒤(왼쪽) 끝
       const n = 남.length;
       if (줄(남[n - 1 - t], 남[n - t]) && !본문같음(남.slice(n - t).reverse(), 남[n - 1 - t])) {
-        남.splice(n - t, t); d뒤 = 안δ; break;
+        let 살림 = 0;
+        if (EDGE_GUIDE_CHAIN) {
+          let 안쪽 = 남[n - 1 - t];
+          for (let k = n - t; k < n; k++) {
+            if (!본문류(남[k], 안쪽)) break;
+            살림++; 안쪽 = 남[k];
+          }
+        }
+        if (t - 살림 > 0) 남.splice(n - (t - 살림), t - 살림);
+        d뒤 = 안δ; break;
       }
     }
   }
@@ -2593,7 +2679,12 @@ const API = {
       BUNJU_GAP = s.분주후보[3]; BUNJU_SIDE = s.분주후보[4]; BUNJU_MIN = s.분주후보[5];
     } else if (s.분주 === undefined) BUNJU = false;
     if (s.가장자리계선 !== undefined) EDGE_GUIDE = s.가장자리계선;
+    if (s.비용섞기 !== undefined) CUT_COST_W = s.비용섞기;
+    if (s.빈칸중립) { BLANK_SKIP = s.빈칸중립[0]; BLANK_INNER = !!s.빈칸중립[1]; } else { BLANK_SKIP = null; BLANK_INNER = false; }
+    if (s.가장자리계선연쇄 !== undefined) EDGE_GUIDE_CHAIN = s.가장자리계선연쇄;
+    if (s.가장자리계선한열 !== undefined) { EDGE_GUIDE_ONE = s.가장자리계선한열[0]; EDGE_GUIDE_ONE_MIN = s.가장자리계선한열[1]; }
     if (s.자간절반 !== undefined) RATIO_HALF = s.자간절반;
+    RATIO_RECHECK = s.자간재검사 ? s.자간재검사.slice(0, 2) : null;
     if (s.광곽고랑 !== undefined) FRAME_GUTTER = s.광곽고랑;
     if (s.광곽고랑자르기 !== undefined) FRAME_GUTTER_CUT = s.광곽고랑자르기;
     if (s.광곽한쪽 !== undefined) FRAME_ONESIDE = s.광곽한쪽;

@@ -31,6 +31,9 @@ EDGE_BAR     = 0.5    # 끝 열의 글자가 이 몫 넘게 `ㅣ` 면 광곽 세
 EDGE_BAR_RUN = 5      # 끝 열에 `ㅣ` 가 이만큼 넘게 **연달아** 나오면 광곽 줄 · 판심 열로 보고 뗀다 (None = 끔, 2026-10-09)
                       #   — 본문의 주격 조사 `ㅣ` 는 두 번 넘게 잇따르지 않음. 판심 글씨 열(「예례미야일쟝ㅣㅣㅣㅣ…이쳔구십칠」)은 `ㅣ` 가 40% 라 EDGE_BAR 에 안 걸림
 EDGE_GUIDE   = 0.3    # 세로줄 너머 떼일 열(둘 이상)이 본문처럼 보이면(확신 · 간격이 자간 ±이 몫) 떼지 않음 — 계선 판 (None = 끔)
+EDGE_GUIDE_ONE_MIN = 12  # `EDGE_GUIDE_ONE` 은 안쪽 열 글자 수 중앙값이 이 이상인 본문 쪽에서만(목차 · 짧은 열 쪽의 광곽 밖 제목 열을 살리지 않게)
+EDGE_GUIDE_CHAIN = True   # (2026-10-13 켬, 작업자 승인) 세로줄 너머로 뗄 열 가운데 **안쪽에서부터 본문 같은 열이 이어지는 만큼**은 떼지 않음(`EDGE_GUIDE_ONE` 과 같은 조건 — 계선 판에서 끝 열 둘이 함께 떼이던 것). 실험43: AI Hub 끝 열 잃음 29 → 13 · CER 10.83 → 8.84% · 위키 27문헌 3.91 → 3.82%(나빠진 쪽 0)
+EDGE_GUIDE_ONE = 0.8   # (2026-10-13 켬, 작업자 승인) 세로줄 너머 **한 열만** 떼일 때도 그 열이 본문 같으면(글자 수가 안쪽 열 중앙값의 이 몫 넘고 · 확신이 기준 − δ 이상 · 안쪽 열과 간격이 자간 ± `EDGE_GUIDE`) 떼지 않음. None = 끔(옛 동작). 실험43: AI Hub 끝 열 43 → 29개 잃음 · CER 12.75 → 11.09% · 위키 떼어 둔 쪽 그대로 · 복음요사 0046 오류 24 → 1자
 
 # ── 읽을 때 글자가 아닌 칸 빼기 (`열마다읽기`) ────────────────────────
 NOTCHAR_CONF  = 0.5   # 확신이 이보다 낮고
@@ -50,6 +53,9 @@ HEADING_CONF = 0.5    # 큰 글자 칸들의 확신(기하평균)이 이보다 �
 SEG_MODEL = False     # 켜면 열마다 골짜기 사이 구간을 모두 읽어, 칸 수마다 **모델 확신 합이 가장 큰** 자르기를 고른다
 SEG_UNIF  = 0.0       # 칸 높이가 고르지 않은 만큼의 벌점(칸마다, ((h − p)/p)² 배) — 0 이면 모델만 본다
 # ── 읽을 때 자를 자리를 배운 경계 검출기로 (`경계검출.py`) ────────
+BLANK_INNER = True     # (2026-10-14 켬) True 면 BLANK_SKIP 이 **글자 사이의** 빈 칸만 뺀다(열 끝 쪽 빈 칸은 그대로 셈 — 글자 없는 끝을 쪼개 갖는 칸수를 막으려고)
+BLANK_SKIP = 0.04     # (2026-10-14 켬 · 작업자 승인) 칸수를 고를 때 잉크 몫이 이 값 미만인 빈 칸(시의 띄어쓰기 칸)은 평균 확신에서 뺀다. None = 끔(옛 동작 — 빈 칸도 낮은 확신으로 셈)
+CUT_COST_W = 1.0      # (2026-10-13 켬, 작업자 승인) 열의 칸수를 고를 때 평균 로그 확신에서 이 무게 × (자르기 비용 ÷ 칸수) 를 뺀다. 0 = 끔(옛 동작 — 확신만). 실험43: 위키 27문헌 CER 4.24 → 3.91% · AI Hub 11.09 → 10.83% · 열 칸수 정확 60.7 → 64.2%
 CUT_LEARN = True      # 자를 후보·비용에 검출기의 '경계가 아닐 확률' 을 섞는다(몫 `CUT_MIX`) — 읽는 경로에만
 CUT_MIX   = 0.5       # 1 = 검출기만 · 0 = 잉크 그림자만
 CUT_CLIP  = 0.0       # 경계 확률을 [이것, 1 − 이것] 으로 자른다 — 0 = 자르지 않음
@@ -335,7 +341,7 @@ def read_page_lines(mdl, geo, span=3, 띄움=False):
 
 # 읽은 결과에서 뺄 글자. 모델은 부호를 알아보고(부호 칸을 한글로 읽지 않게) 결과 글에서만 지운다 —
 # 칸 나누기 · 열 고르기 · 띄어쓰기 계산은 부호 칸까지 넣고 끝낸 뒤.
-PUNCT_DROP = (",", ".")
+PUNCT_DROP = (",", ".", "(", ")", "「", "」", "【", "】", "｢", "｣")   # 뒤 여덟은 `wikitext.부호묶음` — 모델은 쉼표 칸으로 읽어 옴(괄호 글자 자체는 낼 수 없음). 정답에서 빼는 목록으로도 씀(2026-10-14)
 
 
 def 부호빼기(글, 확, 빈=None):
@@ -486,6 +492,34 @@ def _맞춤상자(g, boxes, geo):
     return out
 
 
+def _잉크몫(g, boxes):
+    """상자마다 잉크(`scan.INK` 보다 어두운 화소)가 상자 넓이에서 차지하는 몫."""
+    ink = (g < scan.INK).astype(np.int64)
+    I = np.zeros((ink.shape[0] + 1, ink.shape[1] + 1), np.int64)
+    I[1:, 1:] = ink.cumsum(0).cumsum(1)
+    H, W = ink.shape
+    out = np.zeros(len(boxes))
+    for k, (x0, y0, x1, y1) in enumerate(boxes):
+        x0, x1 = max(0, int(x0)), min(W, int(x1)); y0, y1 = max(0, int(y0)), min(H, int(y1))
+        if x1 > x0 and y1 > y0:
+            out[k] = (I[y1, x1] - I[y0, x1] - I[y1, x0] + I[y0, x0]) / ((x1 - x0) * (y1 - y0))
+    return out
+
+
+def _고름점수(pick, logc, o, inkflag=None):
+    """칸수 후보 하나의 점수 = 평균 로그 확신(빈 칸 빼고) − CUT_COST_W × 비용 ÷ 칸수."""
+    v = pick[o[2]:o[2] + o[3]]
+    if BLANK_INNER and inkflag is not None:       # 글자가 있는 첫 칸과 끝 칸 **사이의** 빈 칸만 뺀다
+        f = inkflag[o[2]:o[2] + o[3]]
+        w = np.nonzero(f)[0]
+        if len(w):
+            v = np.where(f, logc[o[2]:o[2] + o[3]], np.nan)
+            v[:w[0]] = logc[o[2]:o[2] + o[3]][:w[0]]; v[w[-1] + 1:] = logc[o[2]:o[2] + o[3]][w[-1] + 1:]
+    v = v[~np.isnan(v)]
+    m = float(np.mean(v)) if len(v) else float(np.mean(logc[o[2]:o[2] + o[3]]))
+    return m - CUT_COST_W * o[4] / max(1, o[3])
+
+
 def 열마다읽기(mdl, geo, span=3):
     """
     열마다 가장 자신 있는 칸수로 읽는다. `read_page` 의 앞 절반.
@@ -501,6 +535,12 @@ def 열마다읽기(mdl, geo, span=3):
     g = np.array(geo["image"])
     pL, pV, pT, cf = mdl.read(geo["image"], _맞춤상자(g, flat, geo))
     logc = np.log(np.clip(cf, 1e-6, None))
+    inkflag = None
+    pick = logc                              # 칸수를 고르는 데 쓰는 확신 — 빈 칸을 평균에서 뺄 때만 달라짐(열 점수는 그대로 logc)
+    if BLANK_SKIP is not None and len(flat):
+        ink = _잉크몫(g, flat)
+        pick = np.where(ink >= BLANK_SKIP, logc, np.nan)
+        inkflag = ink >= BLANK_SKIP
     out = []
     for opts in plans:
         opts = [o for o in opts if o[0] > 0]
@@ -508,7 +548,7 @@ def 열마다읽기(mdl, geo, span=3):
             out.append(None)
             continue
         # 산술평균은 몇 개의 엉망인 칸을 나머지가 가려 버린다. 기하평균을 쓴다.
-        n, bx, s0, ln, _ = max(opts, key=lambda o: float(np.mean(logc[o[2]:o[2]+o[3]])))
+        n, bx, s0, ln, _ = max(opts, key=lambda o: _고름점수(pick, logc, o, inkflag))
         글, 확, 상 = [], [], []
         for j in range(ln):
             c = float(cf[s0 + j])
@@ -838,19 +878,48 @@ def 가장자리다듬기(geo, 열들, δ=EDGE_DROP, 최대=EDGE_MAX, 겹침=EDG
         # 계선 판(열마다 세로줄) — 떼일 열들이 본문 같으면 떼지 않는다: 절반 이상 확신이 가운데만큼이고(기준 − δ)
         #   안쪽 열까지 자간 간격으로 고르게 이어지면. 맞은편 쪽 열은 제본 골에서 간격이 끊김.
         def 본문같음(떼일, 안쪽):
-            if EDGE_GUIDE is None or len(떼일) < 2:      # 광곽 밖 한 열만 떼는 것은 그대로 — 여백의 큰 장 제목
+            if EDGE_GUIDE is None:
                 return False
+            if len(떼일) < 2:                # 광곽 밖 한 열만 떼는 것은 그대로 — 여백의 큰 장 제목 (`EDGE_GUIDE_ONE` 을 켜면 본문 같은 꽉 찬 열은 살림)
+                if EDGE_GUIDE_ONE is None or not 떼일 or 열들[떼일[0]] is None:
+                    return False
+                o = 열들[떼일[0]]
+                안길이 = [len(열들[i][1]) for i in 남[2:-2] if 열들[i] is not None]
+                if len(안길이) < 4 or float(np.median(안길이)) < EDGE_GUIDE_ONE_MIN or len(o[1]) < EDGE_GUIDE_ONE * float(np.median(안길이)) or o[0] < 기준 - δ:
+                    return False
+                return abs(abs(가운데(떼일[0]) - 가운데(안쪽)) - geo["xpitch"]) <= geo["xpitch"] * EDGE_GUIDE
             좋음 = sum(열들[i] is not None and 열들[i][0] >= 기준 - δ for i in 떼일)
             잇 = 떼일 + [안쪽]
             고름 = all(abs(abs(가운데(a) - 가운데(b)) - geo["xpitch"]) <= geo["xpitch"] * EDGE_GUIDE
                      for a, b in zip(잇, 잇[1:]))
             return 고름 and 좋음 * 2 >= len(떼일)
+        def 본문류(i, 안쪽):         # 떼일 열 하나가 본문 같은가 — `EDGE_GUIDE_ONE` 의 조건
+            if EDGE_GUIDE is None or EDGE_GUIDE_ONE is None or 열들[i] is None:
+                return False
+            o = 열들[i]
+            안길이 = [len(열들[q][1]) for q in 남[2:-2] if 열들[q] is not None]
+            if len(안길이) < 4 or float(np.median(안길이)) < EDGE_GUIDE_ONE_MIN or len(o[1]) < EDGE_GUIDE_ONE * float(np.median(안길이)) or o[0] < 기준 - δ:
+                return False
+            return abs(abs(가운데(i) - 가운데(안쪽)) - geo["xpitch"]) <= geo["xpitch"] * EDGE_GUIDE
         for t in range(min(최대, len(남) - 5), 0, -1):            # 앞(오른쪽) 끝
             if 줄(남[t], 남[t - 1]) and not 본문같음(남[:t], 남[t]):
-                del 남[:t]; d앞 = 안δ; break
+                살림 = 0
+                if EDGE_GUIDE_CHAIN:                              # 안쪽에서부터 본문 같은 열이 이어지는 만큼 살림
+                    안쪽 = 남[t]
+                    for k in range(t - 1, -1, -1):
+                        if not 본문류(남[k], 안쪽): break
+                        살림 += 1; 안쪽 = 남[k]
+                del 남[:t - 살림]; d앞 = 안δ; break
         for t in range(min(최대, len(남) - 5), 0, -1):            # 뒤(왼쪽) 끝
             if 줄(남[-1 - t], 남[-t]) and not 본문같음(남[-t:][::-1], 남[-1 - t]):
-                del 남[-t:]; d뒤 = 안δ; break
+                살림 = 0
+                if EDGE_GUIDE_CHAIN:
+                    안쪽 = 남[-1 - t]
+                    for k in range(-t, 0):
+                        if not 본문류(남[k], 안쪽): break
+                        살림 += 1; 안쪽 = 남[k]
+                if t - 살림 > 0: del 남[-(t - 살림):]
+                d뒤 = 안δ; break
 
     # 광곽 세로줄을 한 열 통째 `ㅣ` 로 자신 있게 읽으면 확신으로는 못 떼므로 따로 뗀다(`EDGE_BAR`)
     막대 = lambda i: (EDGE_BAR is not None and 열들[i] is not None and len(열들[i][1]) > 0

@@ -268,6 +268,14 @@ function 편집상자() {
       || document.querySelector("textarea[name='wpTextbox1']");
 }
 
+/** CodeMirror의 글이 숨은 textarea에 아직 반영되지 않은 경우도 읽음. */
+function 편집글(상자) {
+  if (window.jQuery && typeof window.jQuery.fn.textSelection === "function") {
+    return window.jQuery(상자).textSelection("getContents");
+  }
+  return 상자.value;
+}
+
 // ── 서버 ────────────────────────────────────────────────────────
 /** 서버에 판형 살피기를 맡기고 끝날 때까지 되물음(처음 보는 파일은 1~3분) */
 async function 서버살피기(파일) {
@@ -305,11 +313,13 @@ async function 읽기시작() {
   var 쪽 = 지금쪽();
   if (!상자 || !쪽) { 알림("편집 창을 못 찾았습니다."); return; }
   if (!서버) { 알림("서버 주소가 없습니다 — Toolforge 도구가 내주는 주소(…/ocr.js · …/compare.js)로 불러와 주세요."); return; }
+  var 시작글 = 상자.value;
   단추.disabled = true;
   var 공 = 공용도구(), 고른모델 = 공.모델(), 고른단 = 공.단();
   var 언제 = new Date(), 처음 = performance.now(), 때 = {}, 결과 = [], 살핀, r;
   var 재기 = function (이름, t) { 때[이름] = performance.now() - t; };
   try {
+    var 시작편집글 = 편집글(상자);
     var 초, 실행, t;
     t = performance.now();
     살핀 = await 서버살피기(쪽.파일);
@@ -330,6 +340,12 @@ async function 읽기시작() {
       알림("읽는 사이에 쪽이 바뀌어(" + 쪽.쪽 + "쪽 → " + (뒤쪽 ? 뒤쪽.쪽 + "쪽" : "?")
            + ") 넣지 않았습니다. 다시 눌러 주세요.");
       결과.push(["넣음", "아니오 — 읽는 사이에 쪽이 바뀜"]);
+      return;
+    }
+    // 같은 쪽에서도 대기 중의 입력·초안 복원·편집기 교체를 덮지 않음.
+    if (편집상자() !== 상자 || 상자.value !== 시작글 || 편집글(상자) !== 시작편집글) {
+      알림("읽는 사이에 편집 내용이 바뀌어 OCR 결과를 넣지 않았습니다. 현재 글을 유지했습니다. 다시 눌러 주세요.");
+      결과.push(["넣음", "아니오 — 읽는 사이에 편집 내용이 바뀜"]);
       return;
     }
     if (!r.글월) {

@@ -401,6 +401,20 @@ function 걷기() {
   깔개 = null;
 }
 
+/** 이전 검사 결과는 표시와 조작 상태를 함께 버림. 편집 글은 건드리지 않음. */
+function 결과걷기() {
+  후보들 = [];
+  기준글 = null;
+  고른것 = null;
+  끝난것보기 = false;
+  걷기();
+  if (판) {
+    판.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
+    판.remove();
+    판 = null;
+  }
+}
+
 // 사람이 고친 만큼 자리를 옮긴다 — 고친 구간에 걸린 후보는 '손댐', 뒤의 것은 민다
 var 기준글 = null;
 function 따라가기() {
@@ -566,7 +580,10 @@ function 줄그리기(몸, c, k) {
     function 단추하나(이름, 할일) {
       var x = document.createElement("button");
       x.type = "button"; x.className = "cdx-button"; x.textContent = 이름;
-      x.addEventListener("click", 할일);
+      x.addEventListener("click", function () {
+        if (후보들.indexOf(c) < 0) return;   // 제거된 검사 결과의 단추/클로저도 실행하지 않음
+        할일();
+      });
       단.appendChild(x);
       return x;
     }
@@ -651,10 +668,10 @@ async function 서버로(경로, 몸) {
 
 async function 시작() {
   var 쪽 = 지금쪽(), 상자 = 편집상자();
-  if (!쪽 || !상자) return;
+  if (!쪽 || !상자 || 단추.disabled) return;
+  결과걷기();
   if (!서버) { 알림("서버 주소가 없습니다 — Toolforge 도구가 내주는 주소(…/ocr.js · …/compare.js)로 불러와 주세요."); return; }
   단추.disabled = true;
-  걷기();
   var 공 = 공용도구(), 고른모델 = 공.모델(), 고른단 = 공.단();
   var t0 = performance.now();
   var 언제 = new Date(), 때 = {}, 결과 = [], 살핀 = null, 답 = null, t;
@@ -686,6 +703,7 @@ async function 시작() {
     var 칠함 = 깔기(상자);
     알림("볼 곳 " + 후보들.filter(확실).length + "곳" + (칠함 ? "" : " — 구문 강조가 켜져 있어 편집 상자에는 칠하지 못했습니다(끄면 칠합니다)"));
   } catch (e) {
+    결과걷기();                         // 결과 구성 도중 실패한 경우도 남기지 않음
     console.error(e);
     var 메시지 = e && e.message ? e.message : e;
     알림("✗ " + 메시지);
@@ -722,9 +740,7 @@ function 세우기() {
   // 순서대로 편집으로 쪽을 옮기면 앞 쪽의 칠 · 후보 목록을 걷음
   if (/[?&]prp_editinsequence=/i.test(location.search)) {
     window.addEventListener("hashchange", function () {
-      걷기();
-      if (판) { 판.remove(); 판 = null; }
-      후보들 = []; 기준글 = null; 고른것 = null;
+      결과걷기();
       if (!단추.disabled) 알림("");
     });
   }

@@ -1055,13 +1055,19 @@ RATIO_FIT = (1.0, 1.7)
 RATIO_FIT_OVER = 2.0
 
 
-def page_ratio(path, lo=0.55, hi=1.45, steps=120, 단=1):
+RATIO_HI = 1.45   # `page_ratio` 가 훑는 자간비의 위쪽 끝
+RATIO_RECHECK = (1.15, 1.1)   # (2026-10-14) **문헌 중앙값**이 앞 값을 넘으면 그 문헌의 쪽을 뒤 값을 위쪽 끝으로 다시 잼 — 정상 문헌은 0.96 이하이고 넘는 것은 둘 · 세 글자 주기를 고른 것(성경직해7 1.27 → 0.80 · 쥬역언해 3책 1.22 → 0.74). None = 끔
+
+
+def page_ratio(path, lo=0.55, hi=None, steps=120, 단=1):
     """
     이 쪽의 '세로 자간 ÷ 가로 자간'을 **그림만 보고** 잰다. 전사문이 필요 없다.
     열마다 여러 간격으로 접어 보고 가장 또렷한 것을 고른 뒤, 열들의 중앙값을 쓴다.
 
     단=2 일 때는 단을 나눈 뒤에 잰다(이어 붙인 채면 가운데 줄 · 여백이 무늬를 흩뜨림).
     """
+    if hi is None:
+        hi = RATIO_HI
     g = np.array(Image.open(path).convert("L"))
     xpitch, cols = find_columns(g)
     if not cols or not xpitch:
@@ -1101,16 +1107,23 @@ def page_ratio(path, lo=0.55, hi=1.45, steps=120, 단=1):
 
 
 def estimate_ratio(paths, 단=1):
-    """여러 쪽에서 재서 중앙값. 못 재면 None."""
-    vals = []
-    for p in paths:
-        try:
-            v = page_ratio(p, 단=단)
-        except Exception:
-            v = None
-        if v:
-            vals.append(v)
-    return float(np.median(vals)) if vals else None
+    """여러 쪽에서 재서 중앙값. 못 재면 None. 중앙값이 `RATIO_RECHECK[0]` 을 넘으면 위쪽 끝을 `RATIO_RECHECK[1]` 로 낮춰 다시 잰다."""
+    def 재기(hi):
+        vals = []
+        for p in paths:
+            try:
+                v = page_ratio(p, hi=hi, 단=단)
+            except Exception:
+                v = None
+            if v:
+                vals.append(v)
+        return float(np.median(vals)) if vals else None
+    r = 재기(None)
+    if r is not None and RATIO_RECHECK and r > RATIO_RECHECK[0]:
+        r2 = 재기(RATIO_RECHECK[1])
+        if r2 is not None:
+            r = r2
+    return r
 
 
 # ── 쪽 하나의 기하 정보 ──────────────────────────────────────────────

@@ -253,11 +253,10 @@ except Exception:
 
 
 def 고르게쪽(n, k):
-    쪽들 = list(range(1, n + 1))
+    쪽들 = range(1, n + 1)
     if k <= 0 or n <= k:
-        return 쪽들
-    step = max(1, n // k)
-    return [쪽들[j] for j in range(0, n, step)][:k]
+        return list(쪽들)
+    return list(쪽들[::max(1, n // k)][:k])
 
 
 def _살피기(파일):
@@ -290,16 +289,10 @@ def _살피기(파일):
                     단[p] = None
             판형, _ = page.판형정하기([가름.get(p) for p in 가름쪽], [단.get(p) for p in 단쪽])
             _살핌일[파일]["진행"] = "자간 재는 중"
-            잰 = []
-            for p in 단쪽:
-                try:
-                    잰.append(scan.page_ratio(길[p], 단=판형) if p in 길 else None)
-                except Exception:
-                    잰.append(None)
-            잰 = [v for v in 잰 if v]
+            잰 = scan.estimate_ratio([길[p] for p in 단쪽 if p in 길], 판형)   # 중앙값이 1.15 를 넘으면 위쪽 끝을 낮춰 다시 (scan.RATIO_RECHECK)
             값 = {"단": list(판형) if isinstance(판형, (list, tuple)) else 판형}
             if 잰:
-                값["자간비"] = float(np.median(잰))
+                값["자간비"] = float(잰)
             짜 = page.판짜임정하기(짜임)
             if 짜:
                 값["판짜임"] = 짜
@@ -344,42 +337,103 @@ class 손님오류(Exception):
         self.코드, self.덧 = 코드, 덧 or {}
 
 
+_완료들 = OrderedDict()  # 계산 잠금 안에서만 접근. 프로세스 재시작/배포 시 비워짐.
+결과수명 = 120
+결과최대바이트 = 4 * 1024 * 1024
+결과최대개수 = 16
+
+
+def _작업실행(이름, ip, 조건, 작업, 단계, 시작):
+    """같은 스캔·입력의 완성 결과만 재사용. 계산 중 겹친 요청도 잠금 뒤 다시 확인한다."""
+    t = time.perf_counter()
+    with open(ip, "rb") as f:
+        그림해시 = hashlib.sha256(f.read()).hexdigest()
+    열쇠 = (이름, 그림해시, hashlib.sha256(json.dumps(
+        조건, ensure_ascii=False, sort_keys=True, default=_json기본).encode("utf-8")).hexdigest())
+    단계["입력확인"] = time.perf_counter() - t
+    대기 = time.perf_counter()
+    with 계산:
+        t = time.perf_counter()
+        단계["대기"] = t - 대기
+        for k in list(_완료들):
+            if _완료들[k][0] <= t:
+                del _완료들[k]
+        사용 = os.environ.get("OCR_RESULT_CACHE", "1") != "0"
+        저장 = _완료들.get(열쇠) if 사용 else None
+        재사용 = 저장 is not None
+        if 재사용:
+            _완료들.move_to_end(열쇠)
+            답 = json.loads(저장[1])  # 매번 새 객체: 응답/후보 수정이 다음 요청에 새지 않음
+        else:
+            답 = 작업()
+            if 사용 and not 답.get("사유"):
+                b = json.dumps(답, ensure_ascii=False, default=_json기본).encode("utf-8")
+                if len(b) <= 결과최대바이트:
+                    _완료들[열쇠] = (time.perf_counter() + 결과수명, b)
+                    while (len(_완료들) > 결과최대개수 or
+                           sum(len(v[1]) for v in _완료들.values()) > 결과최대바이트):
+                        _완료들.popitem(last=False)
+        단계["계산"] = time.perf_counter() - t
+    답["초"] = round(단계["대기"] + 단계["계산"], 3)
+    단계["전체"] = time.perf_counter() - 시작
+    답["단계초"] = {k: round(v, 6) for k, v in 단계.items()}
+    답["결과재사용"] = 재사용
+    return 답
+
+
 def 읽기(파일, 쪽, 문턱=표시문턱, 모델이름=None, 단=None, 띄움=True):
     """OCR 한 쪽 — 브라우저판 `읽기.js` 의 `한쪽` 과 같은 셈(파이썬 정본으로)."""
+    시작 = time.perf_counter()
     자동단 = 단 in (None, "", "auto", "자동")
     s = 단바꾸기(살핀값(파일), 단)
     모델 = 모델얻기(모델이름)
+    단계 = {"준비": time.perf_counter() - 시작}
+    t = time.perf_counter()
     ip = 스캔(파일, 쪽)
-    t0 = time.time()
+    단계["스캔"] = time.perf_counter() - t
     단 = s.get("단") or 1
     단 = tuple(단) if isinstance(단, list) else 단
     r = s.get("읽기자간비") or s.get("자간비") or scan.YX_RATIO
     표준 = s["판짜임"]["자간"] if s.get("판짜임") and page.SCAN_PITCH else None
-    with 계산:
+    def 작업():
+        t = time.perf_counter()
         geo = scan.page_geometry(ip, r, 단, 읽기=True, 가장자리=True, 표준자간=표준, 빈단=자동단)
         등급, 까닭 = page.쪽건강(None, geo, 표준=s.get("판짜임"))
+        단계["기하"] = time.perf_counter() - t
+        t = time.perf_counter()
         줄들 = align.read_page_lines(모델, geo, 3, 띄움=align.SPACE and 띄움) if geo is not None else []
-    if geo is not None and geo.get("빈단"):
-        s = dict(s, 단=geo["단"], 자간비=geo["pitch"] / geo["xpitch"],
-                 빈단=geo["빈단"], 단별자간비=geo["단별자간비"])
-    n = sum(len(z[0]) for z in 줄들)
-    if not n:
-        return dict(판정=dict(등급="못씀" if geo is None else 등급, 까닭=까닭 or ["읽어 내지 못했습니다"]),
-                    글월="", 교정용="", 표시비=0, 상자수=0, 살핀=s, 초=round(time.time() - t0, 1))
-    글월, 교정용, 셀 = 줄글월(줄들, 문턱)
-    return dict(판정=dict(등급=등급, 까닭=까닭), 글월=글월, 교정용=교정용, 표시비=셀 / n, 상자수=n, 글자수=n,
-                살핀=s, 초=round(time.time() - t0, 1))
+        단계["인식"] = time.perf_counter() - t
+        살핀 = s
+        if geo is not None and geo.get("빈단"):
+            살핀 = dict(s, 단=geo["단"], 자간비=geo["pitch"] / geo["xpitch"],
+                        빈단=geo["빈단"], 단별자간비=geo["단별자간비"])
+        n = sum(len(z[0]) for z in 줄들)
+        if not n:
+            return dict(판정=dict(등급="못씀" if geo is None else 등급, 까닭=까닭 or ["읽어 내지 못했습니다"]),
+                        글월="", 교정용="", 표시비=0, 상자수=0, 살핀=살핀)
+        글월, 교정용, 셀 = 줄글월(줄들, 문턱)
+        return dict(판정=dict(등급=등급, 까닭=까닭), 글월=글월, 교정용=교정용, 표시비=셀 / n, 상자수=n, 글자수=n,
+                    살핀=살핀)
+    return _작업실행("read", ip, [파일, 쪽, s, 모델이름 or "hangul", 문턱, 자동단, 띄움], 작업, 단계, 시작)
 
 
 def 맞대기(파일, 쪽, 본문, 모델이름=None, 단=None):
     """전사대조 한 쪽 (파일마다 잰 설정으로)."""
+    시작 = time.perf_counter()
     s = 단바꾸기(살핀값(파일), 단)
     모델 = 모델얻기(모델이름)
+    단계 = {"준비": time.perf_counter() - 시작}
+    t = time.perf_counter()
     ip = 스캔(파일, 쪽)
-    t0 = time.time()
-    with 계산:
+    단계["스캔"] = time.perf_counter() - t
+    def 작업():
         r = 대조.한쪽(모델, None, ip, 본문, 설정=s)
-    답 = dict(사유=r.get("사유"), 아는문헌=True, 초=round(time.time() - t0, 1))
+        return _대조응답(파일, 쪽, ip, 본문, r)
+    return _작업실행("compare", ip, [파일, 쪽, s, 모델이름 or "hangul", 본문], 작업, 단계, 시작)
+
+
+def _대조응답(파일, 쪽, ip, 본문, r):
+    답 = dict(사유=r.get("사유"), 아는문헌=True)
     답["debug"] = 진단정보(파일, 쪽, ip, r)
     if not r.get("사유"):
         # 원문 자리를 자바스크립트 문자열 자리(UTF-16)로 — 한자 확장 B 처럼 BMP 밖 글자가 있으면 파이썬 자리와 갈림
@@ -391,12 +445,13 @@ def 맞대기(파일, 쪽, 본문, 모델이름=None, 단=None):
                 c["시작"], c["끝"] = 앞[c["시작"]], 앞[c["끝"]]
         답.update(일치=r["일치"], 흔들림=r["흔들림"], 흔들린열=r["흔들린열"], 기하=r["기하"], 제목=r["제목"],
                  글자수=r["글자수"], 시도기록=r.get("시도기록", []), 진단=r.get("진단", {}),
-                 후보=[{k: v for k, v in c.items()} for c in r["후보"]])
+                 후보=[c.copy() for c in r["후보"]])
     return 답
 
 
 def 영역자동읽기(파일, 쪽, 자간비=None, 모델이름=None, 너비확인=None, 높이확인=None):
     """영역 화면의 한 단 자동 읽기. 자간비는 화면에서 고른 값이며 파일 판형은 재지 않는다."""
+    시작 = time.perf_counter()
     모델 = 모델얻기(모델이름)
     try:
         r = float(자간비) if 자간비 is not None else scan.YX_RATIO
@@ -404,13 +459,20 @@ def 영역자동읽기(파일, 쪽, 자간비=None, 모델이름=None, 너비확
         raise 손님오류("ratio(자간비)는 양수여야 합니다")
     if not np.isfinite(r) or r <= 0:
         raise 손님오류("ratio(자간비)는 양수여야 합니다")
-    im, _ = 그림(파일, 쪽)
-    if ((너비확인 is not None and 너비확인 != im.width) or
-            (높이확인 is not None and 높이확인 != im.height)):
+    단계 = {"준비": time.perf_counter() - 시작}
+    t = time.perf_counter()
+    ip = 스캔(파일, 쪽)
+    with Image.open(ip) as im:
+        너비, 높이 = im.size
+    단계["스캔"] = time.perf_counter() - t
+    if ((너비확인 is not None and 너비확인 != 너비) or
+            (높이확인 is not None and 높이확인 != 높이)):
         raise 손님오류("서버와 화면의 스캔 크기가 다릅니다 — 쪽을 다시 불러오세요")
-    t0 = time.time()
-    with 계산:
-        geo = scan.page_geometry(스캔(파일, 쪽), r, 1, 읽기=True, 가장자리=True)
+    def 작업():
+        t = time.perf_counter()
+        geo = scan.page_geometry(ip, r, 1, 읽기=True, 가장자리=True)
+        단계["기하"] = time.perf_counter() - t
+        t = time.perf_counter()
         줄들 = []
         if geo is not None:
             열들 = align.열마다읽기(모델, geo, 3)
@@ -423,7 +485,9 @@ def 영역자동읽기(파일, 쪽, 자간비=None, 모델이름=None, 너비확
                 줄들.append(dict(글자=[글자[j] for j in 남길],
                                   확신=[float(확신[j]) for j in 남길],
                                   상자=[[int(v) for v in 상자[j]] for j in 남길]))
-    return dict(줄들=줄들, 너비=im.width, 높이=im.height, 초=round(time.time() - t0, 3))
+        단계["인식"] = time.perf_counter() - t
+        return dict(줄들=줄들, 너비=너비, 높이=높이)
+    return _작업실행("area-read", ip, [파일, 쪽, r, 모델이름 or "hangul"], 작업, 단계, 시작)
 
 
 # 외부 영역 지정 요청만 제한. 모델 내부의 4px 여백과 경계 계산은 그대로 둠.
@@ -595,25 +659,43 @@ def _응답(start, obj, 코드=200):
 
 
 def _몸(env):
-    n = int(env.get("CONTENT_LENGTH") or 0)
+    try:
+        n = int(env.get("CONTENT_LENGTH") or 0)
+    except (TypeError, ValueError):
+        raise 손님오류("요청 길이가 올바르지 않습니다")
+    if n < 0:
+        raise 손님오류("요청 길이가 올바르지 않습니다")
     if n > 5_000_000:
         raise 손님오류("요청이 너무 큽니다")
-    return json.loads(env["wsgi.input"].read(n).decode("utf-8") or "{}") if n else {}
+    try:
+        몸 = json.loads(env["wsgi.input"].read(n).decode("utf-8") or "{}") if n else {}
+    except (UnicodeDecodeError, ValueError):
+        raise 손님오류("요청 본문은 올바른 UTF-8 JSON이어야 합니다")
+    if not isinstance(몸, dict):
+        raise 손님오류("요청 본문은 JSON 객체여야 합니다")
+    return 몸
 
 
 def _파일쪽(q):
-    파일 = (q.get("file") or q.get("파일") or "").strip()
-    if not 파일:
-        raise 손님오류("file(파일 이름)이 없습니다")
-    파일 = 파일.replace("_", " ")
+    파일 = q.get("file") or q.get("파일") or ""
+    if not isinstance(파일, str):
+        raise 손님오류("file(파일 이름)은 문자열이어야 합니다")
+    파일 = 파일.strip().replace("_", " ")
     for 머리 in ("File:", "파일:"):
         if 파일.startswith(머리):
             파일 = 파일[len(머리):]
-    쪽 = q.get("page") or q.get("쪽") or 1
+    파일 = 파일.strip()
+    if not 파일:
+        raise 손님오류("file(파일 이름)이 없습니다")
+    쪽 = q.get("page", q.get("쪽", 1))
     try:
+        if isinstance(쪽, bool) or not isinstance(쪽, (str, int, float)) or (isinstance(쪽, float) and not 쪽.is_integer()):
+            raise ValueError
         쪽 = int(쪽)
-    except (TypeError, ValueError):
-        raise 손님오류("page(쪽 번호)가 숫자가 아닙니다")
+        if 쪽 < 1:
+            raise ValueError
+    except (TypeError, ValueError, OverflowError):
+        raise 손님오류("page(쪽 번호)는 1 이상의 정수여야 합니다")
     return 파일, 쪽
 
 
@@ -636,7 +718,8 @@ def app(env, start):
             return [b""]
         for 길 in 영역길:
             if 경로 == 길.rstrip("/"):
-                start("301 Moved Permanently", [("Location", 길)])
+                qs = env.get("QUERY_STRING", "")
+                start("301 Moved Permanently", [("Location", urllib.parse.quote(길) + ("?" + qs if qs else ""))])
                 return [b""]
             if 경로.startswith(길):
                 이름 = 경로[len(길):] or "index.html"
@@ -659,11 +742,17 @@ def app(env, start):
         if 방식 != "POST":
             return _응답(start, {"오류": "없는 주소"}, 404)
         몸 = _몸(env)
-        if 경로 in ("/api/boxes", "/api/edge") and not isinstance(몸, dict):
-            raise 손님오류("요청 본문은 JSON 객체여야 합니다")
         파일, 쪽 = _파일쪽(몸)
         if 경로 == "/api/read":
-            문턱 = float(몸.get("threshold") or 표시문턱)
+            문턱 = 몸.get("threshold", 표시문턱)
+            try:
+                if isinstance(문턱, bool):
+                    raise ValueError
+                문턱 = float(문턱)
+                if not 0 <= 문턱 <= 1:
+                    raise ValueError
+            except (TypeError, ValueError, OverflowError):
+                raise 손님오류("threshold(확신 문턱)는 0~1 사이의 숫자여야 합니다")
             return _응답(start, 읽기(파일, 쪽, 문턱, 몸.get("model"), 몸.get("tiers"), 몸.get("spacing") is not False))
         if 경로 == "/api/compare":
             본문 = 몸.get("text") if 몸.get("text") is not None else 몸.get("본문")

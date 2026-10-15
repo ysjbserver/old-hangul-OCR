@@ -144,7 +144,7 @@ def collect(pdf, slug, limit=None):
             with _print_lock: print(f"      {n}쪽 실패 — {e}")
         with _print_lock:
             done[res] += 1
-            c = done["ok"] + done["skip"] + done["fail"]
+            c = sum(done.values())
             if c % 10 == 0 or c == len(pages):
                 el = time.time() - t0
                 rate = c / el if el else 0
