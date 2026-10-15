@@ -502,6 +502,36 @@ def 조각열기하(geo):
     return out
 
 
+def 가장자리기하(mdl, slug, ip, 설정=None, 읽기열=None):
+    """"가장자리" 후보 — 인식(`/api/read`)과 같은 읽는 기하(양 끝 후보 열을 붙임)에서 `align.가장자리다듬기` 가
+    모델 확신으로 남긴 열만. 짧은 끝 열(장 끝 「쟈도잇더라」)을 놓치거나 스캔 끝 띠를 열로 잡는 쪽(권2 0033)용.
+    겹친 후보 열은 다듬기가 하나만 남기므로 `to_text` 에 그대로 넘겨도 된다. 남은 열이 읽는 기하와 같으면 None.
+    """
+    if 설정:
+        단 = 설정.get("단") or 1
+        단 = tuple(단) if isinstance(단, list) else 단
+        r = 설정.get("읽기자간비") or 설정.get("자간비") or scan.page_ratio(ip, 단=단)
+        표준 = 설정["판짜임"]["자간"] if 설정.get("판짜임") else None
+        geo = scan.page_geometry(ip, r, 단, True, True, 표준)
+    elif 아는문헌(slug):
+        geo = page.geometry(slug, ip, 읽기=True, 가장자리=True)
+    else:
+        geo = scan.page_geometry(ip, scan.page_ratio(ip), 읽기=True, 가장자리=True)
+    if geo is None or not geo.get("가장자리"):
+        return None
+    열들 = align.열마다읽기(mdl, geo, 3)
+    남 = [i for i in align.가장자리다듬기(geo, 열들) if 열들[i] is not None]
+    if not 남:
+        return None
+    out = geo.copy()
+    for key in ("cols", "crop_cols", "spans", "sm", "est"):
+        out[key] = [geo[key][i] for i in 남]
+    out["가장자리"] = False
+    if 읽기열 is not None and out["cols"] == 읽기열:
+        return None
+    return out
+
+
 def 기하(slug, ip, 읽기=False, 끝띠=False, 판심=None, 설정=None):
     """
     쪽 기하. 읽기=False 는 자르는 경로(`page.geometry(…, 읽기=False)`), True 는 읽는 경로의 기하(가장자리 후보 열 없음).
@@ -768,6 +798,8 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     "연한본문" = 본문 기하의 글자 구간을 옅은 잉크까지 포함해 다시 찾은 후보(`연한본문기하`).
     "본문열" = 광곽 안에서 열 위치와 구간을 다시 찾은 후보(`본문열기하`).
     "조각열" = 폭 선별에서 버려진 조각으로 광곽 안의 끝 열을 복구한 후보(`조각열기하`).
+    "가장자리" = 양 끝 후보 열을 붙인 읽는 기하에서 모델 확신으로 고른 열(`가장자리기하`). 맨 뒤에 둠 —
+               앞에 두면 `연한구간` 의 바탕(그때까지 가장 잘 맞은 기하)이 바뀌어 권1 0494 가 95 → 83% 로 나빠졌음.
     "연한구간" = 앞 후보 중 가장 잘 맞은 기하의 흐린 글자 구간을 복구한 후보(`연한구간기하`).
     "책머리" = 광곽 없는 한 단에서 고립 책 이름을 빼고 첫 짧은 본문 열을 복구한 후보(`책머리기하`).
     추가 후보들은 앞 기하와 같으면 건너뛰며 더 잘 맞을 때만 선택한다.
@@ -795,10 +827,15 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
         for 판 in 기하들:
             if best and (best[0].get("일치") or 0) >= 다시볼일치:
                 break                             # 자르는 기하로 잘 맞았으면 그만
-            if 판 in ("쪽자간", "본문", "연한본문", "본문열", "조각열", "연한구간", "책머리"):
+            if 판 in ("쪽자간", "본문", "연한본문", "본문열", "조각열", "가장자리", "연한구간", "책머리"):
                 if 판 not in 본열:
                     if 판 == "쪽자간":
                         본열[판] = 쪽자간기하(slug, ip, 설정)
+                    elif 판 == "가장자리":
+                        if "읽기" not in 본열:
+                            g0 = 기하(slug, ip, True, 설정=설정)
+                            본열["읽기"] = g0["cols"] if g0 else None
+                        본열[판] = 가장자리기하(mdl, slug, ip, 설정, 본열["읽기"])
                     elif 판 == "연한구간":
                         본열[판] = 연한구간기하(bestgeo)
                     elif 판 == "책머리":
@@ -823,7 +860,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                     이전 = len(글자들)
                     r = 맞대기(mdl, geo, 글자들, 경계=경계)
                     r["기하"], r["제목"], r["큰빼기"] = 판, kh, 빼기
-                    if 판 in ("본문", "연한본문", "본문열", "조각열", "연한구간", "책머리"):
+                    if 판 in ("본문", "연한본문", "본문열", "조각열", "가장자리", "연한구간", "책머리"):
                         r["_본문기하"] = geo
                     시도기록.append(dict(기하=판, 제목=kh, 큰빼기=빼기, 경계=경계,
                                       전사글자수=len(글자들), 일치=r.get("일치"),
@@ -876,7 +913,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     return best
 
 
-def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문", "연한본문", "본문열", "조각열", "연한구간", "책머리"), 합의=True, 밀림=False, 깨진=False,
+def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문", "연한본문", "본문열", "조각열", "연한구간", "책머리", "가장자리"), 합의=True, 밀림=False, 깨진=False,
          설정=None, 누락=True):
     """
     위키 원문(편집 상자의 본문) 한 쪽을 그 쪽 스캔과 맞댄다.
@@ -904,7 +941,7 @@ def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들
     # 채택하지 않은 쪽의 기존 교정 후보 합의는 유지한다.
     조건후보 = ("연한구간", "책머리")
     합의기하들 = tuple(p for p in 기하들 if p not in 조건후보 or p == r.get("기하"))
-    읽기합의 = (True, "판심", "본문", "연한본문", "본문열", "조각열")
+    읽기합의 = (True, "판심", "본문", "연한본문", "본문열", "조각열", "가장자리")
     if r.get("기하") in 조건후보:
         읽기합의 += (r["기하"],)
     for 이름, 옵 in (("B", dict(경계=True, 기하들=합의기하들)), ("C", dict(경계=True, 기하들=읽기합의))):
