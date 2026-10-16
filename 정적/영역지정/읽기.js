@@ -84,6 +84,7 @@ let GLYPH = 0.35;       // 글자가 있는 줄은 열 폭의 이만큼 이상�
 let SPAN_EXTEND = true, SPAN_LOW = 0.15, SPAN_REACH = 1.5, SPAN_GAP = 0.4;   // scan._이어잡기
 let SPAN_FAINT = 160;   // scan._연한머리잇기 — 흐린 열 머리를 이 밝기 미만으로 다시 찾음(0 = 끔)
 let FRAME_LOCAL = true, FRAME_LOCAL_FILL = 0.6, FRAME_LOCAL_REACH = 0.35, FRAME_LOCAL_EDGE = 8;   // scan._열광곽
+let FRAME_CURVE = 160, FRAME_CURVE_BAND = 0.08, FRAME_CURVE_FILL = [0.8, 0.6], FRAME_CURVE_REACH = 1.0, FRAME_CURVE_JUMP = 0.3, FRAME_CURVE_BG = 0.75;   // scan._휜광곽(0 = 끔)
 let YX_RATIO = 0.867;   // 세로 자간 ÷ 가로 자간 (기본값)
 
 let FRAME_SEG = 300, FRAME_FILL = 0.85, FRAME_AGREE = 0.6;   // scan.py 와 같은 값
@@ -725,6 +726,82 @@ function 열광곽(g, cols, T, B, xpitch, pitch) {
   return [잇기(위, T, Math.max), 잇기(아래, B, Math.min)];
 }
 
+/**
+ * `scan._휜광곽` — 쪽 광곽(`광곽합의`)을 못 찾은 쪽에서 열마다 휜 위 광곽 가로줄 아래(쪽 T 보다 안쪽으로만). 읽을 때만.
+ * 열 띠 + 양옆 고랑(있는 것 모두)을 옅은 잉크로 함께 덮는 줄을 아래부터 — 띠 높이 h 안이면 기울어도 찬 것으로. 못 찾으면 null
+ */
+function 휜광곽(g, cols, T, pitch) {
+  const H = g.높이, W = g.너비, v값 = g.값;
+  const h = Math.max(3, Math.trunc(FRAME_CURVE_BAND * pitch));
+  const lo = Math.max(0, Math.trunc(T - FRAME_CURVE_REACH * pitch)), hi = Math.min(H - h, Math.trunc(T + FRAME_CURVE_REACH * pitch));
+  if (hi <= lo || cols.length < 3) return null;
+  const s0 = Math.max(0, lo - h), s1 = Math.min(H, hi + 2 * h);
+  // 잉크 문턱 = min(FRAME_CURVE, 찾는 띠 lo..hi 밝기 중앙값 × FRAME_CURVE_BG) — numpy.median 처럼(짝수면 가운데 둘의 평균)
+  const 칸 = new Float64Array(256);
+  for (let i = lo * W; i < hi * W; i++) 칸[v값[i]]++;
+  const n = (hi - lo) * W;
+  function k번째(k) { let c = 0; for (let b = 0; b < 256; b++) { c += 칸[b]; if (c > k) return b; } return 255; }
+  const 가운데 = n % 2 ? k번째((n - 1) / 2) : (k번째(n / 2 - 1) + k번째(n / 2)) / 2;
+  const 문턱 = Math.min(FRAME_CURVE, 가운데 * FRAME_CURVE_BG);
+  const n띠 = s1 - s0 - h + 1;                       // 띠[y - s0] = 줄 y..y+h-1 에 잉크가 있나 (y = s0 .. s1-h)
+  const 띠 = new Uint8Array(Math.max(0, n띠) * W);
+  for (let x = 0; x < W; x++) {
+    let 잉크 = 0;
+    for (let k = 0; k < h - 1; k++) if (v값[(s0 + k) * W + x] < 문턱) 잉크++;
+    for (let r = 0; r < n띠; r++) {
+      if (v값[(s0 + r + h - 1) * W + x] < 문턱) 잉크++;
+      if (잉크 > 0) 띠[r * W + x] = 1;
+      if (v값[(s0 + r) * W + x] < 문턱) 잉크--;
+    }
+  }
+  const 덮개 = function (y, a, b) { let s = 0; const o = (y - s0) * W; for (let x = a; x < b; x++) s += 띠[o + x]; return s / (b - a); };
+  const 순 = cols.slice().sort(function (p, q) { return p[0] - q[0] || p[1] - q[1]; });
+  const f열 = FRAME_CURVE_FILL[0], f고랑 = FRAME_CURVE_FILL[1];
+  const v = cols.map(function (c) {
+    const x0 = c[0], x1 = c[1];
+    const k = 순.findIndex(function (q) { return q[0] === x0 && q[1] === x1; });
+    const 고랑 = [];
+    [k - 1, k + 1].forEach(function (j) {
+      if (j < 0 || j >= 순.length) return;
+      const a = j < k ? 순[j][1] : x1, b = j < k ? x0 : 순[j][0];
+      if (b - a >= 3) 고랑.push([a, b]);
+    });
+    for (let y = hi - 1; y >= lo; y--) {               // 아래부터 — 쌍줄이면 안쪽 줄
+      if (덮개(y, x0, x1) < f열) continue;
+      const y0 = Math.max(s0, y - h), y1 = Math.min(y + h, s1 - h);
+      if (고랑.length && 고랑.every(function (ab) {
+        let 최대 = -1;
+        for (let yy = y0; yy <= y1; yy++) 최대 = Math.max(최대, 덮개(yy, ab[0], ab[1]));
+        return 최대 >= f고랑;
+      })) return y;
+    }
+    return null;
+  });
+  const xs = cols.map(function (c) { return (c[0] + c[1]) / 2; });
+  const 차례 = cols.map(function (_, i) { return i; }).sort(function (p, q) { return xs[p] - xs[q] || p - q; });
+  const J = FRAME_CURVE_JUMP * pitch;
+  const 남김 = v.slice();
+  차례.forEach(function (i, n) {
+    if (v[i] === null) return;
+    const 이웃 = [];
+    for (let m = n - 1; m >= 0; m--) if (v[차례[m]] !== null) { 이웃.push(v[차례[m]]); break; }
+    for (let m = n + 1; m < 차례.length; m++) if (v[차례[m]] !== null) { 이웃.push(v[차례[m]]); break; }
+    if (이웃.length && 이웃.every(function (u) { return Math.abs(v[i] - u) > J; })) 남김[i] = null;
+  });
+  const 있 = 차례.filter(function (i) { return 남김[i] !== null; });
+  if (있.length < Math.max(3, cols.length * 0.3)) return null;
+  return cols.map(function (_, i) {
+    let t = 남김[i];
+    if (t === null) {
+      const 왼 = 있.filter(function (j) { return xs[j] < xs[i]; }), 오 = 있.filter(function (j) { return xs[j] > xs[i]; });
+      if (!왼.length || !오.length) return T;
+      const l = 왼[왼.length - 1], r = 오[0];
+      t = Math.floor(남김[l] + (남김[r] - 남김[l]) * (xs[i] - xs[l]) / (xs[r] - xs[l]));
+    }
+    return Math.max(T, t + h);
+  });
+}
+
 /** `scan.ink_profile` — 뒤 계산이 모두 이것을 돌려쓴다. */
 function 잉크무늬(g, cols) {
   return cols.map(function (c) { return 열잉크(g, c[0], c[1]); });
@@ -1330,8 +1407,18 @@ function 쪽기하(g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, �
   } else {
     let TT = T, BB = B;
     if (쪽광곽) { const 열TB = 열광곽(g, cols0, T, B, xpitch, pitch); TT = 열TB[0]; BB = 열TB[1]; }
+    let 휜 = null;
+    if (!쪽광곽 && 읽기 && FRAME_CURVE) { 휜 = 휜광곽(g, cols0, T, pitch); if (휜) TT = 휜; }
     const 꼬리선 = !!읽기 && !쪽광곽 && !cols0.slice(0, -1).some((a, i) => 세로줄있나(g, (a[0] + a[1]) / 2, (cols0[i + 1][0] + cols0[i + 1][1]) / 2, T, B));
     spans = 글자구간(prof, cols0, TT, BB, pitch, !!읽기, !!읽기, 꼬리선, 읽기 && SPAN_FAINT ? 연한무늬(g, cols0) : null);
+    if (휜 && spans) {
+      // 휜 광곽선 · 절 번호가 예전엔 '첫 글자 줄' — 그런 열(쪽 T ~ 줄 아래에 글자 줄이 있던 열)은 줄 바로 아래에서 시작(`scan.page_geometry`)
+      cols0.forEach(function (c, i) {
+        const s = spans[i];
+        if (!s || !(휜[i] > T) || !(s[0] > 휜[i])) return;
+        for (let y = T; y < 휜[i]; y++) if (prof[i][y] > (c[1] - c[0]) * GLYPH) { spans[i] = [휜[i], s[1]]; return; }
+      });
+    }
     cols = cols0; sm = sm0;
   }
   if (spans && 찾.짧은열 && 찾.짧은열.length && !div) {
@@ -2756,6 +2843,9 @@ const API = {
       SPAN_EXTEND = s.구간이어; SPAN_LOW = s.구간이어잉크; SPAN_REACH = s.구간이어거리; SPAN_GAP = s.구간이어빈줄;
     }
     if (s.연한머리 !== undefined) SPAN_FAINT = s.연한머리;
+    if (s.휜광곽 !== undefined) {
+      FRAME_CURVE = s.휜광곽; FRAME_CURVE_BAND = s.휜광곽띠; FRAME_CURVE_FILL = s.휜광곽채움; FRAME_CURVE_REACH = s.휜광곽거리; FRAME_CURVE_JUMP = s.휜광곽튐; FRAME_CURVE_BG = s.휜광곽바탕;
+    }
     if (s.띄움 !== undefined) {
       SPACE = s.띄움; SPACE_ROW = s.띄움행; SPACE_ETA = s.띄움갈림; SPACE_LOW = s.띄움아래;
       SPACE_FRAC = s.띄움몫; SPACE_CLIP = s.띄움자름; SPACE_BEFORE = s.띄움앞; SPACE_AFTER = s.띄움뒤;

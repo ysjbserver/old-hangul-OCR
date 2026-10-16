@@ -25,6 +25,15 @@ FRAME_LOCAL = True
 FRAME_LOCAL_FILL = 0.6    # 열 + 안쪽 고랑 띠의 이만큼이 잉크인 줄을 광곽 가로줄로
 FRAME_LOCAL_REACH = 0.35  # 쪽 광곽 줄에서 세로 자간의 이만큼 안에서만 찾음
 FRAME_LOCAL_EDGE = 8      # 찬 줄에서 이 px 까지 흐린 줄(열 폭의 GLYPH 넘는 줄)도 광곽 줄로 친다
+# (읽을 때만) 휜 위 광곽 가로줄 — 쪽 광곽(`_frame_read`)을 못 찾은 쪽에서 열마다 쪽 T 근처의 옅은(이 밝기 미만) 가로줄을
+#   기울기를 견디게(띠 높이 안이면 찬 것으로) 찾아 그 아래에서 열을 시작(`_휜광곽`). 0 = 끔. 권2 0589 — 휜 광곽선과
+#   그 위 절 번호(七 · 六 …)가 열 머리 헛칸이 되어 한 칸씩 밀림. JS 짝 `휜광곽` · 설정 `휜광곽`
+FRAME_CURVE = 160
+FRAME_CURVE_BAND = 0.08          # 띠 높이(세로 자간 몫) — 줄이 이만큼 기울어도 찬 것으로
+FRAME_CURVE_FILL = (0.8, 0.6)    # 열 띠 · 양옆 고랑(있는 것 모두)을 이만큼 덮어야 광곽 줄 — 한쪽 고랑의 절 번호 + 글자 윗획을 거름
+FRAME_CURVE_REACH = 1.0          # 쪽 T 에서 세로 자간의 이만큼 위아래만 찾음
+FRAME_CURVE_JUMP = 0.3           # 가장 가까운 찾은 열(양옆)과 모두 이 자간 넘게 다르면 버림
+FRAME_CURVE_BG = 0.75            # 잉크 문턱은 FRAME_CURVE 와 '찾는 띠의 밝기 중앙값(종이) × 이것' 중 작은 쪽 — 회색 종이(봉황대 160)에서 바탕이 다 잉크로 잡히던 것
 
 # ── 열 찾기 ──────────────────────────────────────────────────────────
 def _columns_at(ink, W, th, 얇음=0):
@@ -656,6 +665,76 @@ def _열광곽(g, cols, T, B, xpitch, pitch):
             out.append(안쪽(쪽값, t))
         return out
     return 잇기(위, T, max), 잇기(아래, B, min)
+
+
+def _휜광곽(g, cols, T, pitch):
+    """
+    열마다 휜 위 광곽 가로줄 아래 — 읽을 때만, 쪽 광곽(`_frame_read`)을 못 찾은 쪽에서(`FRAME_CURVE`).
+    반환: 열마다 시작 높이 목록(쪽 T 보다 안쪽으로만), 못 찾으면 None.
+
+    열 띠와 양옆 고랑(있는 것 모두 — 한쪽만이면 고랑의 절 번호 + 글자 윗획이 걸림, 요한복음 0011)을 함께 덮는 줄을 쪽 T ± `FRAME_CURVE_REACH` 자간에서 아래부터 찾는다 —
+    고랑까지 가로지르는 것은 광곽뿐. 줄이 기울어도 되게 `FRAME_CURVE_BAND` 자간 높이 띠 안의 x 마다 '잉크가 있나' 로 덮개를 잼.
+    양옆 가장 가까운 찾은 열과 모두 `FRAME_CURVE_JUMP` 자간 넘게 다르면 버림. 찾은 열이 셋 · 열의 30% 미만이면 None.
+    못 찾은 열은 양옆 찾은 열 사이면 x 로 곧게 잇고, 바깥이면 쪽 T 그대로.
+    """
+    H = g.shape[0]
+    h = max(3, int(FRAME_CURVE_BAND * pitch))
+    lo, hi = max(0, int(T - FRAME_CURVE_REACH * pitch)), min(H - h, int(T + FRAME_CURVE_REACH * pitch))
+    if hi <= lo or len(cols) < 3:
+        return None
+    s0, s1 = max(0, lo - h), min(H, hi + 2 * h)
+    문턱 = min(FRAME_CURVE, float(np.median(g[lo:hi])) * FRAME_CURVE_BG)
+    ink = (g[s0:s1] < 문턱).astype(np.int32)
+    cs = np.vstack([np.zeros((1, ink.shape[1]), np.int32), np.cumsum(ink, axis=0)])
+    띠 = (cs[h:] - cs[:-h]) > 0                     # 띠[y - s0, x] = 줄 y..y+h-1 에 잉크가 있나
+    순 = sorted(cols)
+    f열, f고랑 = FRAME_CURVE_FILL
+    v = []
+    for x0, x1 in cols:
+        k = 순.index((x0, x1))
+        고랑 = []
+        for j in (k - 1, k + 1):
+            if 0 <= j < len(순):
+                a, b = (순[j][1], x0) if j < k else (x1, 순[j][0])
+                if b - a >= 3:
+                    고랑.append((a, b))
+        y찾음 = None
+        for y in range(hi - 1, lo - 1, -1):          # 아래부터 — 쌍줄이면 안쪽 줄
+            if 띠[y - s0, x0:x1].mean() < f열:
+                continue
+            if 고랑 and all(띠[max(0, y - h - s0):y + h + 1 - s0, a:b].mean(axis=1).max() >= f고랑 for a, b in 고랑):
+                y찾음 = y
+                break
+        v.append(y찾음)
+    xs = [(a + b) / 2 for a, b in cols]
+    차례 = sorted(range(len(cols)), key=lambda i: xs[i])
+    J = FRAME_CURVE_JUMP * pitch
+    남김 = list(v)
+    for n, i in enumerate(차례):
+        if v[i] is None:
+            continue
+        이웃 = []
+        for 방향 in (차례[n - 1::-1] if n > 0 else [], 차례[n + 1:]):
+            for j in 방향:
+                if v[j] is not None:
+                    이웃.append(v[j]); break
+        if 이웃 and all(abs(v[i] - u) > J for u in 이웃):
+            남김[i] = None
+    있 = [i for i in 차례 if 남김[i] is not None]
+    if len(있) < max(3, len(cols) * 0.3):
+        return None
+    out = []
+    for i in range(len(cols)):
+        t = 남김[i]
+        if t is None:
+            왼 = [j for j in 있 if xs[j] < xs[i]]
+            오 = [j for j in 있 if xs[j] > xs[i]]
+            if not 왼 or not 오:
+                out.append(T); continue
+            l, r = 왼[-1], 오[0]
+            t = int(np.floor(남김[l] + (남김[r] - 남김[l]) * (xs[i] - xs[l]) / (xs[r] - xs[l])))
+        out.append(max(T, t + h))
+    return out
 
 
 def ink_profile(g, cols):
@@ -1347,8 +1426,19 @@ def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 
         TT, BB = T, B
         if 쪽광곽:
             TT, BB = _열광곽(g, cols, T, B, xpitch, pitch)
+        휜 = None
+        if not 쪽광곽 and 읽기 and FRAME_CURVE:
+            휜 = _휜광곽(g, cols, T, pitch)
+            TT = 휜 or T
         연한 = [(g[:, a:b] < SPAN_FAINT).sum(axis=1) for a, b in cols] if 읽기 and SPAN_FAINT else None
         spans = spans_between(prof, cols, TT, BB, pitch, 이어=이어, 첫글자=bool(읽기), 꼬리선=bool(읽기) and not 쪽광곽 and not any(세로줄있나(g, (a[0] + a[1]) / 2, (b[0] + b[1]) / 2, T, B) for a, b in zip(cols[:-1], cols[1:])), 연한=연한)
+        if 휜 and spans:
+            # 휜 광곽선 · 그 위 절 번호가 예전엔 '첫 글자 줄' 이 되어 열이 맨 위에서 시작했다 — 흐린 쪽은 그 덕에 옅은 첫 글자를 품었음.
+            #   그런 열(쪽 T 와 줄 아래 사이에 글자 줄이 있던 열)은 줄 바로 아래에서 시작.
+            for i, (x0, x1) in enumerate(cols):
+                s = spans[i]
+                if s and 휜[i] > T and s[0] > 휜[i] and np.any(prof[i][T:휜[i]] > (x1 - x0) * GLYPH):
+                    spans[i] = (휜[i], s[1])
         sm = [smooth(p, max(2.0, pitch / 9)) for p in prof]
     if spans and 정보.get("짧은열") and not div:
         for i, c in enumerate(cols):
