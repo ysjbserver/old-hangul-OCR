@@ -11,18 +11,46 @@ DROP = {"절", "marginNote", "nop", "upe", "여백", "점선 요약", "목차용
         "references", "reflist", "pagequality", "-"}
 LAST  = {"왼쪽 여백"}                  # {{왼쪽 여백|2em|본문}} → 본문
 JOIN  = {"분주"}                       # {{분주|윗줄|아랫줄}} → 윗줄아랫줄
-FIRST = {"u", "du", "wu", "물결밑줄", "밑줄", "더크게", "더더크게", "크게", "작게",
-         "가운데", "복원", "SIC", "sc", "글자크기"}
+FIRST = {"u", "du", "wu", "물결밑줄", "밑줄", "더크게", "더더크게", "더더더크게", "더더더더크게",
+         "크게", "작게", "가운데", "복원", "SIC", "sc", "글자크기",   # 더더더(더)크게 — 2026-10-15 (속표지 큰 제목 · 신문 제호)
+         # 2026-10-16 — 서식만 입히고 글자는 종이에 찍힌 틀(스캔으로 봄). `C` · `Sic` · `*` · `쌍밑줄` 은 넘겨주기 이름
+         "C", "Sic", "쌍밑줄", "할주", "*", "오른쪽", "세로쓰기", "머리글자 장식",
+         "드러냄표", "가늘게", "내어쓰기", "다크 모드 반전"}
+# 일부러 안 넣은 것(2026-10-16): `오른쪽 띄우기`(신편찬송가 398쪽 — 세로 열 밖 가로 머리글의 영어 곡명) ·
+# `더작게` · `더더작게`(증남포 열 머리 위 가로 항목 번호 「(8)」 — 절 번호 같은 것 · 개역 판권 영어) ·
+# `?`(판독 불가 — 글자를 모름) · `앵커`(안 보임) · `분수` · `들여쓰기/s` 같은 숫자 인자 틀
+SECOND = {"색상", "배경색상", "배경 색상"}   # {{색상|white|本義}} → 本義 (쥬역언해 음각 글자)
+SPACED = {"자간"}                          # {{자간|2em|군|말}} → 군말 (둘째 · 셋째 인자)
+
+
+def 틀이름(name):
+    """MediaWiki 처럼 맞춘 틀 이름 — 밑줄 = 빈칸, 첫 글자 대소문자 무시(`sic` = `Sic`, `du` = `Du`)."""
+    n = re.sub(r'[\s_]+', ' ', name).strip()
+    return n[:1].upper() + n[1:]
+
+
+_표 = {}
+
+
+def 남길인자(name, n):
+    """틀 하나 → 남길 인자 번호 목록(인자 n 개). `대조._틀남길것` 도 이것을 씀."""
+    if not _표:                        # 처음 부를 때 표 이름을 맞춰 둠(뒤에 표를 고치면 `_표.clear()`)
+        for 이름, 표 in (("DROP", DROP), ("LAST", LAST), ("JOIN", JOIN), ("FIRST", FIRST),
+                       ("SECOND", SECOND), ("SPACED", SPACED)):
+            _표[이름] = {틀이름(x) for x in 표}
+    k = 틀이름(name)
+    if k in _표["DROP"] or k.startswith("왼쪽 여백/"):
+        return []
+    if k in _표["JOIN"]:   return list(range(min(n, 2)))
+    if k in _표["LAST"]:   return [n - 1] if n else []
+    if k in _표["FIRST"]:  return [0] if n else []
+    if k in _표["SECOND"]: return [1] if n > 1 else []
+    if k in _표["SPACED"]: return list(range(1, min(n, 3)))
+    return []                          # 모르는 틀은 서식·주석으로 보고 버린다
 
 
 def _template(name, args):
-    name = name.strip()
-    if name in DROP or name.startswith("왼쪽 여백/"):
-        return ""
-    if name in JOIN:  return "".join(args[:2])
-    if name in LAST:  return args[-1] if args else ""
-    if name in FIRST: return args[0] if args else ""
-    return ""                          # 모르는 틀은 서식·주석으로 보고 버린다
+    return "".join(args[i] for i in 남길인자(name, len(args)))
 
 
 # 표 문법 `{| … |}` — 칸 안의 글자는 남기고 표시 · 속성만 걷는다.

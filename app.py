@@ -159,14 +159,24 @@ def _캐시정리():
                 pass
 
 
+def 쪽검사(정보, 쪽):
+    """쪽 번호가 그 파일에 있는지 — 없으면 400. 한 장짜리 그림은 1쪽뿐, 여러 쪽 파일은 1~쪽수(쪽수를 모르면 1 이상만)."""
+    if isinstance(쪽, bool) or not isinstance(쪽, int) or 쪽 < 1:
+        raise 손님오류("page(쪽 번호)는 1 이상의 정수여야 합니다")
+    if not 정보["여러쪽"]:
+        if 쪽 != 1:
+            raise 손님오류(f"이 파일은 한 장짜리 그림이라 1쪽만 있습니다(요청 {쪽}쪽)")
+    elif 정보["쪽수"] and 쪽 > 정보["쪽수"]:
+        raise 손님오류(f"이 파일은 {정보['쪽수']}쪽까지입니다")
+
+
 def 스캔(파일, 쪽):
     """그 쪽 스캔의 로컬 경로(받아 둠). 1920px."""
     정보 = 파일정보(파일)
+    쪽검사(정보, 쪽)                       # 캐시 폴더를 만들기 전에 — 잘못된 쪽은 아무것도 안 받음
     d = os.path.join(캐시, hashlib.sha1(파일.encode("utf-8")).hexdigest()[:16])
     os.makedirs(d, exist_ok=True)
     if 정보["여러쪽"]:
-        if 정보["쪽수"] and not (1 <= 쪽 <= 정보["쪽수"]):
-            raise 손님오류(f"이 파일은 {정보['쪽수']}쪽까지입니다")
         p = os.path.join(d, f"{쪽:04d}.jpg")
         r = step1_collect.fetch_one(정보["틀"], 쪽, p)
         if r not in ("ok", "skip"):

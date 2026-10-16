@@ -122,17 +122,14 @@ def _바꾸기(t, pos, 맞음들, 남길것):
     return "".join(nt), npos
 
 
-큰틀 = {"크게", "더크게", "더더크게"}   # 큰 활자 — `_한번` 이 '빼고 맞대기' 를 후보로 해 봄
+큰틀 = {"크게", "더크게", "더더크게", "더더더크게", "더더더더크게"}   # 큰 활자 — `_한번` 이 '빼고 맞대기' 를 후보로 해 봄
 
 
 def _틀남길것(이름, 인자, 큰빼기=False):
-    """`wikitext._template` 과 같은 판정 — 문자열 대신 인자 구간을 돌려준다. 큰빼기면 큰 활자 틀(`큰틀`)도 버림."""
-    if 이름 in wikitext.DROP or 이름.startswith("왼쪽 여백/") or (큰빼기 and 이름 in 큰틀):
+    """`wikitext._template` 과 같은 판정(`wikitext.남길인자`) — 문자열 대신 인자 구간을 돌려준다. 큰빼기면 큰 활자 틀(`큰틀`)도 버림."""
+    if 큰빼기 and wikitext.틀이름(이름) in 큰틀:
         return []
-    if 이름 in wikitext.JOIN:  return 인자[:2]
-    if 이름 in wikitext.LAST:  return 인자[-1:]
-    if 이름 in wikitext.FIRST: return 인자[:1]
-    return []
+    return [인자[i] for i in wikitext.남길인자(이름, len(인자))]
 
 
 class _자리:
@@ -143,7 +140,7 @@ class _자리:
     def end(self): return self._b
 
 
-오식틀 = {"SIC"}       # 원문 오식을 그대로 옮긴 표시 — 이 안의 글자는 후보로 내지 않는다
+오식틀 = {"SIC", "Sic"}   # 원문 오식을 그대로 옮긴 표시 — 이 안의 글자는 후보로 내지 않는다(`Sic` = `sic` 넘겨주기)
 
 
 def 인쇄글자(raw, keep_headings=False, 큰빼기=False):
@@ -165,7 +162,7 @@ def 인쇄글자(raw, keep_headings=False, 큰빼기=False):
         이름 = t[조각[0][0]:조각[0][1]].strip()
         인자 = [(a, b) for a, b in 조각[1:] if not re.match(r'^\s*[A-Za-z-]+\s*=', t[a:b])]
         남길 = _틀남길것(이름, 인자, 큰빼기)
-        if 이름 in 오식틀:
+        if wikitext.틀이름(이름) in 오식틀:
             for a, b in 남길:
                 오식.update(pos[a:b])
         t, pos = _바꾸기(t, pos, [m], lambda _m: 남길)

@@ -17,6 +17,9 @@ SPAN_EXTEND = True
 SPAN_LOW = 0.15     # 열 폭의 이만큼 넘는 줄을 잇는다
 SPAN_REACH = 1.5    # 구간 밖으로 이 자간까지만
 SPAN_GAP = 0.4      # 빈 줄이 이 자간 넘게 이어지면 멈춤
+# (읽을 때만) 흐린 열 머리 — 이웃 열보다 늦게 시작한 열을 이 밝기 미만(옅은 잉크)으로 위로 다시 찾음(`_연한머리잇기`).
+#   0 = 끔. 권2 0030 의 흐리게 찍힌 열 머리(유다와벤야민 …). JS 짝 `연한머리잇기` · 설정 `연한머리`
+SPAN_FAINT = 160
 # 읽을 때 광곽 높이를 열마다 따로 (_열광곽) — 기운·휜 광곽 대비
 FRAME_LOCAL = True
 FRAME_LOCAL_FILL = 0.6    # 열 + 안쪽 고랑 띠의 이만큼이 잉크인 줄을 광곽 가로줄로
@@ -307,6 +310,36 @@ def _첫글자잇기(prof, cols, spans, Ts, pitch):
                 break
         if abs(end - anchor) <= pitch * 0.35 and np.count_nonzero(p[end:s[0]] > w * SPAN_LOW) >= max(3, pitch * 0.1):
             spans[i] = (end, s[1])
+    return spans
+
+
+def _연한머리잇기(faint, cols, spans, Ts, pitch):
+    """
+    이웃 열보다 늦게 시작한 열(위쪽 글자가 흐리게 찍혀 `GLYPH` 를 못 넘음)을 옅은 잉크 무늬 `faint`(`SPAN_FAINT` 미만)로
+    위로 다시 잇는다. 빈 줄이 한 자간 넘게 끊기기 전까지 `SPAN_LOW` 를 넘는 줄을 따라 올라가 이웃 열의 시작(위에서 1/4)
+    0.5 자간 안에 닿고, 그 사이 줄의 30% 넘게 `SPAN_LOW` 를 넘을 때만 — 글자 열은 40~55%, 뒷면 비침 고랑은 7%(권2 0030).
+    (낱말 사이 빈칸이 0.8 자간 가까이 되는 쪽이 있어 끊김은 한 자간까지 봄)
+    """
+    real = sorted(s[0] for s in spans if s)
+    if len(real) < 3:
+        return spans
+    anchor = real[(len(real) - 1) // 4]     # 위에서 1/4 — 흐린 열이 반 넘는 쪽(권2 0012)도 성한 열 높이를 기준으로
+    for i, s in enumerate(spans):
+        if not s or s[0] <= anchor + pitch * 0.6:
+            continue
+        p, w, end = faint[i], cols[i][1] - cols[i][0], s[0]
+        for y in range(s[0] - 1, max(Ts[i], int(anchor - pitch * 0.5)) - 1, -1):
+            if p[y] > w * SPAN_LOW:
+                end = y
+            elif end - y > pitch:
+                break
+        if abs(end - anchor) > pitch * 0.5:
+            continue
+        if np.count_nonzero(p[end:s[0]] > w * SPAN_LOW) < (s[0] - end) * 0.3:
+            continue
+        # 이웃 열 시작까지 올림 — 맨 첫 글자는 옅은 문턱으로도 안 잡힐 만큼 흐릴 수 있음(권2 0012 — 277 에서 멈추면 대조 98 → 77%)
+        a = max(Ts[i], min(end, anchor))
+        spans[i] = (Ts[i] if a - Ts[i] < pitch * 0.5 else a, s[1])
     return spans
 
 
@@ -649,7 +682,7 @@ def _이어잡기(p, a, b, w, T, B, pitch):
     return a, 끝
 
 
-def spans_between(prof, cols, T, B, pitch, 이어=False, 첫글자=False, 꼬리선=False):
+def spans_between(prof, cols, T, B, pitch, 이어=False, 첫글자=False, 꼬리선=False, 연한=None):
     """
     T~B 안에서 열마다 글자가 실제로 시작하고 끝나는 y 범위.
 
@@ -657,6 +690,7 @@ def spans_between(prof, cols, T, B, pitch, 이어=False, 첫글자=False, 꼬리
     (그래야 중간에서 시작하거나 일찍 끝나는 열을 잡는다).
     `이어=True`(읽을 때) 면 구간 끝의 가는 글자를 `_이어잡기` 로 붙인다.
     T · B 는 열마다의 목록이어도 된다(`_열광곽` — 읽을 때).
+    연한: 열마다 옅은 잉크 무늬(읽을 때 · `SPAN_FAINT`) — 주면 흐린 열 머리를 `_연한머리잇기` 로 잇는다.
     """
     Ts = list(T) if isinstance(T, (list, tuple)) else [T] * len(cols)
     Bs = list(B) if isinstance(B, (list, tuple)) else [B] * len(cols)
@@ -690,6 +724,8 @@ def spans_between(prof, cols, T, B, pitch, 이어=False, 첫글자=False, 꼬리
         out.append((a, b))
     if 첫글자 and 이어 and SPAN_EXTEND:
         out = _첫글자잇기(prof, cols, out, Ts, pitch)
+    if 첫글자 and 연한 is not None:
+        out = _연한머리잇기(연한, cols, out, Ts, pitch)
     return out
 
 
@@ -1311,7 +1347,8 @@ def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 
         TT, BB = T, B
         if 쪽광곽:
             TT, BB = _열광곽(g, cols, T, B, xpitch, pitch)
-        spans = spans_between(prof, cols, TT, BB, pitch, 이어=이어, 첫글자=bool(읽기), 꼬리선=bool(읽기) and not 쪽광곽 and not any(세로줄있나(g, (a[0] + a[1]) / 2, (b[0] + b[1]) / 2, T, B) for a, b in zip(cols[:-1], cols[1:])))
+        연한 = [(g[:, a:b] < SPAN_FAINT).sum(axis=1) for a, b in cols] if 읽기 and SPAN_FAINT else None
+        spans = spans_between(prof, cols, TT, BB, pitch, 이어=이어, 첫글자=bool(읽기), 꼬리선=bool(읽기) and not 쪽광곽 and not any(세로줄있나(g, (a[0] + a[1]) / 2, (b[0] + b[1]) / 2, T, B) for a, b in zip(cols[:-1], cols[1:])), 연한=연한)
         sm = [smooth(p, max(2.0, pitch / 9)) for p in prof]
     if spans and 정보.get("짧은열") and not div:
         for i, c in enumerate(cols):

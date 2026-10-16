@@ -82,6 +82,7 @@ function 그림읽기(src) {
 let INK = 120;          // 이보다 어두우면 잉크로 본다
 let GLYPH = 0.35;       // 글자가 있는 줄은 열 폭의 이만큼 이상이 잉크다
 let SPAN_EXTEND = true, SPAN_LOW = 0.15, SPAN_REACH = 1.5, SPAN_GAP = 0.4;   // scan._이어잡기
+let SPAN_FAINT = 160;   // scan._연한머리잇기 — 흐린 열 머리를 이 밝기 미만으로 다시 찾음(0 = 끔)
 let FRAME_LOCAL = true, FRAME_LOCAL_FILL = 0.6, FRAME_LOCAL_REACH = 0.35, FRAME_LOCAL_EDGE = 8;   // scan._열광곽
 let YX_RATIO = 0.867;   // 세로 자간 ÷ 가로 자간 (기본값)
 
@@ -752,7 +753,7 @@ function 이어잡기(p, a, b, w, T, B, pitch) {
  * `scan.spans_between` — T~B 안에서 열마다 글자가 시작하고 끝나는 y.
  * 뒷면 비침·계선 때문에 열 폭의 GLYPH 이상이 잉크인 줄만 글자 줄로 봄
  */
-function 글자구간(prof, cols, T, B, pitch, 이어, 첫글자, 꼬리선) {
+function 글자구간(prof, cols, T, B, pitch, 이어, 첫글자, 꼬리선, 연한) {
   const Ts = Array.isArray(T) ? T : cols.map(function () { return T; });   // 열마다 목록이어도 됨(`열광곽`)
   const Bs = Array.isArray(B) ? B : cols.map(function () { return B; });
   const spans = cols.map(function (c, i) {
@@ -785,7 +786,43 @@ function 글자구간(prof, cols, T, B, pitch, 이어, 첫글자, 꼬리선) {
     return [a, b];
   });
   if (첫글자 && 이어 && SPAN_EXTEND) 첫글자잇기(prof, cols, out, Ts, pitch);
+  if (첫글자 && 연한) 연한머리잇기(연한, cols, out, Ts, pitch);
   return out;
+}
+
+/** `scan._연한머리잇기` — 이웃 열보다 늦게 시작한 열을 옅은 잉크 무늬로 위로 다시 잇는다(흐린 열 머리). */
+function 연한머리잇기(faint, cols, spans, Ts, pitch) {
+  const starts = spans.filter(function (s) { return s; }).map(function (s) { return s[0]; }).sort(function (a, b) { return a - b; });
+  if (starts.length < 3) return;
+  const anchor = starts[Math.floor((starts.length - 1) / 4)];   // 위에서 1/4 (파이썬과 같은 자리)
+  spans.forEach(function (s, i) {
+    if (!s || s[0] <= anchor + pitch * 0.6) return;
+    const p = faint[i], w = cols[i][1] - cols[i][0]; let end = s[0];
+    for (let y = s[0] - 1, lim = Math.max(Ts[i], Math.trunc(anchor - pitch * 0.5)); y >= lim; y--) {
+      if (p[y] > w * SPAN_LOW) end = y;
+      else if (end - y > pitch) break;
+    }
+    if (Math.abs(end - anchor) > pitch * 0.5) return;
+    let n = 0;
+    for (let y = end; y < s[0]; y++) if (p[y] > w * SPAN_LOW) n++;
+    if (n < (s[0] - end) * 0.3) return;
+    const a = Math.max(Ts[i], Math.min(end, anchor));   // 이웃 열 시작까지 올림(맨 첫 글자가 더 흐릴 수 있음)
+    spans[i] = [a - Ts[i] < pitch * 0.5 ? Ts[i] : a, s[1]];
+  });
+}
+
+/** 열 띠의 옅은 잉크 무늬(`SPAN_FAINT` 미만) — `scan.page_geometry` 읽는 경로의 `연한` */
+function 연한무늬(g, cols) {
+  const v = g.값, W = g.너비;
+  return cols.map(function (c) {
+    const p = new Float64Array(g.높이);
+    for (let y = 0; y < g.높이; y++) {
+      let s = 0; const o = y * W;
+      for (let x = c[0]; x < c[1]; x++) if (v[o + x] < SPAN_FAINT) s++;
+      p[y] = s;
+    }
+    return p;
+  });
 }
 
 /** 이웃 열의 시작 높이와 맞는 가는 첫 글자를 빈 줄 너머에서 복구한다. */
@@ -1294,7 +1331,7 @@ function 쪽기하(g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, �
     let TT = T, BB = B;
     if (쪽광곽) { const 열TB = 열광곽(g, cols0, T, B, xpitch, pitch); TT = 열TB[0]; BB = 열TB[1]; }
     const 꼬리선 = !!읽기 && !쪽광곽 && !cols0.slice(0, -1).some((a, i) => 세로줄있나(g, (a[0] + a[1]) / 2, (cols0[i + 1][0] + cols0[i + 1][1]) / 2, T, B));
-    spans = 글자구간(prof, cols0, TT, BB, pitch, !!읽기, !!읽기, 꼬리선);
+    spans = 글자구간(prof, cols0, TT, BB, pitch, !!읽기, !!읽기, 꼬리선, 읽기 && SPAN_FAINT ? 연한무늬(g, cols0) : null);
     cols = cols0; sm = sm0;
   }
   if (spans && 찾.짧은열 && 찾.짧은열.length && !div) {
@@ -2718,6 +2755,7 @@ const API = {
     if (s.구간이어 !== undefined) {
       SPAN_EXTEND = s.구간이어; SPAN_LOW = s.구간이어잉크; SPAN_REACH = s.구간이어거리; SPAN_GAP = s.구간이어빈줄;
     }
+    if (s.연한머리 !== undefined) SPAN_FAINT = s.연한머리;
     if (s.띄움 !== undefined) {
       SPACE = s.띄움; SPACE_ROW = s.띄움행; SPACE_ETA = s.띄움갈림; SPACE_LOW = s.띄움아래;
       SPACE_FRAC = s.띄움몫; SPACE_CLIP = s.띄움자름; SPACE_BEFORE = s.띄움앞; SPACE_AFTER = s.띄움뒤;
