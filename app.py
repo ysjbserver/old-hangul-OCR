@@ -534,6 +534,16 @@ def _상자목록(상자들):
     return 결과
 
 
+def 글자표지문(m):
+    """글자표(초 · 중 · 종 순서)의 짧은 지문 — 영역 지정 화면이 번호를 글자로 바꿀 표가 서버 모델과 같은지 확인.
+    모델을 바꿔 다시 띄운 서버에 옛 화면(옛 표)이 상자 번호를 물으면 자모가 한 칸씩 밀린 글자가 나오므로(2026-10-17 — 자모표 29 · 26 · 20 → 30 · 27 · 23)."""
+    try:
+        표 = [list(m.Ls), list(m.Vs), list(m.Ts)]
+    except TypeError:                     # 글자표가 없는 모의 모델(시험)
+        return None
+    return hashlib.sha256(json.dumps(표, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
+
+
 def 상자읽기(파일, 쪽, 상자들, 모델이름=None):
     상자들 = _상자목록(상자들)
     im, _ = 그림(파일, 쪽)
@@ -543,7 +553,11 @@ def 상자읽기(파일, 쪽, 상자들, 모델이름=None):
     모델 = 모델얻기(모델이름)
     with 계산:
         kL, kV, kT, cf = 모델.read(im, 상자들)
-    return dict(초=[int(v) for v in kL], 중=[int(v) for v in kV], 종=[int(v) for v in kT], 확신=[float(v) for v in cf])
+    답 = dict(초=[int(v) for v in kL], 중=[int(v) for v in kV], 종=[int(v) for v in kT], 확신=[float(v) for v in cf])
+    표 = 글자표지문(모델)
+    if 표:
+        답["표"] = 표
+    return 답
 
 
 def 경계읽기(파일, 쪽, x0, x1):
@@ -748,7 +762,7 @@ def app(env, start):
             return _응답(start, 살핌상태(파일))
         if 경로 == "/api/tables":
             m = 모델얻기(q.get("model"))
-            return _응답(start, dict(초성=m.Ls, 중성=m.Vs, 종성=m.Ts))
+            return _응답(start, dict(초성=m.Ls, 중성=m.Vs, 종성=m.Ts, 표=글자표지문(m)))
         if 방식 != "POST":
             return _응답(start, {"오류": "없는 주소"}, 404)
         몸 = _몸(env)

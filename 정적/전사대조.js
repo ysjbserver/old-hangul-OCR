@@ -418,21 +418,36 @@ function 결과걷기() {
 
 // 사람이 고친 만큼 자리를 옮긴다 — 고친 구간에 걸린 후보는 '손댐', 뒤의 것은 민다
 var 기준글 = null;
+// 소도구가 직접 하는 고침(넣기 · 바꾸기) {시작, 끝, 글} — 넣은 글자가 앞뒤 글자와 같으면 앞뒤 비교로는 고친 자리를 잘못 짚으므로
+var 아는고침 = null;
 function 따라가기() {
   var 상자 = 편집상자();
   if (!상자 || 기준글 === null) return;
   var 새 = 상자.value, 옛 = 기준글;
   if (새 === 옛) return;
-  var n = Math.min(옛.length, 새.length), a = 0, b = 0;
-  while (a < n && 옛.charCodeAt(a) === 새.charCodeAt(a)) a++;
-  while (b < n - a && 옛.charCodeAt(옛.length - 1 - b) === 새.charCodeAt(새.length - 1 - b)) b++;
-  var 옛끝 = 옛.length - b, 차 = 새.length - 옛.length;
+  var a, 옛끝, 차 = 새.length - 옛.length, k = 아는고침;
+  var 앎 = !!k && 새 === 옛.slice(0, k.시작) + k.글 + 옛.slice(k.끝);
+  if (앎) { a = k.시작; 옛끝 = k.끝; }
+  else {
+    var n = Math.min(옛.length, 새.length), b = 0;
+    a = 0;
+    while (a < n && 옛.charCodeAt(a) === 새.charCodeAt(a)) a++;
+    while (b < n - a && 옛.charCodeAt(옛.length - 1 - b) === 새.charCodeAt(새.length - 1 - b)) b++;
+    옛끝 = 옛.length - b;
+  }
   후보들.forEach(function (c) {
     if (c.끝남) return;
+    // 누락의 앞뒤 원문이 고치기 직전 글과 맞았으면, 소도구의 고침을 반영해 다시 적음(사람 · 다른 도구의 고침은 그대로 둬 넣기를 막음)
+    var 맞던 = 앎 && c.갈래 === "누락" && c.시작 >= c.앞원문.length
+      && 옛.slice(c.시작 - c.앞원문.length, c.시작) === c.앞원문 && 옛.slice(c.시작, c.시작 + c.뒤원문.length) === c.뒤원문;
     if (c.갈래 === "누락" && a <= c.시작 && c.시작 <= 옛끝) { c.끝남 = "손댐"; return; }
-    if (c.끝 <= a) return;
-    if (c.시작 >= 옛끝) { c.시작 += 차; c.끝 += 차; return; }
-    c.끝남 = "손댐";
+    if (c.끝 <= a) { /* 앞쪽 — 그대로 */ }
+    else if (c.시작 >= 옛끝) { c.시작 += 차; c.끝 += 차; }
+    else { c.끝남 = "손댐"; return; }
+    if (맞던) {
+      c.앞원문 = 새.slice(Math.max(0, c.시작 - 6), c.시작);
+      c.뒤원문 = 새.slice(c.시작, c.시작 + 6);
+    }
   });
   기준글 = 새;
   if (깔개) { 깔개.기준 = 새; 깔개.그리기(); }
@@ -504,13 +519,19 @@ function 글넣기(상자, c) {
   상자.focus({ preventScroll: true });
   상자.setSelectionRange(c.시작, c.끝);
   // execCommand 로 넣어야 되돌리기(Ctrl+Z)가 된다. 안 되면 setRangeText.
-  var 됨 = false;
-  try { 됨 = document.execCommand("insertText", false, c.스캔); } catch (e) { 됨 = false; }
-  if (!됨) {
-    상자.setRangeText(c.스캔, c.시작, c.끝, "end");
-    상자.dispatchEvent(new Event("input", { bubbles: true }));
+  // 고친 자리를 알려 둠 — 고치는 동안 오는 input 이벤트의 `따라가기` 도 이 자리로 후보를 옮김
+  아는고침 = { 시작: c.시작, 끝: c.끝, 글: c.스캔 };
+  try {
+    var 됨 = false;
+    try { 됨 = document.execCommand("insertText", false, c.스캔); } catch (e) { 됨 = false; }
+    if (!됨) {
+      상자.setRangeText(c.스캔, c.시작, c.끝, "end");
+      상자.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    따라가기();
+  } finally {
+    아는고침 = null;
   }
-  따라가기();
 }
 
 // ── 목록 ──
