@@ -268,6 +268,7 @@ function 판심떼기(cols, ratio) {
 let PITCH_OFF = 0.15, PITCH_ON = 0.12, PITCH_USE = true;   // scan.py · page.py 와 같은 값
 let PITCH_MORE = 1.5;   // 간격이 가까워도 다른 문턱이 열을 이 배 넘게 더 찾으면 바꿈
 let PITCH_SCAN = [0.2, 0.3, 0.4, 0.5], PITCH_THIN = 0.25;   // scan.PITCH_SCAN · PITCH_THIN — 그래도 벗어나면 가는 덩이 빼고 · 더 높은 문턱
+let PITCH_FILL = 1.6;   // scan.PITCH_FILL — 빠진 열 채울 칸수를 표준 간격으로 다시 셈(잰 간격 ≤ 표준 × 이것일 때만). 0 = 끔
 
 /** `scan._열수` — ③④ 를 거친 뒤의 열 수(후보 견주기용) */
 function 열수(runs, pitch) {
@@ -393,7 +394,12 @@ function 열찾기(g, 판심뗌, 표준자간, 끝띠) {
   for (let i = 1; i < merged.length; i++) {
     const r = merged[i], c = (r[0] + r[1]) / 2;
     const prev = boxes[boxes.length - 1], pc = (prev[0] + prev[1]) / 2;
-    const k = Math.max(1, 반올림((c - pc) / pitch));
+    let k = Math.max(1, 반올림((c - pc) / pitch));
+    if (표준자간 && PITCH_FILL && pitch <= 표준자간 * PITCH_FILL && k >= 2 &&
+        Math.abs((c - pc) / k - 표준자간) > 표준자간 * PITCH_ON) {   // 간격이 말려 작게 잰 쪽 — 표준 간격으로 센 칸수
+      const k2 = Math.max(1, 반올림((c - pc) / 표준자간));
+      if (Math.abs((c - pc) / k2 - 표준자간) <= 표준자간 * PITCH_ON) k = k2;
+    }
     for (let t = 1; t < k; t++) {
       const mid = pc + (c - pc) * t / k;
       boxes.push([자름(mid - wmed2 / 2), 자름(mid + wmed2 / 2)]);
@@ -2794,6 +2800,7 @@ const API = {
     if (s.가장자리막대줄 !== undefined) EDGE_BAR_RUN = s.가장자리막대줄;
     if (s.열다시찾기 !== undefined) PITCH_SCAN = s.열다시찾기;
     if (s.열가는덩이 !== undefined) PITCH_THIN = s.열가는덩이;
+    if (s.빈자리표준 !== undefined) PITCH_FILL = s.빈자리표준 || 0;
     if (s.분주 !== undefined) {
       BUNJU = s.분주[0]; BUNJU_GAIN = s.분주[1]; BUNJU_CONF = s.분주[2]; BUNJU_H = s.분주[3];
       BUNJU_MINC = s.분주[4]; BUNJU_BAR = s.분주[5];

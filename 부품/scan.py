@@ -68,6 +68,11 @@ PITCH_MORE = 1.5    # 간격이 표준 근처라도 다른 문턱이 열을 이 
 #   (최대값의 PITCH_SCAN 배)도 시험해 PITCH_ON 안인 첫 것을 씀. () = 끔. JS 짝 `열찾기` · 설정 `열다시찾기` · `열가는덩이`
 PITCH_SCAN = (0.2, 0.3, 0.4, 0.5)
 PITCH_THIN = 0.25
+# (읽을 때만, 2026-10-18) 빠진 열 채우기(④)에서, 잰 간격으로 센 칸수의 간격(빈자리 ÷ 칸수)이 표준에서 PITCH_ON 넘게 벗어나고
+#   표준으로 센 칸수의 간격은 PITCH_ON 안이면 그 칸수로 — 쪽 끝이 제본 쪽으로 말려 간격을 작게 재면 흐린 가운데 열 자리에
+#   열을 하나 더 끼워 상자가 고랑에 걸렸음(권2 0767 · 0771). 잰 간격이 표준의 이 배를 넘는 쪽(기준 덩어리부터 틀림)은 안 함. 0 = 끔.
+#   JS 짝 `열찾기` · 설정 `빈자리표준`
+PITCH_FILL = 1.6
 INK_EDGE = 0.0      # 스캔 양 끝 이 몫에 걸친 거의 위아래가 다 검은 띠(제본 그림자)를 열 찾기 전에 지움 — 판심떼기=True 일 때만. 0 = 끔
                     # ⚠ 늘 켜지 말 것 — 전사대조만 `find_columns(…, 끝띠=True)` 로 후보 하나로 씀
 EDGE_ZONE = 0.03    # `끝띠=True` 로 부를 때의 그 몫
@@ -174,6 +179,11 @@ def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None, 정보=No
         c = (r[0] + r[1]) / 2
         prev_c = (boxes[-1][0] + boxes[-1][1]) / 2
         k = max(1, int(round((c - prev_c) / pitch)))
+        if 표준자간 and PITCH_FILL and pitch <= 표준자간 * PITCH_FILL and k >= 2 and \
+                abs((c - prev_c) / k - 표준자간) > 표준자간 * PITCH_ON:
+            k2 = max(1, int(round((c - prev_c) / 표준자간)))
+            if abs((c - prev_c) / k2 - 표준자간) <= 표준자간 * PITCH_ON:
+                k = k2
         for t in range(1, k):
             mid = prev_c + (c - prev_c) * t / k
             boxes.append((int(mid - wmed2/2), int(mid + wmed2/2)))
