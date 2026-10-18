@@ -83,6 +83,7 @@ let INK = 120;          // 이보다 어두우면 잉크로 본다
 let GLYPH = 0.35;       // 글자가 있는 줄은 열 폭의 이만큼 이상이 잉크다
 let SPAN_EXTEND = true, SPAN_LOW = 0.15, SPAN_REACH = 1.5, SPAN_GAP = 0.4;   // scan._이어잡기
 let SPAN_FAINT = 160;   // scan._연한머리잇기 — 흐린 열 머리를 이 밝기 미만으로 다시 찾음(0 = 끔)
+let TAIL_RULED = 0.5;   // scan.TAIL_RULED — 열 쌍의 이 몫 넘게 세로줄이 있을 때만 꼬리선(아래 가는 가로줄 빼기)을 끔. 0 = 한 쌍만 있어도 끔
 let FRAME_LOCAL = true, FRAME_LOCAL_FILL = 0.6, FRAME_LOCAL_REACH = 0.35, FRAME_LOCAL_EDGE = 8;   // scan._열광곽
 let FRAME_CURVE = 160, FRAME_CURVE_BAND = 0.08, FRAME_CURVE_FILL = [0.8, 0.6], FRAME_CURVE_REACH = 1.0, FRAME_CURVE_JUMP = 0.3, FRAME_CURVE_BG = 0.75;   // scan._휜광곽(0 = 끔)
 let YX_RATIO = 0.867;   // 세로 자간 ÷ 가로 자간 (기본값)
@@ -269,6 +270,7 @@ let PITCH_OFF = 0.15, PITCH_ON = 0.12, PITCH_USE = true;   // scan.py · page.py
 let PITCH_MORE = 1.5;   // 간격이 가까워도 다른 문턱이 열을 이 배 넘게 더 찾으면 바꿈
 let PITCH_SCAN = [0.2, 0.3, 0.4, 0.5], PITCH_THIN = 0.25;   // scan.PITCH_SCAN · PITCH_THIN — 그래도 벗어나면 가는 덩이 빼고 · 더 높은 문턱
 let PITCH_FILL = 1.6;   // scan.PITCH_FILL — 빠진 열 채울 칸수를 표준 간격으로 다시 셈(잰 간격 ≤ 표준 × 이것일 때만). 0 = 끔
+let PITCH_NEAR = 0.0;   // scan.PITCH_NEAR — 조각 문턱: 고른 간격이 PITCH_ON 넘게 벗어나면 열 수 ±1 이고 간격이 표준의 이 몫 안인 다른 문턱으로. 0 = 끔
 
 /** `scan._열수` — ③④ 를 거친 뒤의 열 수(후보 견주기용) */
 function 열수(runs, pitch) {
@@ -354,6 +356,14 @@ function 열찾기(g, 판심뗌, 표준자간, 끝띠) {
             && (멀다 || got[0].length >= n0 * PITCH_MORE)) {
           골랐 = got; break;
         }
+      }
+    }
+    if (PITCH_NEAR && Math.abs(골랐[1] - 표준자간) > 표준자간 * PITCH_ON) {   // 조각 문턱(권2 0597)
+      const n1 = 열수(골랐[0], 골랐[1]);
+      for (let t = 0; t < 잡은.length; t++) {
+        const got = 잡은[t];
+        if (got !== null && got !== 골랐 && Math.abs(got[1] - 표준자간) <= 표준자간 * PITCH_NEAR
+            && Math.abs(열수(got[0], got[1]) - n1) <= 1) { 골랐 = got; break; }
       }
     }
     if (PITCH_SCAN.length && Math.abs(골랐[1] - 표준자간) > 표준자간 * PITCH_OFF) {
@@ -1415,7 +1425,11 @@ function 쪽기하(g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, �
     if (쪽광곽) { const 열TB = 열광곽(g, cols0, T, B, xpitch, pitch); TT = 열TB[0]; BB = 열TB[1]; }
     let 휜 = null;
     if (!쪽광곽 && 읽기 && FRAME_CURVE) { 휜 = 휜광곽(g, cols0, T, pitch); if (휜) TT = 휜; }
-    const 꼬리선 = !!읽기 && !쪽광곽 && !cols0.slice(0, -1).some((a, i) => 세로줄있나(g, (a[0] + a[1]) / 2, (cols0[i + 1][0] + cols0[i + 1][1]) / 2, T, B));
+    let 꼬리선 = !!읽기 && !쪽광곽;
+    if (꼬리선) {   // 세로줄이 열 쌍의 TAIL_RULED 몫 넘게 있는 판에서만 끔(`scan.TAIL_RULED`)
+      const 쌍 = cols0.slice(0, -1).map((a, i) => 세로줄있나(g, (a[0] + a[1]) / 2, (cols0[i + 1][0] + cols0[i + 1][1]) / 2, T, B));
+      꼬리선 = !(쌍.length && 쌍.filter(Boolean).length > 쌍.length * TAIL_RULED);
+    }
     spans = 글자구간(prof, cols0, TT, BB, pitch, !!읽기, !!읽기, 꼬리선, 읽기 && SPAN_FAINT ? 연한무늬(g, cols0) : null);
     if (휜 && spans) {
       // 휜 광곽선 · 절 번호가 예전엔 '첫 글자 줄' — 그런 열(쪽 T ~ 줄 아래에 글자 줄이 있던 열)은 줄 바로 아래에서 시작(`scan.page_geometry`)
@@ -2801,6 +2815,8 @@ const API = {
     if (s.열다시찾기 !== undefined) PITCH_SCAN = s.열다시찾기;
     if (s.열가는덩이 !== undefined) PITCH_THIN = s.열가는덩이;
     if (s.빈자리표준 !== undefined) PITCH_FILL = s.빈자리표준 || 0;
+    if (s.조각문턱 !== undefined) PITCH_NEAR = s.조각문턱 || 0;
+    if (s.꼬리선판 !== undefined) TAIL_RULED = s.꼬리선판 || 0;
     if (s.분주 !== undefined) {
       BUNJU = s.분주[0]; BUNJU_GAIN = s.분주[1]; BUNJU_CONF = s.분주[2]; BUNJU_H = s.분주[3];
       BUNJU_MINC = s.분주[4]; BUNJU_BAR = s.분주[5];

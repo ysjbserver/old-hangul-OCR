@@ -20,6 +20,10 @@ SPAN_GAP = 0.4      # 빈 줄이 이 자간 넘게 이어지면 멈춤
 # (읽을 때만) 흐린 열 머리 — 이웃 열보다 늦게 시작한 열을 이 밝기 미만(옅은 잉크)으로 위로 다시 찾음(`_연한머리잇기`).
 #   0 = 끔. 권2 0030 의 흐리게 찍힌 열 머리(유다와벤야민 …). JS 짝 `연한머리잇기` · 설정 `연한머리`
 SPAN_FAINT = 160
+# (읽을 때만) 본문과 멀리 떨어진 아래쪽 가는 가로줄(쪽번호 줄 · 휜 아래 광곽선)을 글자 구간에서 빼는 처리(`spans_between` 의 꼬리선)를
+#   끄는 '세로줄 판' — 이웃 열 사이 세로줄(`세로줄있나`)이 열 쌍의 이 몫 넘게 있을 때만 끔. 0 = 예전(한 쌍만 있어도 끔 — 광곽 세로줄
+#   하나로도 꺼져, 휜 아래 광곽선이 장 끝 짧은 열의 구간을 쪽 끝까지 늘렸음: 권2 0597). JS 짝 `쪽기하` · 설정 `꼬리선판`
+TAIL_RULED = 0.5
 # 읽을 때 광곽 높이를 열마다 따로 (_열광곽) — 기운·휜 광곽 대비
 FRAME_LOCAL = True
 FRAME_LOCAL_FILL = 0.6    # 열 + 안쪽 고랑 띠의 이만큼이 잉크인 줄을 광곽 가로줄로
@@ -73,6 +77,13 @@ PITCH_THIN = 0.25
 #   열을 하나 더 끼워 상자가 고랑에 걸렸음(권2 0767 · 0771). 잰 간격이 표준의 이 배를 넘는 쪽(기준 덩어리부터 틀림)은 안 함. 0 = 끔.
 #   JS 짝 `열찾기` · 설정 `빈자리표준`
 PITCH_FILL = 1.6
+# (읽을 때만, 2026-10-18) 조각 문턱 — 고른 간격이 표준에서 PITCH_ON 넘게 벗어났는데(PITCH_OFF 안이라 위에서 안 바뀜) 다른 문턱이
+#   열 수(`_열수`)를 ±1 안으로 같게 잡으며 간격이 표준의 이 몫 안이면 그쪽으로. 첫 문턱(최대값 = 제본 골 · 광곽선)이 흐린 열의 가장자리
+#   조각만 잡아 열 자리가 20~30px 밀리고 간격이 14.6% 작았음(권2 0597 — 둘째 문턱은 15열을 1.7% 안으로). 열 수가 크게 다르면 안 바꿈
+#   (신약젼셔 0659 — 4열이 정답, 둘째 문턱은 16열). 0 = 끔. JS 짝 `열찾기` · 설정 `조각문턱`
+#   ⚠ 읽는 경로에는 꺼 둠 — 켜지는 전사된 104쪽에서 0.12 로 CER 5.07 → 5.26%(좋아짐 32 · 나빠짐 35 — 권2 0622 6 → 90자: 둘째 문턱이
+#   광곽 옆 끝 열을 놓침). 전사대조만 `find_columns(…, 조각=0.12)` 를 후보 기하로 해 보고 전사문과 더 잘 맞을 때 씀(`대조.조각문턱`).
+PITCH_NEAR = 0.0
 INK_EDGE = 0.0      # 스캔 양 끝 이 몫에 걸친 거의 위아래가 다 검은 띠(제본 그림자)를 열 찾기 전에 지움 — 판심떼기=True 일 때만. 0 = 끔
                     # ⚠ 늘 켜지 말 것 — 전사대조만 `find_columns(…, 끝띠=True)` 로 후보 하나로 씀
 EDGE_ZONE = 0.03    # `끝띠=True` 로 부를 때의 그 몫
@@ -101,7 +112,7 @@ def _끝띠지우기(ink, 높이, W, 몫):
     return out
 
 
-def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None, 정보=None):
+def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None, 정보=None, 조각=None):
     """
     활자 조판이라 열 간격이 일정하다는 성질을 쓴다.
     ① 잉크로 대략 열을 잡고 ② 여백의 쪽번호를 폭으로 걸러내고
@@ -149,6 +160,13 @@ def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None, 정보=No
                 if got is not None and got is not 골랐 and \
                         abs(got[1] - 표준자간) <= 표준자간 * PITCH_ON and \
                         (멀다 or len(got[0]) >= len(r0) * PITCH_MORE):
+                    골랐 = got; break
+        근처 = PITCH_NEAR if 조각 is None else 조각     # 조각: 이 호출만 PITCH_NEAR 대신(전사대조 후보 '조각')
+        if 근처 and abs(골랐[1] - 표준자간) > 표준자간 * PITCH_ON:
+            n0 = _열수(*골랐)
+            for got in 잡은:
+                if got is not None and got is not 골랐 and abs(got[1] - 표준자간) <= 표준자간 * 근처 \
+                        and abs(_열수(*got) - n0) <= 1:
                     골랐 = got; break
         if PITCH_SCAN and abs(골랐[1] - 표준자간) > 표준자간 * PITCH_OFF:
             얇 = 표준자간 * PITCH_THIN
@@ -1374,7 +1392,7 @@ def _빈단기하(path, g, ratio):
                 단별자간비=ratios, 단별열수=counts, image=Image.open(path).convert('L'))
 
 
-def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 표준자간=None, 이어=None, 끝띠=None, 판심=None, 빈단=True):
+def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 표준자간=None, 이어=None, 끝띠=None, 판심=None, 빈단=True, 조각=None):
     """
     쪽 이미지 → 열·글자 구간·세로 자간. 못 읽으면 None.
     무거운 계산은 여기 한 번뿐이고, 뒤 단계는 이 결과를 돌려쓴다.
@@ -1391,6 +1409,7 @@ def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 
     이어=None 이면 `읽기` 를 따른다. 이어=True 는 자를 때 가는 글자 이어 붙이기(`_이어잡기`)만 켠다(자동 라벨용).
     판심=False 는 판심 걸러내기만 끈다(가장자리 후보 없이).
     빈단=True 는 읽기에서만 선 없는 두 단을 찾는다. 사람이 1단을 강제할 때는 False.
+    조각: 열 찾기의 조각 문턱(`PITCH_NEAR`)을 이 호출만 이 값으로 — 전사대조의 '조각' 후보 기하.
     """
     이어 = bool(읽기) if 이어 is None else bool(이어)
     g = np.array(Image.open(path).convert("L"))
@@ -1403,7 +1422,7 @@ def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 
     후보 = bool(읽기) and 단 == 1 and 가장자리
     # 판심=False 는 판심 걸러내기만 끔(가장자리 후보 없이)
     정보 = {}
-    xpitch, cols = find_columns(g, 판심떼기=(not 후보) if 판심 is None else 판심, 표준자간=표준자간 if 읽기 else None, 끝띠=끝띠, 정보=정보)
+    xpitch, cols = find_columns(g, 판심떼기=(not 후보) if 판심 is None else 판심, 표준자간=표준자간 if 읽기 else None, 끝띠=끝띠, 정보=정보, 조각=조각)
     if not cols or not xpitch:
         return None
     본열수 = None
@@ -1441,7 +1460,11 @@ def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 
             휜 = _휜광곽(g, cols, T, pitch)
             TT = 휜 or T
         연한 = [(g[:, a:b] < SPAN_FAINT).sum(axis=1) for a, b in cols] if 읽기 and SPAN_FAINT else None
-        spans = spans_between(prof, cols, TT, BB, pitch, 이어=이어, 첫글자=bool(읽기), 꼬리선=bool(읽기) and not 쪽광곽 and not any(세로줄있나(g, (a[0] + a[1]) / 2, (b[0] + b[1]) / 2, T, B) for a, b in zip(cols[:-1], cols[1:])), 연한=연한)
+        꼬리선 = bool(읽기) and not 쪽광곽
+        if 꼬리선:
+            줄쌍 = [세로줄있나(g, (a[0] + a[1]) / 2, (b[0] + b[1]) / 2, T, B) for a, b in zip(cols[:-1], cols[1:])]
+            꼬리선 = not (줄쌍 and sum(줄쌍) > len(줄쌍) * TAIL_RULED)
+        spans = spans_between(prof, cols, TT, BB, pitch, 이어=이어, 첫글자=bool(읽기), 꼬리선=꼬리선, 연한=연한)
         if 휜 and spans:
             # 휜 광곽선 · 그 위 절 번호가 예전엔 '첫 글자 줄' 이 되어 열이 맨 위에서 시작했다 — 흐린 쪽은 그 덕에 옅은 첫 글자를 품었음.
             #   그런 열(쪽 T 와 줄 아래 사이에 글자 줄이 있던 열)은 줄 바로 아래에서 시작.

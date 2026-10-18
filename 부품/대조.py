@@ -40,6 +40,8 @@ P_TR_MAX  = 0.05    # 전사 글자의 모델 확률이 이보다 낮아야(모�
 TOP_MIN   = 0.80    # 모델 1순위의 확신(세 머리 중 가장 낮은 것)이 이보다 높아야
 일치문턱  = 0.75    # 쪽 전체에서 모델과 전사문이 이만큼 안 맞으면 '이 쪽은 맞대기가 흔들림' 으로 본다
 다시볼일치 = 0.9    # 자르는 기하로 이만큼 안 맞으면 읽는 기하로도 해 본다
+조각문턱 = 0.12     # "조각" 후보 — 열 찾기 첫 문턱이 흐린 열의 가장자리 조각만 잡아 간격이 표준에서 벗어난 쪽(권2 0597)에서 열 수가 같고
+                    #   간격이 표준의 이 몫 안인 다른 문턱으로 찾은 읽는 기하. 읽는 경로(인식)는 그대로(`scan.PITCH_NEAR` 0 — 켜면 권2 0622 등이 나빠짐)
 쪽자간차이 = 0.02   # "쪽자간" 후보 — 이 쪽 그림으로 잰 자간비가 쓰던 값과 이만큼(몫) 넘게 다를 때만 해 본다
 열문턱    = 0.75    # 한 열에서 모델과 전사문이 이만큼 안 맞으면 그 열의 '글자가 다름' 후보는 내지 않는다(열이 통째로 어긋난 것)
 받침잘림높이 = 0.8   # 스캔 쪽에서 받침만 빠졌고 상자가 그 열 가운데 높이의 이만큼도 안 되면 버린다
@@ -552,13 +554,14 @@ def 가장자리기하(mdl, slug, ip, 설정=None, 읽기열=None):
     return out
 
 
-def 기하(slug, ip, 읽기=False, 끝띠=False, 판심=None, 설정=None):
+def 기하(slug, ip, 읽기=False, 끝띠=False, 판심=None, 설정=None, 조각=None):
     """
     쪽 기하. 읽기=False 는 자르는 경로(`page.geometry(…, 읽기=False)`), True 는 읽는 경로의 기하(가장자리 후보 열 없음).
     모르는 문헌은 그 쪽 그림만으로 자간을 재고 한 단으로 본다. ⚠ `page.doc_*` 는 재고 나서 `교정/` 에
     적으므로 모르는 문헌에는 부르지 않는다.
     끝띠=True: 스캔 끝의 제본 그림자 띠를 지우고 열을 찾음(`scan.find_columns(…, 끝띠=True)`).
     판심=False: 판심 걸러내기(`scan._drop_margin_column`)를 끔.
+    조각: 열 찾기의 조각 문턱(`scan.PITCH_NEAR`)을 이 값으로 — '조각' 후보(읽는 기하만).
     설정: 파일마다 잰 문헌 설정 {단, 자간비, 읽기자간비, 판짜임} — 주면 그것으로(`전사대조.js` `기하얻기` 와 짝:
     자간비를 못 잰 파일만 이 쪽 그림으로, 판짜임 자간은 읽는 기하에만).
     """
@@ -567,10 +570,10 @@ def 기하(slug, ip, 읽기=False, 끝띠=False, 판심=None, 설정=None):
         단 = tuple(단) if isinstance(단, list) else 단
         r = (읽기 and 설정.get("읽기자간비")) or 설정.get("자간비") or scan.page_ratio(ip, 단=단)
         표준 = 설정["판짜임"]["자간"] if 읽기 and 설정.get("판짜임") else None
-        return scan.page_geometry(ip, r, 단, 읽기, False, 표준, 끝띠=끝띠, 판심=판심)
+        return scan.page_geometry(ip, r, 단, 읽기, False, 표준, 끝띠=끝띠, 판심=판심, 조각=조각)
     if 아는문헌(slug):
-        return page.geometry(slug, ip, 읽기=읽기, 가장자리=False, 끝띠=끝띠, 판심=판심)
-    return scan.page_geometry(ip, scan.page_ratio(ip), 읽기=읽기, 가장자리=False, 끝띠=끝띠, 판심=판심)
+        return page.geometry(slug, ip, 읽기=읽기, 가장자리=False, 끝띠=끝띠, 판심=판심, 조각=조각)
+    return scan.page_geometry(ip, scan.page_ratio(ip), 읽기=읽기, 가장자리=False, 끝띠=끝띠, 판심=판심, 조각=조각)
 
 
 # ── 맞대기 ───────────────────────────────────────────────────────────
@@ -813,7 +816,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     한 가지 자르기로 맞대기 → (결과, 글자들). 기하들을 차례로 해 보고 전사문과 가장 잘 맞는 쪽을 고른다
     (일치가 `다시볼일치` 에 닿으면 그만).
     기하들의 원소: False = 자르는 기하 · True = 읽는 기하 · "끝띠" = 제본 그림자 띠를 지운 자르는 기하 ·
-    "판심" = 판심 걸러내기를 끈 읽는 기하 · "쪽자간" = 이 쪽 그림으로 잰 자간비로 자른 끝띠 기하(`쪽자간기하`).
+    "판심" = 판심 걸러내기를 끈 읽는 기하 · "조각" = 조각 문턱(`조각문턱`)으로 열을 찾은 읽는 기하 · "쪽자간" = 이 쪽 그림으로 잰 자간비로 자른 끝띠 기하(`쪽자간기하`).
     "본문" = 읽는 기하의 좌표를 유지하고 광곽 밖·빈 열을 제외한 후보(`본문기하`).
     "연한본문" = 본문 기하의 글자 구간을 옅은 잉크까지 포함해 다시 찾은 후보(`연한본문기하`).
     "본문열" = 광곽 안에서 열 위치와 구간을 다시 찾은 후보(`본문열기하`).
@@ -890,22 +893,22 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                         best = (r, 글자들)
                         bestgeo = geo
                 continue
-            판심 = 판 == "판심"
-            읽기, 끝띠 = 판 is True or 판심, 판 == "끝띠"
+            판심, 조각 = 판 == "판심", 판 == "조각"
+            읽기, 끝띠 = 판 is True or 판심 or 조각, 판 == "끝띠"
             if 끝띠 and "자르기" not in 본열:
                 g0 = 기하(slug, ip, False, 설정=설정)
                 본열["자르기"] = g0["cols"] if g0 else None
-            if 판심 and "읽기" not in 본열:
+            if (판심 or 조각) and "읽기" not in 본열:
                 g0 = 기하(slug, ip, True, 설정=설정)
                 본열["읽기"] = g0["cols"] if g0 else None
-            geo = 기하(slug, ip, 읽기, 끝띠=끝띠, 판심=False if 판심 else None, 설정=설정)
+            geo = 기하(slug, ip, 읽기, 끝띠=끝띠, 판심=False if 판심 else None, 설정=설정, 조각=조각문턱 if 조각 else None)
             if geo is None:
                 continue
             if 끝띠 and geo["cols"] == 본열.get("자르기"):
                 continue                          # 띠가 없는 쪽 — 자르는 기하와 같음
-            if 판심 and geo["cols"] == 본열.get("읽기"):
-                continue                          # 뗀 판심 열이 없는 쪽 — 읽는 기하와 같음
-            if 읽기 and not 판심:
+            if (판심 or 조각) and geo["cols"] == 본열.get("읽기"):
+                continue                          # 뗀 판심 열이 없는 쪽 · 조각 문턱이 안 켜진 쪽 — 읽는 기하와 같음
+            if 읽기 and not 판심 and not 조각:
                 본열["읽기"] = geo["cols"]
                 본열["읽기자료"] = geo
             if not 읽기 and not 끝띠:
@@ -917,7 +920,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                     continue                      # 제목이 없는 쪽 — 같은 것을 두 번 할 까닭이 없다
                 이전 = len(글자들)
                 r = 맞대기(mdl, geo, 글자들, 경계=경계)
-                r["기하"] = "판심" if 판심 else ("끝띠" if 끝띠 else ("읽기" if 읽기 else "자르기"))
+                r["기하"] = "판심" if 판심 else "조각" if 조각 else ("끝띠" if 끝띠 else ("읽기" if 읽기 else "자르기"))
                 r["제목"] = kh
                 r["큰빼기"] = 빼기
                 시도기록.append(dict(기하=r["기하"], 제목=kh, 큰빼기=빼기, 경계=경계,
@@ -933,7 +936,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     return best
 
 
-def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문", "연한본문", "본문열", "조각열", "연한구간", "책머리", "가장자리"), 합의=True, 밀림=False, 깨진=False,
+def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문", "연한본문", "본문열", "조각열", "연한구간", "책머리", "가장자리", "조각"), 합의=True, 밀림=False, 깨진=False,
          설정=None, 누락=True):
     """
     위키 원문(편집 상자의 본문) 한 쪽을 그 쪽 스캔과 맞댄다.
@@ -961,7 +964,7 @@ def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들
     # 채택하지 않은 쪽의 기존 교정 후보 합의는 유지한다.
     조건후보 = ("연한구간", "책머리")
     합의기하들 = tuple(p for p in 기하들 if p not in 조건후보 or p == r.get("기하"))
-    읽기합의 = (True, "판심", "본문", "연한본문", "본문열", "조각열", "가장자리")
+    읽기합의 = (True, "판심", "본문", "연한본문", "본문열", "조각열", "가장자리", "조각")
     if r.get("기하") in 조건후보:
         읽기합의 += (r["기하"],)
     for 이름, 옵 in (("B", dict(경계=True, 기하들=합의기하들)), ("C", dict(경계=True, 기하들=읽기합의))):

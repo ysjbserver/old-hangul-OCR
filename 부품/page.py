@@ -187,7 +187,7 @@ def 쪽건강(slug, geo, 표준=None):
     return ("의심" if 까닭 else "좋음"), 까닭
 
 
-def geometry(slug, ip, 읽기=False, 가장자리=True, 이어=None, 끝띠=None, 판심=None):
+def geometry(slug, ip, 읽기=False, 가장자리=True, 이어=None, 끝띠=None, 판심=None, 조각=None):
     """
     그 문헌의 자간 비율과 판형(몇 단인가)을 반영해 쪽 기하를 구한다.
 
@@ -200,8 +200,8 @@ def geometry(slug, ip, 읽기=False, 가장자리=True, 이어=None, 끝띠=None
     r = (읽기 and corpus.read_ratio(slug)) or doc_ratio(slug)
     # 읽을 때는 문헌 표준 열 간격도 넘긴다 — 흐린 쪽에서 열 찾기 문턱을 고를 때 씀(`scan.find_columns`)
     표준 = (doc_layout(slug) or {}).get("자간") if 읽기 and SCAN_PITCH else None
-    return (scan.page_geometry(ip, r, 단, 읽기, 가장자리, 표준, 이어=이어, 끝띠=끝띠, 판심=판심) if r
-            else scan.page_geometry(ip, 단=단, 읽기=읽기, 가장자리=가장자리, 표준자간=표준, 이어=이어, 끝띠=끝띠, 판심=판심))
+    return (scan.page_geometry(ip, r, 단, 읽기, 가장자리, 표준, 이어=이어, 끝띠=끝띠, 판심=판심, 조각=조각) if r
+            else scan.page_geometry(ip, 단=단, 읽기=읽기, 가장자리=가장자리, 표준자간=표준, 이어=이어, 끝띠=끝띠, 판심=판심, 조각=조각))
 
 
 SCAN_PITCH = True    # 읽을 때 문헌 표준 열 간격을 열 찾기에 넘기는가
