@@ -28,12 +28,12 @@ EDGE_MAX     = 3      # 한쪽에서 이만큼까지만 버린다
 EDGE_OVERLAP = 0.6    # 이웃 열과 가운데가 자간의 이 배보다 가까우면 겹친 것으로 본다
 EDGE_DROP_IN = 0.7    # 광곽 세로줄을 찾은 쪽은 줄 안쪽 열을 이만큼까지 봐준다
 EDGE_BAR     = 0.5    # 끝 열의 글자가 이 몫 넘게 `ㅣ` 면 광곽 세로줄로 보고 뗀다 (None = 끔)
-EDGE_BAR_RUN = 5      # 끝 열에 `ㅣ` 가 이만큼 넘게 **연달아** 나오면 광곽 줄 · 판심 열로 보고 뗀다 (None = 끔, 2026-10-09)
-                      #   — 본문의 주격 조사 `ㅣ` 는 두 번 넘게 잇따르지 않음. 판심 글씨 열(「예례미야일쟝ㅣㅣㅣㅣ…이쳔구십칠」)은 `ㅣ` 가 40% 라 EDGE_BAR 에 안 걸림
+EDGE_BAR_RUN = 5      # 끝 열에 `ㅣ` 가 이만큼 넘게 연달아 나오면 광곽 줄 · 판심 열로 보고 뗀다 (None = 끔)
+                      #   — 본문의 주격 조사 `ㅣ` 는 두 번 넘게 잇따르지 않음
 EDGE_GUIDE   = 0.3    # 세로줄 너머 떼일 열(둘 이상)이 본문처럼 보이면(확신 · 간격이 자간 ±이 몫) 떼지 않음 — 계선 판 (None = 끔)
-EDGE_GUIDE_ONE_MIN = 12  # `EDGE_GUIDE_ONE` 은 안쪽 열 글자 수 중앙값이 이 이상인 본문 쪽에서만(목차 · 짧은 열 쪽의 광곽 밖 제목 열을 살리지 않게)
-EDGE_GUIDE_CHAIN = True   # (2026-10-13 켬, 작업자 승인) 세로줄 너머로 뗄 열 가운데 **안쪽에서부터 본문 같은 열이 이어지는 만큼**은 떼지 않음(`EDGE_GUIDE_ONE` 과 같은 조건 — 계선 판에서 끝 열 둘이 함께 떼이던 것). 실험43: AI Hub 끝 열 잃음 29 → 13 · CER 10.83 → 8.84% · 위키 27문헌 3.91 → 3.82%(나빠진 쪽 0)
-EDGE_GUIDE_ONE = 0.8   # (2026-10-13 켬, 작업자 승인) 세로줄 너머 **한 열만** 떼일 때도 그 열이 본문 같으면(글자 수가 안쪽 열 중앙값의 이 몫 넘고 · 확신이 기준 − δ 이상 · 안쪽 열과 간격이 자간 ± `EDGE_GUIDE`) 떼지 않음. None = 끔(옛 동작). 실험43: AI Hub 끝 열 43 → 29개 잃음 · CER 12.75 → 11.09% · 위키 떼어 둔 쪽 그대로 · 복음요사 0046 오류 24 → 1자
+EDGE_GUIDE_ONE_MIN = 12  # `EDGE_GUIDE_ONE` 은 안쪽 열 글자 수 중앙값이 이 이상인 본문 쪽에서만(목차 쪽의 광곽 밖 제목 열은 안 살림)
+EDGE_GUIDE_CHAIN = True   # 세로줄 너머로 뗄 열 가운데 안쪽에서부터 본문 같은 열이 이어지는 만큼은 떼지 않음(`EDGE_GUIDE_ONE` 과 같은 조건)
+EDGE_GUIDE_ONE = 0.8   # 세로줄 너머 한 열만 떼일 때도 본문 같으면(글자 수 > 안쪽 열 중앙값 × 이 몫 · 확신 ≥ 기준 − δ · 간격이 자간 ± `EDGE_GUIDE`) 떼지 않음. None = 끔
 
 # ── 읽을 때 글자가 아닌 칸 빼기 (`열마다읽기`) ────────────────────────
 NOTCHAR_CONF  = 0.5   # 확신이 이보다 낮고
@@ -53,9 +53,9 @@ HEADING_CONF = 0.5    # 큰 글자 칸들의 확신(기하평균)이 이보다 �
 SEG_MODEL = False     # 켜면 열마다 골짜기 사이 구간을 모두 읽어, 칸 수마다 **모델 확신 합이 가장 큰** 자르기를 고른다
 SEG_UNIF  = 0.0       # 칸 높이가 고르지 않은 만큼의 벌점(칸마다, ((h − p)/p)² 배) — 0 이면 모델만 본다
 # ── 읽을 때 자를 자리를 배운 경계 검출기로 (`경계검출.py`) ────────
-BLANK_INNER = True     # (2026-10-14 켬) True 면 BLANK_SKIP 이 **글자 사이의** 빈 칸만 뺀다(열 끝 쪽 빈 칸은 그대로 셈 — 글자 없는 끝을 쪼개 갖는 칸수를 막으려고)
-BLANK_SKIP = 0.04     # (2026-10-14 켬 · 작업자 승인) 칸수를 고를 때 잉크 몫이 이 값 미만인 빈 칸(시의 띄어쓰기 칸)은 평균 확신에서 뺀다. None = 끔(옛 동작 — 빈 칸도 낮은 확신으로 셈)
-CUT_COST_W = 1.0      # (2026-10-13 켬, 작업자 승인) 열의 칸수를 고를 때 평균 로그 확신에서 이 무게 × (자르기 비용 ÷ 칸수) 를 뺀다. 0 = 끔(옛 동작 — 확신만). 실험43: 위키 27문헌 CER 4.24 → 3.91% · AI Hub 11.09 → 10.83% · 열 칸수 정확 60.7 → 64.2%
+BLANK_INNER = True     # True 면 BLANK_SKIP 이 글자 사이의 빈 칸만 뺀다(열 끝 빈 칸은 그대로 셈 — 빈 끝을 쪼개는 칸수를 막으려고)
+BLANK_SKIP = 0.04     # 칸수를 고를 때 잉크 몫이 이 값 미만인 빈 칸은 평균 확신에서 뺀다. None = 끔 · 설정 `빈칸중립`
+CUT_COST_W = 1.0      # 칸수를 고를 때 평균 로그 확신에서 이 무게 × (자르기 비용 ÷ 칸수) 를 뺀다. 0 = 끔 · 설정 `비용섞기`
 CUT_LEARN = True      # 자를 후보·비용에 검출기의 '경계가 아닐 확률' 을 섞는다(몫 `CUT_MIX`) — 읽는 경로에만
 CUT_MIX   = 0.5       # 1 = 검출기만 · 0 = 잉크 그림자만
 CUT_CLIP  = 0.0       # 경계 확률을 [이것, 1 − 이것] 으로 자른다 — 0 = 자르지 않음
@@ -261,7 +261,7 @@ def to_text(mdl, geo, letters, span=3, min_col=0.45, 경계=False):
             continue
 
         if mdl:
-            pL, pV, pT, cf = mdl.read(geo["image"], _맞춤상자(np.asarray(geo["image"]), flat, geo))   # 행간 넓은 쪽만 바뀜
+            pL, pV, pT, cf = mdl.read(geo["image"], _맞춤상자(잉크판(geo), flat, geo))   # 행간 넓은 쪽만 바뀜
             M, exact = _match_matrix(pL, pV, pT, rL, rV, rT)
             logc = np.log(np.clip(cf, 1e-6, None))
         else:                                       # 모델이 아직 없을 때(첫 문헌)
@@ -309,6 +309,32 @@ def to_text(mdl, geo, letters, span=3, min_col=0.45, 경계=False):
 
 
 # ── 정답지가 없을 때 (4단계) ─────────────────────────────────────────
+# 흐린 쪽(`scan.INK_FAINT`) 두 기하 중 확신이 이 값 넘는 글자가 더 많은 쪽을 씀 — 표시 문턱과 같게. JS 짝 `잉크골라`
+FAINT_PICK = 0.93
+
+
+def 잉크판(geo):
+    """잉크를 셀 그림 — 흐린 쪽이면 `scan.page_geometry` 가 문턱에 맞춰 어둡게 한 `잉크그림`. 모델에는 늘 `geo["image"]`."""
+    g = geo.get("잉크그림")
+    return g if g is not None else np.asarray(geo["image"])
+
+
+def 잉크골라(geo, 읽기, 확신들=None):
+    """
+    흐린 쪽 문턱으로 잡은 기하(`geo["기본기하"]` 가 있음)면 기본 문턱 기하로도 읽어 확신 ≥ `FAINT_PICK` 글자가
+    더 많은 쪽 → (geo, 읽기(geo)). 확신들(결과) → 확신 목록 — 없으면 결과를 (글자, 확신, …) 줄 목록으로 봄.
+    """
+    r = 읽기(geo) if geo is not None else None
+    if geo is None or not geo.get("기본기하"):
+        return geo, r
+    geo0 = geo["기본기하"]()
+    if geo0 is None:
+        return geo, r
+    r0 = 읽기(geo0)
+    셈 = lambda x: sum(1 for c in (확신들(x) if 확신들 else [c for z in x for c in z[1]]) if c >= FAINT_PICK)
+    return (geo0, r0) if 셈(r0) > 셈(r) else (geo, r)
+
+
 def read_page(mdl, geo, span=3):
     """
     전사문 없이 쪽을 읽는다. 열마다 여러 개수로 잘라 보고 모델이 가장 자신 있어 한 것을 고른다(확신도만 씀).
@@ -335,13 +361,13 @@ def read_page_lines(mdl, geo, span=3, 띄움=False):
     남 = [i for i in 남 if 열들[i] is not None]
     if not 띄움:
         return [부호빼기(열들[i][1], 열들[i][2])[:2] for i in 남]
-    빈 = 띄울자리(geo["image"], [(열들[i][1], 열들[i][3]) for i in 남])
+    빈 = 띄울자리(잉크판(geo), [(열들[i][1], 열들[i][3]) for i in 남])
     return [부호빼기(열들[i][1], 열들[i][2], b) for i, b in zip(남, 빈)]
 
 
 # 읽은 결과에서 뺄 글자. 모델은 부호를 알아보고(부호 칸을 한글로 읽지 않게) 결과 글에서만 지운다 —
 # 칸 나누기 · 열 고르기 · 띄어쓰기 계산은 부호 칸까지 넣고 끝낸 뒤.
-PUNCT_DROP = (",", ".", "(", ")", "「", "」", "【", "】", "｢", "｣")   # 뒤 여덟은 `wikitext.부호묶음` — 모델은 쉼표 칸으로 읽어 옴(괄호 글자 자체는 낼 수 없음). 정답에서 빼는 목록으로도 씀(2026-10-14)
+PUNCT_DROP = (",", ".", "(", ")", "「", "」", "【", "】", "｢", "｣")   # 뒤 여덟은 `wikitext.부호묶음`. 정답에서 빼는 목록으로도 씀
 
 
 def 부호빼기(글, 확, 빈=None):
@@ -532,7 +558,7 @@ def 열마다읽기(mdl, geo, span=3):
     plans, flat = (모델자르기계획(mdl, geo, span) if SEG_MODEL
                    else build_plans(geo, geo["est"], span, allow_empty=False,
                                     그림자=경계프로파일(geo) if CUT_LEARN else None))
-    g = np.array(geo["image"])
+    g = 잉크판(geo)
     pL, pV, pT, cf = mdl.read(geo["image"], _맞춤상자(g, flat, geo))
     logc = np.log(np.clip(cf, 1e-6, None))
     inkflag = None
@@ -567,17 +593,17 @@ def 열마다읽기(mdl, geo, span=3):
     return [None if o is None else (o[0], o[1], o[2], o[4], o[3]) for o in out]
 
 
-BUNJU      = True    # (읽을 때만, 2026-10-09) 열 안의 두 줄(분주 · 협주)을 갈라 읽어 보고 모델이 뚜렷이 자신 있을 때만 바꿈 — `분주읽기`
+BUNJU      = True    # (읽을 때만) 열 안의 두 줄(분주 · 협주)을 갈라 읽어 보고 모델이 뚜렷이 자신 있을 때만 바꿈 — `분주읽기`
 BUNJU_GAIN = 0.3     # 갈라 읽은 쪽의 로그 확신 평균이 이만큼 넘게 나을 때만
 BUNJU_CONF = 0.5     # 갈라 읽은 칸들의 확신(기하평균)이 이보다 낮으면 버림
-BUNJU_H    = (0.45, 0.55, 0.7, 0.85, 1.0)   # 분주 글자 높이 후보(세로 자간의 배) — 작은 협주부터 보통 크기(증남포)까지
+BUNJU_H    = (0.45, 0.55, 0.7, 0.85, 1.0)   # 분주 글자 높이 후보(세로 자간의 배) — 작은 협주부터 보통 크기까지
 BUNJU_MINC = 2       # 바꿀 칸이 이보다 적거나 갈라 읽은 한쪽 줄이 이보다 짧으면 안 바꿈(한 글자를 반으로 갈라 읽는 헛켜짐)
 BUNJU_BAR  = 0.25    # 갈라 읽은 글자 중 'ㅣ' 가 이 몫을 넘으면 안 바꿈(계선 · 광곽 줄을 ㅣ 로 읽는 헛켜짐)
 
 
 def _줄읽기(mdl, geo, x0, x1, y0, y1):
     """[x0, x1) × [y0, y1) 을 한 줄로 보고 칸 수를 모델 확신으로 골라 읽음 — (로그 확신 합, 글자, 확신, 상자) 또는 None."""
-    g = np.asarray(geo["image"])
+    g = 잉크판(geo)
     prof = (g[:, x0:x1] < scan.INK).sum(axis=1).astype(float)
     sm = scan.smooth(prof, max(2.0, geo["pitch"] / 9))
     r = _잉크범위(sm, y0, y1)
@@ -620,7 +646,7 @@ def 분주읽기(mdl, geo, out):
 
 
 def _분주읽기(mdl, geo, out):
-    g = np.asarray(geo["image"])
+    g = 잉크판(geo)
     for i, o in enumerate(out):
         if o is None or not geo["spans"][i]:
             continue
@@ -872,7 +898,7 @@ def 가장자리다듬기(geo, 열들, δ=EDGE_DROP, 최대=EDGE_MAX, 겹침=EDG
     속 = [geo["spans"][i] for i in 남[2:-2] if geo["spans"][i]]
     d앞 = d뒤 = δ
     if 속 and len(남) > 4:
-        g = np.array(geo["image"])
+        g = 잉크판(geo)
         T, B = min(s[0] for s in 속), max(s[1] for s in 속)
         줄 = lambda i, j: scan.세로줄있나(g, 가운데(i), 가운데(j), T, B)
         # 계선 판(열마다 세로줄) — 떼일 열들이 본문 같으면 떼지 않는다: 절반 이상 확신이 가운데만큼이고(기준 − δ)

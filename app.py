@@ -2,30 +2,28 @@
 """
 옛한글 OCR — Toolforge 웹 도구
 
-위키문헌 편집 창의 소도구(OCR · 전사대조)와 영역 지정 화면이 이 서버에 묻는다. 모델은 서버에서 돈다(ONNX · CPU).
-셈은 `부품/` 의 파이썬 코드(전사대조는 `대조.py`) 그대로, torch 대신 `onnx모델.py` 를 끼운다.
-
-  ⚠ 원본은 프로젝트의 `근원/툴포지/app.py` — 이 묶음은 만들기 스크립트가 만드는 사본이니 손으로 고치지 말 것.
+위키문헌 소도구(OCR · 전사대조)와 영역 지정 화면이 묻는 서버. 셈은 `부품/` 그대로, 모델은 `onnx모델.py`(ONNX · CPU).
+⚠ 만들어진 사본 — 손으로 고치지 말 것(원본 `근원/툴포지/app.py`).
 
 돌리기
-  · Toolforge(빌드 서비스) — `Procfile` 의 gunicorn 이 `app:app` 을 띄움(포트 8000)
+  · Toolforge — `Procfile` 의 gunicorn 이 `app:app` 을 띄움(포트 8000)
   · 내 컴퓨터 — `python old-hangul-ocr-toolforge/app.py` → http://localhost:8761/
 
 주소
   /                       첫 화면(쓰는 법)
-  /ocr.js  /소도구.js       OCR 소도구 — 위키문헌 common.js 에서 불러옴(서버 주소를 스스로 채움)
+  /ocr.js  /소도구.js       OCR 소도구(서버 주소를 스스로 채움)
   /compare.js /전사대조.js  전사대조 소도구
-  /area/ /영역지정/          영역 지정 화면 (옛 주소 /region/ 은 /area/ 로 넘김)
-  GET  /api/inspect?file=     파일의 판형 · 자간비 · 판짜임 (처음 한 번 뒤에서 잼 — 부르는 쪽은 되물음)
-  POST /api/read            {file, page}            → OCR 결과(브라우저판 `한쪽` 과 같은 꼴)
+  /area/ /영역지정/          영역 지정 화면 (/region/ → /area/)
+  GET  /api/inspect?file=     파일의 판형 · 자간비 · 판짜임 (처음 한 번 뒤에서 잼 — 끝날 때까지 되물음)
+  POST /api/read            {file, page}            → OCR 결과
   POST /api/compare         {file, page, text}      → 전사대조 결과
   POST /api/boxes           {file, page, boxes}     → 상자마다 글자(영역 지정 화면)
   POST /api/edge            {file, page, x0, x1}    → 열의 글자 경계 확률(영역 지정 화면)
   POST /api/area-read       {file, page, ratio, width, height, model} → 쪽 전체의 글자·확신·상자(영역 지정 화면)
-  GET  /api/tables?model=   그 모델의 글자표(영역 지정 화면이 번호를 글자로 바꿈)
+  GET  /api/tables?model=   그 모델의 글자표(번호 → 글자)
   GET  /api/health          모델 · 판 정보
-  ★ read · compare · boxes 는 선택 값 둘을 더 받음 — model("hangul" 근대 순한글 · 기본 / "hanmun" 근대 국한문),
-    tiers(몇 단짜리인지 — 없으면 "자동": 파일을 살펴 정한 값), spacing(/api/read 만 — false 면 띄어쓰기 자동 감지를 끔)
+  선택 값 — model("hangul" 근대 순한글 · 기본 / "hanmun" 근대 국한문) · tiers(몇 단, 없으면 자동) ·
+    spacing(/api/read 만 — false 면 띄어쓰기 감지 끔)
 """
 import hashlib
 import json
@@ -74,9 +72,9 @@ os.makedirs(캐시, exist_ok=True)
 너비 = 모델.설정.get("스캔너비", 1920)
 계산 = threading.Lock()            # CPU 가 적어 모델 셈은 한 번에 하나씩
 
-# 글자 모델 — "hangul"(근대 순한글, 기본) · "hanmun"(근대 국한문, 있을 때만 · 처음 쓸 때 불러옴 — 메모리를 아끼려고)
+# 글자 모델 — "hangul"(기본) · "hanmun"(있을 때만 · 처음 쓸 때 불러옴)
 모델이름들 = {"hangul": "근대 순한글", "hanmun": "근대 국한문"}
-국한문폴더 = os.path.join(여기, "모델", "근대 국한문")      # 모델마다 `모델/<이름>/` 폴더 하나 — 이름은 `모델이름들` 과 같게
+국한문폴더 = os.path.join(여기, "모델", "근대 국한문")      # `모델/<모델이름들 값>/`
 _모델들 = {"hangul": 모델}
 _모델잠금 = threading.Lock()
 
@@ -94,7 +92,7 @@ def 모델얻기(이름):
 
 
 def 단바꾸기(s, 단):
-    """파일을 살펴 정한 설정 `s` 에서 단만 사람이 고른 값으로(없거나 "auto" 면 그대로). 1단 = 1, N단 = 가름줄 높이 목록 [1/N …]."""
+    """설정 `s` 의 단만 고른 값으로(없거나 "auto" 면 그대로). 1단 = 1, N단 = 가름줄 높이 [1/N …]."""
     if 단 in (None, "", "auto", "자동"):
         return s
     try:
@@ -115,7 +113,7 @@ except Exception:
 
 
 # ── 스캔 받기 ────────────────────────────────────────────────────────
-# ⚠ 여러 쪽 파일은 API 가 요청한 너비를 무시함 → 주소를 한 번 받아 `/page{쪽}-1920px-` 만 갈아 끼움(`step1_collect.url_pattern` 과 같음)
+# ⚠ 여러 쪽 파일은 API 가 요청한 너비를 무시함 → 주소를 한 번 받아 `/page{쪽}-1920px-` 만 갈아 끼움
 _파일정보 = {}
 _파일잠금 = threading.Lock()
 
@@ -160,7 +158,7 @@ def _캐시정리():
 
 
 def 쪽검사(정보, 쪽):
-    """쪽 번호가 그 파일에 있는지 — 없으면 400. 한 장짜리 그림은 1쪽뿐, 여러 쪽 파일은 1~쪽수(쪽수를 모르면 1 이상만)."""
+    """쪽 번호가 그 파일에 있는지 — 없으면 400. 한 장짜리는 1쪽뿐, 여러 쪽은 1~쪽수."""
     if isinstance(쪽, bool) or not isinstance(쪽, int) or 쪽 < 1:
         raise 손님오류("page(쪽 번호)는 1 이상의 정수여야 합니다")
     if not 정보["여러쪽"]:
@@ -173,7 +171,7 @@ def 쪽검사(정보, 쪽):
 def 스캔(파일, 쪽):
     """그 쪽 스캔의 로컬 경로(받아 둠). 1920px."""
     정보 = 파일정보(파일)
-    쪽검사(정보, 쪽)                       # 캐시 폴더를 만들기 전에 — 잘못된 쪽은 아무것도 안 받음
+    쪽검사(정보, 쪽)                       # 캐시 폴더를 만들기 전에
     d = os.path.join(캐시, hashlib.sha1(파일.encode("utf-8")).hexdigest()[:16])
     os.makedirs(d, exist_ok=True)
     if 정보["여러쪽"]:
@@ -185,7 +183,7 @@ def 스캔(파일, 쪽):
         p = os.path.join(d, "0001.png")
         if not os.path.exists(p):
             im = Image.open(__import__("io").BytesIO(step1_collect._open(정보["주소"]))).convert("L")
-            if im.size[0] != 너비:               # ⚠ 브라우저(캔버스)와 늘리는 셈이 달라 결과가 조금 다를 수 있음
+            if im.size[0] != 너비:
                 im = im.resize((너비, round(im.size[1] * 너비 / im.size[0])), Image.BICUBIC)
             im.save(p)
     os.utime(p)
@@ -198,7 +196,7 @@ def 스캔(파일, 쪽):
 
 
 def 진단정보(파일, 쪽, 경로, 결과):
-    """전사대조에 사용한 스캔과 서버 판을 재현할 짧은 정보."""
+    """전사대조에 쓴 스캔 · 서버 판을 재현할 짧은 정보."""
     정보 = 파일정보(파일)
     주소 = 정보["틀"].replace("{N}", str(쪽)) if 정보["여러쪽"] else 정보["주소"]
     with open(경로, "rb") as f:
@@ -228,7 +226,7 @@ def 진단정보(파일, 쪽, 경로, 결과):
 
 
 r_정리 = threading.Lock()
-_그림들 = OrderedDict()                   # (파일, 쪽) → (PIL 회색 그림, numpy) — 영역 지정이 같은 쪽을 여러 번 물음
+_그림들 = OrderedDict()                   # (파일, 쪽) → (PIL 회색 그림, numpy) — 최근 6쪽
 _그림잠금 = threading.Lock()
 
 
@@ -247,9 +245,9 @@ def 그림(파일, 쪽):
     return v
 
 
-# ── 파일마다 처음 한 번 — 판형 · 자간비 · 판짜임 (`읽기.js` 의 `판형살피기` 와 같은 셈) ─────
+# ── 파일마다 처음 한 번 — 판형 · 자간비 · 판짜임 (`읽기.js` `판형살피기` 와 같은 셈) ─────
 설정파일 = os.path.join(캐시, "_파일설정.json")
-판형판 = 4                               # 판정 규칙을 바꾸면 올림(기억한 값을 버림) — `읽기.js` 의 `판형판` 과 같은 뜻
+판형판 = 4                               # 판정 규칙을 바꾸면 올림(기억한 값을 버림) — `읽기.js` `판형판` 과 같은 뜻
 _살핀 = {}
 _살핌일 = {}                              # 파일 → {진행, 오류}
 _살핌잠금 = threading.Lock()
@@ -299,7 +297,7 @@ def _살피기(파일):
                     단[p] = None
             판형, _ = page.판형정하기([가름.get(p) for p in 가름쪽], [단.get(p) for p in 단쪽])
             _살핌일[파일]["진행"] = "자간 재는 중"
-            잰 = scan.estimate_ratio([길[p] for p in 단쪽 if p in 길], 판형)   # 중앙값이 1.15 를 넘으면 위쪽 끝을 낮춰 다시 (scan.RATIO_RECHECK)
+            잰 = scan.estimate_ratio([길[p] for p in 단쪽 if p in 길], 판형)   # 너무 크면 다시 잼(scan.RATIO_RECHECK)
             값 = {"단": list(판형) if isinstance(판형, (list, tuple)) else 판형}
             if 잰:
                 값["자간비"] = float(잰)
@@ -347,14 +345,14 @@ class 손님오류(Exception):
         self.코드, self.덧 = 코드, 덧 or {}
 
 
-_완료들 = OrderedDict()  # 계산 잠금 안에서만 접근. 프로세스 재시작/배포 시 비워짐.
+_완료들 = OrderedDict()  # 완성 결과 캐시 — 계산 잠금 안에서만 접근
 결과수명 = 120
 결과최대바이트 = 4 * 1024 * 1024
 결과최대개수 = 16
 
 
 def _작업실행(이름, ip, 조건, 작업, 단계, 시작):
-    """같은 스캔·입력의 완성 결과만 재사용. 계산 중 겹친 요청도 잠금 뒤 다시 확인한다."""
+    """같은 스캔 · 입력의 완성 결과는 재사용(잠금 안에서 확인)."""
     t = time.perf_counter()
     with open(ip, "rb") as f:
         그림해시 = hashlib.sha256(f.read()).hexdigest()
@@ -373,7 +371,7 @@ def _작업실행(이름, ip, 조건, 작업, 단계, 시작):
         재사용 = 저장 is not None
         if 재사용:
             _완료들.move_to_end(열쇠)
-            답 = json.loads(저장[1])  # 매번 새 객체: 응답/후보 수정이 다음 요청에 새지 않음
+            답 = json.loads(저장[1])  # 매번 새 객체
         else:
             답 = 작업()
             if 사용 and not 답.get("사유"):
@@ -392,7 +390,7 @@ def _작업실행(이름, ip, 조건, 작업, 단계, 시작):
 
 
 def 읽기(파일, 쪽, 문턱=표시문턱, 모델이름=None, 단=None, 띄움=True):
-    """OCR 한 쪽 — 브라우저판 `읽기.js` 의 `한쪽` 과 같은 셈(파이썬 정본으로)."""
+    """OCR 한 쪽."""
     시작 = time.perf_counter()
     자동단 = 단 in (None, "", "auto", "자동")
     s = 단바꾸기(살핀값(파일), 단)
@@ -408,10 +406,11 @@ def 읽기(파일, 쪽, 문턱=표시문턱, 모델이름=None, 단=None, 띄움
     def 작업():
         t = time.perf_counter()
         geo = scan.page_geometry(ip, r, 단, 읽기=True, 가장자리=True, 표준자간=표준, 빈단=자동단)
-        등급, 까닭 = page.쪽건강(None, geo, 표준=s.get("판짜임"))
         단계["기하"] = time.perf_counter() - t
         t = time.perf_counter()
-        줄들 = align.read_page_lines(모델, geo, 3, 띄움=align.SPACE and 띄움) if geo is not None else []
+        geo, 줄들 = align.잉크골라(geo, lambda g: align.read_page_lines(모델, g, 3, 띄움=align.SPACE and 띄움))
+        줄들 = 줄들 or []
+        등급, 까닭 = page.쪽건강(None, geo, 표준=s.get("판짜임"))
         단계["인식"] = time.perf_counter() - t
         살핀 = s
         if geo is not None and geo.get("빈단"):
@@ -428,7 +427,7 @@ def 읽기(파일, 쪽, 문턱=표시문턱, 모델이름=None, 단=None, 띄움
 
 
 def 맞대기(파일, 쪽, 본문, 모델이름=None, 단=None):
-    """전사대조 한 쪽 (파일마다 잰 설정으로)."""
+    """전사대조 한 쪽."""
     시작 = time.perf_counter()
     s = 단바꾸기(살핀값(파일), 단)
     모델 = 모델얻기(모델이름)
@@ -446,7 +445,7 @@ def _대조응답(파일, 쪽, ip, 본문, r):
     답 = dict(사유=r.get("사유"), 아는문헌=True)
     답["debug"] = 진단정보(파일, 쪽, ip, r)
     if not r.get("사유"):
-        # 원문 자리를 자바스크립트 문자열 자리(UTF-16)로 — 한자 확장 B 처럼 BMP 밖 글자가 있으면 파이썬 자리와 갈림
+        # 원문 자리를 JS 문자열 자리(UTF-16)로 — BMP 밖 글자가 있으면 파이썬 자리와 갈림
         if any(ord(ch) > 0xFFFF for ch in 본문):
             앞 = [0]
             for ch in 본문:
@@ -460,7 +459,7 @@ def _대조응답(파일, 쪽, ip, 본문, r):
 
 
 def 영역자동읽기(파일, 쪽, 자간비=None, 모델이름=None, 너비확인=None, 높이확인=None):
-    """영역 화면의 한 단 자동 읽기. 자간비는 화면에서 고른 값이며 파일 판형은 재지 않는다."""
+    """영역 화면의 한 단 자동 읽기 — 자간비는 화면이 준 값(파일 판형은 안 잼)."""
     시작 = time.perf_counter()
     모델 = 모델얻기(모델이름)
     try:
@@ -483,8 +482,8 @@ def 영역자동읽기(파일, 쪽, 자간비=None, 모델이름=None, 너비확
         geo = scan.page_geometry(ip, r, 1, 읽기=True, 가장자리=True)
         단계["기하"] = time.perf_counter() - t
         t = time.perf_counter()
-        줄들 = []
-        if geo is not None:
+        def 읽기(geo):
+            줄들 = []
             열들 = align.열마다읽기(모델, geo, 3)
             남 = align.가장자리다듬기(geo, 열들) if geo.get("가장자리") else range(len(열들))
             for i in 남:
@@ -495,12 +494,15 @@ def 영역자동읽기(파일, 쪽, 자간비=None, 모델이름=None, 너비확
                 줄들.append(dict(글자=[글자[j] for j in 남길],
                                   확신=[float(확신[j]) for j in 남길],
                                   상자=[[int(v) for v in 상자[j]] for j in 남길]))
+            return 줄들
+        _, 줄들 = align.잉크골라(geo, 읽기, lambda z: [c for 줄 in z for c in 줄["확신"]])
+        줄들 = 줄들 or []
         단계["인식"] = time.perf_counter() - t
         return dict(줄들=줄들, 너비=너비, 높이=높이)
     return _작업실행("area-read", ip, [파일, 쪽, r, 모델이름 or "hangul"], 작업, 단계, 시작)
 
 
-# 외부 영역 지정 요청만 제한. 모델 내부의 4px 여백과 경계 계산은 그대로 둠.
+# 영역 지정 요청의 크기 한도
 상자최대화소 = 1_048_576
 상자합계최대화소 = 16_777_216
 경계최대확대 = 4
@@ -535,8 +537,7 @@ def _상자목록(상자들):
 
 
 def 글자표지문(m):
-    """글자표(초 · 중 · 종 순서)의 짧은 지문 — 영역 지정 화면이 번호를 글자로 바꿀 표가 서버 모델과 같은지 확인.
-    모델을 바꿔 다시 띄운 서버에 옛 화면(옛 표)이 상자 번호를 물으면 자모가 한 칸씩 밀린 글자가 나오므로(2026-10-17 — 자모표 29 · 26 · 20 → 30 · 27 · 23)."""
+    """글자표(초 · 중 · 종)의 짧은 지문 — 영역 지정 화면이 가진 표가 서버 모델과 같은지 확인."""
     try:
         표 = [list(m.Ls), list(m.Vs), list(m.Ts)]
     except TypeError:                     # 글자표가 없는 모의 모델(시험)
@@ -599,7 +600,7 @@ def _json기본(o):
 # 바깥 주소 → 정적 파일(앞에 서버 주소를 붙여 줄 소도구는 따로)
 소도구들 = {"/ocr.js": "소도구.js", "/소도구.js": "소도구.js", "/compare.js": "전사대조.js", "/전사대조.js": "전사대조.js"}
 영역길 = ("/area/", "/영역지정/")
-옛영역길 = "/region"                 # 옛 주소 — /area/ 로 넘겨 줌(물음표 뒤도 그대로)
+옛영역길 = "/region"                 # → /area/ 로 넘김
 
 
 공개호스트 = "old-hangul-ocr.toolforge.org"
@@ -607,7 +608,7 @@ def _json기본(o):
 
 
 def _주소검증(주소):
-    """urlsplit이 지우는 제어문자도 먼저 거름. 주소는 HTTP(S), 호스트, 선택 경로만."""
+    """주소 검사 — HTTP(S) · 호스트 · 선택 경로만(제어문자는 먼저 거름)."""
     if not isinstance(주소, str) or not re.fullmatch(r"[A-Za-z0-9._~:/%\[\]-]+", 주소):
         raise ValueError("주소 문자")
     u = urllib.parse.urlsplit(주소)
@@ -622,7 +623,7 @@ def _주소검증(주소):
 
 
 def _바탕주소(env):
-    # OCR_BASE는 운영자가 정한 주소. 설정되어 있으면 요청 헤더를 전혀 사용하지 않음.
+    # OCR_BASE 가 있으면 그 주소만 씀(요청 헤더 무시)
     base = os.environ.get("OCR_BASE")
     if base:
         try:
@@ -630,7 +631,7 @@ def _바탕주소(env):
         except ValueError:
             raise 손님오류("OCR_BASE 주소 설정이 올바르지 않습니다", 500)
         return base.rstrip("/") + "/"
-    # 프록시 출처 인증으로 취급하지 않음: 전달 헤더도 아래 허용 목록으로 제한.
+    # 전달 헤더도 허용 호스트만
     host = env.get("HTTP_X_FORWARDED_HOST") or env.get("HTTP_HOST") or "localhost"
     proto = env.get("HTTP_X_FORWARDED_PROTO") or env.get("wsgi.url_scheme", "http")
     try:
@@ -640,14 +641,14 @@ def _바탕주소(env):
         if u.hostname == 공개호스트:
             if u.port not in (None, 443):
                 raise ValueError("공개 포트")
-            proto = "https"            # TLS 종료 뒤 WSGI가 http여도 공개 주소는 HTTPS
+            proto = "https"            # 공개 주소는 늘 HTTPS
     except ValueError:
         raise 손님오류("서버 주소 헤더가 올바르지 않습니다")
     return f"{proto}://{u.netloc.lower()}/"
 
 
 def _서버문장(env, 유지=False):
-    # JSON 문자열 리터럴: 따옴표/역슬래시/줄바꿈/U+2028/U+2029를 JS 데이터로 인코딩.
+    # JSON 문자열로 넣어 JS 에 안전하게
     주소 = json.dumps(_바탕주소(env), ensure_ascii=True)
     앞 = "window.옛한글OCR서버 || " if 유지 else ""
     return f"window.옛한글OCR서버 = {앞}{주소};\n".encode("utf-8")

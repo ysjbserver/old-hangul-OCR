@@ -1,12 +1,11 @@
 /*
- * 전사대조 — 위키문헌 '페이지:' 편집 창에서 **이미 전사된 글**을 그 쪽 스캔과 맞대어, 전사문이 틀렸을 만한 자리를 편집 상자 안에 칠하는 소도구.
+ * 전사대조 — '페이지:' 편집 창에서 전사된 글을 스캔과 맞대어 틀렸을 만한 자리를 편집 상자 안에 칠함.
  *
- * Toolforge 서버(`https://<도구 주소>/compare.js`)가 내줌:
+ * Toolforge 서버가 내줌(common.js):
  *   mw.loader.load("https://<도구 주소>/ocr.js");        ← 인식 (전사)
  *   mw.loader.load("https://<도구 주소>/compare.js");    ← 교정 (전사대조) — 이 줄을 더하면 켜짐
  *
- * 셈은 전부 서버(`근원/부품/대조.py`) — 이 파일은 화면(칠하기 · 후보 목록 · 바꾸기)만.
- * 서버가 내주는 이 파일의 맨 앞 줄은 `window.옛한글OCR서버` 를 채움.
+ * 셈은 서버, 이 파일은 화면(칠하기 · 후보 목록 · 바꾸기)만. 맨 앞 줄이 `window.옛한글OCR서버` 를 채움.
  */
 (function (전역) {
 "use strict";
@@ -17,7 +16,7 @@
 if (typeof document === "undefined") return;
 
 var 상태, 단추, 판, 깔개 = null, 후보들 = [], 어긋남보기 = false, 끝난것보기 = false;
-// 합의 = 다르게 한 번 더 잘라도 남은 것(`한쪽` 의 합의). 안 남은 것은 자르기 실수일 때가 많아 접어 둔다
+// 합의 = 다르게 한 번 더 잘라도 남은 것. 안 남은 것은 대개 자르기 실수라 접어 둠
 function 확실(c) { return c.합의 !== false && c.갈래 !== "빠짐" && c.갈래 !== "더들어감"; }
 function 보일것(c) { return 어긋남보기 || 확실(c); }
 function 바꿀수(c) { return (c.갈래 === "바뀜" || c.갈래 === "모르는자모") && c.스캔; }
@@ -28,8 +27,7 @@ var 색 = { "바뀜": "rgba(255,80,80,.40)", "모르는자모": "rgba(255,160,0,
 
 function 알림(t) { if (상태) 상태.textContent = t; }
 
-// ⚠ 순서대로 편집(`prp_editinsequence`)은 쪽을 옮겨도 `mw.config` 를 안 바꾸고 `location.hash` 에
-//   "페이지:파일/쪽" 만 적음 → 그때는 hash 를 먼저 봄 (OCR 소도구 `순서편집제목` 과 같음)
+// ⚠ 순서대로 편집은 쪽을 옮겨도 `mw.config` 를 안 바꾸고 `location.hash` 만 바꿈 → hash 를 먼저 봄(`소도구.js` 와 같음)
 function 순서편집제목() {
   if (!/[?&]prp_editinsequence=(1|true|yes|on)(&|$)/i.test(location.search)) return null;
   var h;
@@ -58,7 +56,7 @@ function 보이나(상자) {
   return 상자.isConnected && 상자.offsetParent !== null && getComputedStyle(상자).visibility !== "hidden";
 }
 
-// ── 디버그 로그 — 잘 안 맞은 쪽을 알릴 때 복사해 붙일 글(마지막 한 번만). OCR 소도구 `로그단추` 와 같은 모양 ──
+// ── 디버그 로그 — 잘 안 맞은 쪽을 알릴 때 복사해 붙일 글(마지막 한 번만). `소도구.js` 와 같은 꼴 ──
 var 로그 = { 글: "", 칸: null };
 
 function 시각글(d) {
@@ -86,9 +84,8 @@ function 로그머리(쪽, 언제) {
 }
 
 // ── 공용 도구 줄 — 인식 · 교정 · 영역 지정 단추를 한 줄에 모으고, 옆의 '설정' 메뉴에 모델 · 단을 둠 ──
-// ⚠ `소도구.js` 와 `전사대조.js` 에 **같은 꼴**로 들어 있음 — 한쪽을 고치면 다른 쪽도(어느 쪽이 먼저 떠도 한 줄을 같이 씀)
-// 고른 값은 `window.옛한글OCR공용.모델()` · `.단()` 으로 읽음 — 모델 "hangul"(근대 순한글, 기본) | "hanmun"(근대 국한문, 서버판만) ·
-// 단 null(자동 — 파일을 살펴 정한 값) | 1~5
+// ⚠ `소도구.js` · `전사대조.js` 에 같은 꼴 — 한쪽을 고치면 다른 쪽도(먼저 뜬 쪽이 만든 줄을 같이 씀)
+// 고른 값: `window.옛한글OCR공용.모델()` "hangul" | "hanmun" · `.단()` null(자동) | 1~5
 function 공용도구() {
   var 옛 = window.옛한글OCR공용;
   if (옛 && 옛.뿌리.isConnected) return 옛;
@@ -198,7 +195,7 @@ function 공용도구() {
   });
 }
 
-/** 살핀 값(자동으로 정한 설정)의 단만 사람이 고른 값으로 — 1단 = 1, N단 = 가름줄 높이 목록(서버 `단바꾸기` · `읽기.js` 의 가름줄 판형과 같은 꼴). 자동(null)이면 그대로 */
+/** 살핀 설정의 단만 고른 값으로 — 1단 = 1, N단 = 가름줄 높이 목록. 자동(null)이면 그대로 */
 function 단바꾸기(살핀, 단) {
   if (!단 || !살핀) return 살핀;
   var s = {};
@@ -315,7 +312,7 @@ function 로그본문(살핀, 답, 때, 처음) {
   return 줄;
 }
 
-// ── 편집 상자에 칠하기 (브라우저판 `표시깔기` 와 같은 방법 — 상자 뒤에 같은 글꼴의 판을 깔고 바탕만 칠함) ──
+// ── 편집 상자에 칠하기 — 상자 뒤에 같은 글꼴의 판을 깔고 바탕만 칠함 ──
 var 베낄모양 = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
   "fontFamily", "fontSize", "fontWeight", "fontStyle", "fontVariant", "fontStretch",
   "fontKerning", "fontFeatureSettings", "lineHeight", "letterSpacing", "wordSpacing",
@@ -418,7 +415,7 @@ function 결과걷기() {
 
 // 사람이 고친 만큼 자리를 옮긴다 — 고친 구간에 걸린 후보는 '손댐', 뒤의 것은 민다
 var 기준글 = null;
-// 소도구가 직접 하는 고침(넣기 · 바꾸기) {시작, 끝, 글} — 넣은 글자가 앞뒤 글자와 같으면 앞뒤 비교로는 고친 자리를 잘못 짚으므로
+// 소도구가 직접 하는 고침 {시작, 끝, 글} — 넣은 글자가 앞뒤와 같으면 앞뒤 비교로는 자리를 잘못 짚으므로 따로 알림
 var 아는고침 = null;
 function 따라가기() {
   var 상자 = 편집상자();
@@ -437,7 +434,7 @@ function 따라가기() {
   }
   후보들.forEach(function (c) {
     if (c.끝남) return;
-    // 누락의 앞뒤 원문이 고치기 직전 글과 맞았으면, 소도구의 고침을 반영해 다시 적음(사람 · 다른 도구의 고침은 그대로 둬 넣기를 막음)
+    // 누락의 앞뒤 원문은 소도구의 고침만 반영해 다시 적음(다른 고침이면 넣기를 막음)
     var 맞던 = 앎 && c.갈래 === "누락" && c.시작 >= c.앞원문.length
       && 옛.slice(c.시작 - c.앞원문.length, c.시작) === c.앞원문 && 옛.slice(c.시작, c.시작 + c.뒤원문.length) === c.뒤원문;
     if (c.갈래 === "누락" && a <= c.시작 && c.시작 <= 옛끝) { c.끝남 = "손댐"; return; }
@@ -518,8 +515,7 @@ function 넣기(c) {
 function 글넣기(상자, c) {
   상자.focus({ preventScroll: true });
   상자.setSelectionRange(c.시작, c.끝);
-  // execCommand 로 넣어야 되돌리기(Ctrl+Z)가 된다. 안 되면 setRangeText.
-  // 고친 자리를 알려 둠 — 고치는 동안 오는 input 이벤트의 `따라가기` 도 이 자리로 후보를 옮김
+  // execCommand 로 넣어야 Ctrl+Z 가 됨(안 되면 setRangeText) · 고친 자리는 `따라가기` 에 알려 둠
   아는고침 = { 시작: c.시작, 끝: c.끝, 글: c.스캔 };
   try {
     var 됨 = false;
@@ -685,8 +681,7 @@ function 판세우기(답) {
 }
 
 // ── 서버 ────────────────────────────────────────────────────────────
-// Toolforge 서버(`툴포지/app.py`) — 있으면 맞대기를 서버에 맡김(파이썬 `대조.한쪽` — 답의 꼴이 `셈.한쪽` 과 같음).
-// 서버가 내주는 이 파일의 맨 앞 줄이 채움. OCR 소도구와 같은 서버 · 같은 판형 살피기
+// Toolforge 서버 주소 — 서버가 내주는 이 파일의 맨 앞 줄이 채움(`소도구.js` 와 같은 서버)
 var 서버 = window.옛한글OCR서버 || "";
 if (서버 && 서버.charAt(서버.length - 1) !== "/") 서버 += "/";
 

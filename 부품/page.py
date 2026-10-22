@@ -19,7 +19,7 @@ MIN_LETTERS = 50        # 이보다 적으면 표지·목차 같은 쪽으로 �
 def doc_ratio(slug):
     """
     그 문헌의 세로/가로 자간 비율. 처음 쓸 때 그림만 보고 한 번 재서 기억해 둔다.
-    표본은 `corpus.images` 에서 — 전사문 없는 문헌에서도 재야 하므로(`doc_tiers` · `doc_layout` 도 같음).
+    표본은 `corpus.images` 에서(전사문 없는 문헌도 되게).
     """
     r = corpus.doc_ratio(slug)
     if r:
@@ -187,7 +187,7 @@ def 쪽건강(slug, geo, 표준=None):
     return ("의심" if 까닭 else "좋음"), 까닭
 
 
-def geometry(slug, ip, 읽기=False, 가장자리=True, 이어=None, 끝띠=None, 판심=None, 조각=None):
+def geometry(slug, ip, 읽기=False, 가장자리=True, 이어=None, 끝띠=None, 판심=None, 조각=None, 잉크=None):
     """
     그 문헌의 자간 비율과 판형(몇 단인가)을 반영해 쪽 기하를 구한다.
 
@@ -200,8 +200,8 @@ def geometry(slug, ip, 읽기=False, 가장자리=True, 이어=None, 끝띠=None
     r = (읽기 and corpus.read_ratio(slug)) or doc_ratio(slug)
     # 읽을 때는 문헌 표준 열 간격도 넘긴다 — 흐린 쪽에서 열 찾기 문턱을 고를 때 씀(`scan.find_columns`)
     표준 = (doc_layout(slug) or {}).get("자간") if 읽기 and SCAN_PITCH else None
-    return (scan.page_geometry(ip, r, 단, 읽기, 가장자리, 표준, 이어=이어, 끝띠=끝띠, 판심=판심, 조각=조각) if r
-            else scan.page_geometry(ip, 단=단, 읽기=읽기, 가장자리=가장자리, 표준자간=표준, 이어=이어, 끝띠=끝띠, 판심=판심, 조각=조각))
+    return (scan.page_geometry(ip, r, 단, 읽기, 가장자리, 표준, 이어=이어, 끝띠=끝띠, 판심=판심, 조각=조각, 잉크=잉크) if r
+            else scan.page_geometry(ip, 단=단, 읽기=읽기, 가장자리=가장자리, 표준자간=표준, 이어=이어, 끝띠=끝띠, 판심=판심, 조각=조각, 잉크=잉크))
 
 
 SCAN_PITCH = True    # 읽을 때 문헌 표준 열 간격을 열 찾기에 넘기는가
@@ -211,14 +211,15 @@ TEDURI = 1.6        # 잉크가 다른 열 중앙값의 이 배를 넘으면 광
 def 테두리열버리기(geo, 배수=TEDURI):
     """
     광곽(테두리) 선이 열로 잡힌 것을 버린다 — 첫 열·끝 열 중 잉크가 다른 열 중앙값의 `배수` 를 넘는 것.
-    ⚠ 지금 읽는 경로는 쓰지 않음(제본 그림자 진 본문 열을 버림) — `align.가장자리다듬기` 가 확신도로 가림.
-    ⚠ 자르는 경로에도 넣지 말 것 — `to_text` 는 칸수 0 으로 테두리 열을 스스로 버리는데, 미리 빼면 진짜 열을 버림.
-    ⚠ 두 단 판형에서는 부르지 않음(열 번호를 빼면 단 짝이 어긋남).
+    ⚠ 읽는 경로는 쓰지 않음 — `align.가장자리다듬기` 가 확신도로 가림.
+    ⚠ 자르는 경로에도 넣지 말 것 — `to_text` 가 칸수 0 으로 스스로 버림. 미리 빼면 진짜 열을 버림.
+    ⚠ 두 단 판형에서는 부르지 않음(단 짝이 어긋남).
     """
     v, n = [], len(geo["cols"])
     if n < 4:
         return geo
-    g = np.array(geo["image"])            # 이미 열어 둔 그림을 다시 씁니다
+    g = geo.get("잉크그림")                # 흐린 쪽이면 문턱에 맞춘 그림(`scan.page_geometry`)
+    g = np.array(geo["image"]) if g is None else g
     prof = scan.ink_profile(g, geo["cols"])
     for i, p in enumerate(prof):
         sp = geo["spans"][i]

@@ -14,8 +14,7 @@
     자료/          data/ · dataset/ · 교정/ · 모델/ · 글꼴/ · 공유서재/
     old-hangul-ocr-toolforge/  (자동) Toolforge 판
 
-⚠ Toolforge 묶음에서는 프로젝트를 못 찾으므로(바로 위가 `근원/` 이 아님) 작업 폴더 기준 이름("모델" · "data" …)을 씀
-  — 묶음의 `app.py` 가 자기 폴더로 chdir 함.
+⚠ Toolforge 묶음에서는 작업 폴더 기준 이름("모델" · "data" …)을 씀 — 묶음 `app.py` 가 자기 폴더로 chdir 함.
 """
 import os
 
@@ -36,7 +35,7 @@ def _프로젝트():
 if not 묶음:
     근원 = os.path.join(뿌리, "근원")
     부품 = _여기
-    소도구 = os.path.join(근원, "소도구")              # 소도구.js · 전사대조.js (원본 — 위키 편집 창 화면)
+    소도구 = os.path.join(근원, "소도구")              # 소도구.js · 전사대조.js
     영역지정 = os.path.join(근원, "영역지정")
     툴포지 = os.path.join(근원, "툴포지")
 
