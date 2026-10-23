@@ -21,12 +21,10 @@ from PIL import Image
 import 경로
 
 # ─────────────────────────────────────────────────────────────────────
-#  ※ 아래 CONTACT 를 본인 것으로 바꿔 주세요.
-#     위키미디어 이용 규칙상 연락처가 든 User-Agent 를 요구합니다.
-#     한글은 넣지 마세요 — HTTP 헤더는 영문/숫자만 허용됩니다.
+#  CONTACT — User-Agent 에 넣을 연락처(위키미디어 규칙). 영문·숫자만(HTTP 헤더).
 CONTACT = "https://ko.wikisource.org/wiki/User:Aspere; aspere@wikimedia.kr"
 UA      = f"OldHangulOCR/0.4 ({CONTACT})".encode("ascii", "ignore").decode()
-WORKERS = 3        # 동시 내려받기 수. 위키미디어 권장 상한이 3입니다. 올리지 마세요.
+WORKERS = 3        # 동시 내려받기 수(위키미디어 권장 상한 3)
 WIDTH   = 1920     # 썸네일 폭. 1280 과 1920 만 받아집니다.
 # ─────────────────────────────────────────────────────────────────────
 
@@ -80,7 +78,8 @@ def list_pages(pdf):
 
 def url_pattern(pdf):
     """
-    썸네일 주소를 문헌당 한 번만 물어보고, 쪽번호 · 폭만 갈아 끼울 틀을 만든다.
+    썸네일 주소를 한 번만 물어 쪽번호 · 폭을 갈아 끼울 틀로.
+    ⚠ API 는 요청한 너비를 무시하므로 `/page{N}-1920px-` 을 주소에 직접 넣음.
     """
     r = api(action="query", prop="imageinfo", titles="File:" + pdf,
             iiprop="url", iiurlwidth=500, iiurlparam="page1-500px")
@@ -99,7 +98,7 @@ def _width_of(path):
         return 0
 
 def fetch_one(pat, n, path):
-    # 이미 있어도 해상도가 다르면 다시 받는다(API 는 요청한 너비를 무시하고 500px 을 줄 수 있음).
+    # 이미 있어도 너비가 WIDTH 가 아니면 다시 받는다.
     if os.path.exists(path):
         if _width_of(path) == WIDTH:
             return "skip"
@@ -144,7 +143,7 @@ def collect(pdf, slug, limit=None):
             with _print_lock: print(f"      {n}쪽 실패 — {e}")
         with _print_lock:
             done[res] += 1
-            c = done["ok"] + done["skip"] + done["fail"]
+            c = sum(done.values())
             if c % 10 == 0 or c == len(pages):
                 el = time.time() - t0
                 rate = c / el if el else 0

@@ -31,8 +31,7 @@ def documents(only=None):
 
 def images(only=None):
     """
-    [(문헌, 쪽, 이미지경로), …] — 전사문이 없어도 그림이 있으면 다 준다
-    (`pages()` 는 전사문 있는 쪽만). 전사문 없이 읽기 · `page.doc_*` 이 씀.
+    [(문헌, 쪽, 이미지경로), …] — 전사문이 없는 쪽도(`pages()` 는 있는 쪽만).
     """
     out = []
     for slug, idir, _ in documents(only):
@@ -67,8 +66,7 @@ def sample(items, n):
 
 def usable_pages(items, check):
     """
-    쓸 수 있는 쪽만 남긴다. 자르지 못하는 쪽이 목록에 섞여 있으면
-    ← → 로 넘기다 막혀서 일이 안 된다. 한 번 검사한 결과는 파일에 남겨 다시 쓴다.
+    쓸 수 있는(자를 수 있는) 쪽만 남긴다. 검사 결과는 파일에 남겨 다시 쓴다.
     반환: (쓸 수 있는 쪽 목록, 뺀 쪽 수)
     """
     known = _read_json(SCAN, {})
@@ -122,8 +120,7 @@ def fix_path(slug, page):
 
 def load_fix(slug, page, nchars):
     """
-    저장해 둔 교정. 글자 수가 지금과 다르면 못 쓴다 — None 을 준다.
-    (전사문이 고쳐졌거나 글자 세는 규칙이 바뀌면 글자 번호가 통째로 밀린다)
+    저장해 둔 교정. 글자 수가 지금과 다르면(글자 번호가 밀림) None.
     """
     d = _read_json(fix_path(slug, page), None)
     if not d or not d.get("assign"):
@@ -134,7 +131,7 @@ def load_fix(slug, page, nchars):
 
 
 def save_fix(d, boxes=None):
-    """boxes = 사람이 그 교정을 할 때 본 상자들. 함께 적어 두어야 나중에 상자가 바뀐 것을 안다."""
+    """boxes = 교정할 때 본 상자들(나중에 상자가 바뀌었는지 가리려고 함께 적음)."""
     if boxes is not None:
         d = dict(d, boxes=[[int(v) for v in b] for b in boxes])
     _write_json(fix_path(d["slug"], d["page"]), d)
@@ -145,9 +142,8 @@ BOX_TOL = 2     # 상자 좌표가 이만큼(px) 안에서만 달라졌으면 �
 
 def same_boxes(saved, boxes, tol=BOX_TOL):
     """
-    교정을 할 때 본 상자(saved)와 지금 자른 상자(boxes)가 같은가(좌표 차이 tol px 안).
-    `assign` 은 '몇 번째 상자 = 몇 번째 글자' 라 상자가 달라지면 뜻이 없음 — 상자 수로는 못 가리므로 좌표로.
-    좌표가 없는 교정(saved=None)은 같다고 보지 않는다.
+    교정할 때 본 상자(saved)와 지금 상자(boxes)가 같은가(좌표 차이 tol px 안).
+    좌표가 없는 교정(saved=None)은 다르다고 봄.
     """
     if not saved or len(saved) != len(boxes):
         return False
@@ -175,13 +171,12 @@ def save_ratio(slug, r):
     _write_json(RATIO, d)
 
 
-READKEY = "_읽기자간"      # 전사문 없이 읽을 때만 쓰는 자간 (아래 설명)
+READKEY = "_읽기자간"      # 전사문 없이 읽을 때만 쓰는 자간
 
 
 def read_ratio(slug, default=None):
     """
-    전사문 없이 읽을 때만 쓰는 자간. 없으면 default(보통 자간을 씀).
-    자를 때는 전사문이 글자 수를 주지만, 읽을 때는 자간이 몇 칸으로 자를지의 출발점이라 따로 둔다.
+    전사문 없이 읽을 때만 쓰는 자간. 없으면 default.
     """
     return _read_json(RATIO, {}).get(READKEY, {}).get(slug, default)
 
@@ -197,8 +192,7 @@ LAYOUT = os.path.join(FIXDIR, "_판짜임.json")   # 문헌의 표준 판짜임 
 
 def doc_layout(slug, default=None):
     """
-    그 문헌의 표준 판짜임 {"자간": px, "열수": n}. 없으면 default.
-    잘못 잘린 쪽을 가려내는 데 씀(`page.쪽건강`). `page.doc_layout` 이 처음 쓸 때 재서 적어 둔다.
+    그 문헌의 표준 판짜임 {"자간": px, "열수": n}. 없으면 default. `page.쪽건강` 이 씀.
     """
     v = _read_json(LAYOUT, {}).get(slug)
     return v if v else default
@@ -215,7 +209,7 @@ HEADING = os.path.join(FIXDIR, "_제목.json")   # 편·장 제목이 종이에 
 
 def heading_printed(slug, default=False):
     """
-    이 문헌은 `== 제목 ==` 이 본문 열에 인쇄되어 있는가(`wikitext.printed_text`). 기본값은 '인쇄 안 됨'.
+    이 문헌은 `== 제목 ==` 이 본문 열에 인쇄되어 있는가(`wikitext.printed_text`).
     """
     return bool(_read_json(HEADING, {}).get(slug, default))
 
@@ -231,9 +225,8 @@ TIERS = os.path.join(FIXDIR, "_판형.json")     # 한 쪽이 몇 단인가 (거
 
 def doc_tiers(slug, default=None):
     """
-    이 문헌은 한 쪽이 몇 단인가(보통 1). 적혀 있지 않으면 default(`page.doc_tiers` 가 재서 적어 둠).
-    가름줄 판형이면 정수 대신 가름줄 높이 목록(쪽 높이 비율, 예: (0.34, 0.66)).
-    ⚠ 쪽마다 판단하지 말 것 — 가로줄이 획·계선과 헷갈려 한 단 문헌을 잘못 쪼갬. 문헌마다 한 번만.
+    이 문헌은 한 쪽이 몇 단인가(보통 1). 없으면 default.
+    가름줄 판형이면 가름줄 높이 목록(쪽 높이 비율). ⚠ 쪽마다가 아니라 문헌마다 한 번만 정할 것.
     """
     v = _read_json(TIERS, {}).get(slug, default)
     if isinstance(v, list):

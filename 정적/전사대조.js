@@ -1,12 +1,11 @@
 /*
- * 전사대조 — 위키문헌 '페이지:' 편집 창에서 **이미 전사된 글**을 그 쪽 스캔과 맞대어, 전사문이 틀렸을 만한 자리를 편집 상자 안에 칠하는 소도구.
+ * 전사대조 — '페이지:' 편집 창에서 전사된 글을 스캔과 맞대어 틀렸을 만한 자리를 편집 상자 안에 칠함.
  *
- * Toolforge 서버(`https://<도구 주소>/compare.js`)가 내줌:
+ * Toolforge 서버가 내줌(common.js):
  *   mw.loader.load("https://<도구 주소>/ocr.js");        ← 인식 (전사)
  *   mw.loader.load("https://<도구 주소>/compare.js");    ← 교정 (전사대조) — 이 줄을 더하면 켜짐
  *
- * 셈은 전부 서버(`근원/부품/대조.py`) — 이 파일은 화면(칠하기 · 후보 목록 · 바꾸기)만.
- * 서버가 내주는 이 파일의 맨 앞 줄은 `window.옛한글OCR서버` 를 채움.
+ * 셈은 서버, 이 파일은 화면(칠하기 · 후보 목록 · 바꾸기)만. 맨 앞 줄이 `window.옛한글OCR서버` 를 채움.
  */
 (function (전역) {
 "use strict";
@@ -17,18 +16,18 @@
 if (typeof document === "undefined") return;
 
 var 상태, 단추, 판, 깔개 = null, 후보들 = [], 어긋남보기 = false, 끝난것보기 = false;
-// 합의 = 다르게 한 번 더 잘라도 남은 것(`한쪽` 의 합의). 안 남은 것은 자르기 실수일 때가 많아 접어 둔다
+// 합의 = 다르게 한 번 더 잘라도 남은 것. 안 남은 것은 대개 자르기 실수라 접어 둠
 function 확실(c) { return c.합의 !== false && c.갈래 !== "빠짐" && c.갈래 !== "더들어감"; }
 function 보일것(c) { return 어긋남보기 || 확실(c); }
 function 바꿀수(c) { return (c.갈래 === "바뀜" || c.갈래 === "모르는자모") && c.스캔; }
+function 넣을수(c) { return c.갈래 === "누락" && c.스캔; }
 
-var 이름 = { "바뀜": "글자가 다름", "모르는자모": "모르는 자모", "깨진글자": "깨진 글자", "빠짐": "스캔에 글자가 더 있음", "더들어감": "전사문에 글자가 더 있음" };
-var 색 = { "바뀜": "rgba(255,80,80,.40)", "모르는자모": "rgba(255,160,0,.40)", "깨진글자": "rgba(170,80,255,.38)", "빠짐": "rgba(80,140,255,.35)", "더들어감": "rgba(80,140,255,.35)" };
+var 이름 = { "바뀜": "글자가 다름", "모르는자모": "모르는 자모", "깨진글자": "깨진 글자", "누락": "전사문에 글자 누락 의심", "빠짐": "스캔에 글자가 더 있음", "더들어감": "전사문에 글자가 더 있음" };
+var 색 = { "바뀜": "rgba(255,80,80,.40)", "모르는자모": "rgba(255,160,0,.40)", "깨진글자": "rgba(170,80,255,.38)", "누락": "rgba(80,140,255,.35)", "빠짐": "rgba(80,140,255,.35)", "더들어감": "rgba(80,140,255,.35)" };
 
 function 알림(t) { if (상태) 상태.textContent = t; }
 
-// ⚠ 순서대로 편집(`prp_editinsequence`)은 쪽을 옮겨도 `mw.config` 를 안 바꾸고 `location.hash` 에
-//   "페이지:파일/쪽" 만 적음 → 그때는 hash 를 먼저 봄 (OCR 소도구 `순서편집제목` 과 같음)
+// ⚠ 순서대로 편집은 쪽을 옮겨도 `mw.config` 를 안 바꾸고 `location.hash` 만 바꿈 → hash 를 먼저 봄(`소도구.js` 와 같음)
 function 순서편집제목() {
   if (!/[?&]prp_editinsequence=(1|true|yes|on)(&|$)/i.test(location.search)) return null;
   var h;
@@ -57,7 +56,7 @@ function 보이나(상자) {
   return 상자.isConnected && 상자.offsetParent !== null && getComputedStyle(상자).visibility !== "hidden";
 }
 
-// ── 디버그 로그 — 잘 안 맞은 쪽을 알릴 때 복사해 붙일 글(마지막 한 번만). OCR 소도구 `로그단추` 와 같은 모양 ──
+// ── 디버그 로그 — 잘 안 맞은 쪽을 알릴 때 복사해 붙일 글(마지막 한 번만). `소도구.js` 와 같은 꼴 ──
 var 로그 = { 글: "", 칸: null };
 
 function 시각글(d) {
@@ -85,9 +84,8 @@ function 로그머리(쪽, 언제) {
 }
 
 // ── 공용 도구 줄 — 인식 · 교정 · 영역 지정 단추를 한 줄에 모으고, 옆의 '설정' 메뉴에 모델 · 단을 둠 ──
-// ⚠ `소도구.js` 와 `전사대조.js` 에 **같은 꼴**로 들어 있음 — 한쪽을 고치면 다른 쪽도(어느 쪽이 먼저 떠도 한 줄을 같이 씀)
-// 고른 값은 `window.옛한글OCR공용.모델()` · `.단()` 으로 읽음 — 모델 "hangul"(근대 순한글, 기본) | "hanmun"(근대 국한문, 서버판만) ·
-// 단 null(자동 — 파일을 살펴 정한 값) | 1~5
+// ⚠ `소도구.js` · `전사대조.js` 에 같은 꼴 — 한쪽을 고치면 다른 쪽도(먼저 뜬 쪽이 만든 줄을 같이 씀)
+// 고른 값: `window.옛한글OCR공용.모델()` "hangul" | "hanmun" · `.단()` null(자동) | 1~5
 function 공용도구() {
   var 옛 = window.옛한글OCR공용;
   if (옛 && 옛.뿌리.isConnected) return 옛;
@@ -147,7 +145,7 @@ function 공용도구() {
   띄움행.appendChild(만들기("span", "", "min-width:3.2em"));
   띄움행.appendChild(띄움글);
   띄움행.appendChild(만들기("span", "인식 결과에 띄어쓰기를 넣습니다. 띄어쓰기 없이 찍은 문헌에서 엉뚱한 곳이 띄어지면 끄세요.", "font-size:12px;color:#72777d"));
-  var 모델선택 = 항목("모델", [["hangul", "근대 순한글"], ["hanmun", "근대 국한문 (시험 중)"]],
+  var 모델선택 = 항목("모델", [["hangul", "근대 순한글"], ["hanmun", "근대 국한문"]],
                     "한글로만 된 문헌일 경우 순한글을 선택하는 것이 정확도가 높습니다.");
   var 단선택 = 항목("단", [["auto", "자동"], ["1", "1단"], ["2", "2단"], ["3", "3단"], ["4", "4단"], ["5", "5단"]],
                   "자동을 선택하면 파일을 처음 열 때 쪽을 몇 장 받아 살펴 정합니다.");
@@ -197,7 +195,7 @@ function 공용도구() {
   });
 }
 
-/** 살핀 값(자동으로 정한 설정)의 단만 사람이 고른 값으로 — 1단 = 1, N단 = 가름줄 높이 목록(서버 `단바꾸기` · `읽기.js` 의 가름줄 판형과 같은 꼴). 자동(null)이면 그대로 */
+/** 살핀 설정의 단만 고른 값으로 — 1단 = 1, N단 = 가름줄 높이 목록. 자동(null)이면 그대로 */
 function 단바꾸기(살핀, 단) {
   if (!단 || !살핀) return 살핀;
   var s = {};
@@ -295,8 +293,7 @@ function 로그본문(살핀, 답, 때, 처음) {
         (답.debug.크기 ? 답.debug.크기.join("×") : "?") + " · 캐시 " + (답.debug.캐시 || "?")]);
       줄.push(["서버 판", (답.debug.주소 || "주소 없음") + " · " + JSON.stringify(답.debug.판 || {})]);
       줄.push(["서버 OCR", (답.debug.OCR글자수 == null ? "개수 없음" : 답.debug.OCR글자수 + "자") +
-        " · 해시 " + (답.debug.OCR해시 || "?") +
-        (답.debug.OCR미리보기 ? " · 앞 80자 " + 답.debug.OCR미리보기 : "")]);
+        " · 해시 " + (답.debug.OCR해시 || "?")]);
       if (답.debug.OCR전체 != null) 줄.push(["서버 OCR 전체", 답.debug.OCR전체]);
       if (답.debug.시도기록) 줄.push(["맞대기 시도 기록", JSON.stringify(답.debug.시도기록)]);
       var 상 = 답.debug.상세 || {};
@@ -315,7 +312,7 @@ function 로그본문(살핀, 답, 때, 처음) {
   return 줄;
 }
 
-// ── 편집 상자에 칠하기 (브라우저판 `표시깔기` 와 같은 방법 — 상자 뒤에 같은 글꼴의 판을 깔고 바탕만 칠함) ──
+// ── 편집 상자에 칠하기 — 상자 뒤에 같은 글꼴의 판을 깔고 바탕만 칠함 ──
 var 베낄모양 = ["paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
   "fontFamily", "fontSize", "fontWeight", "fontStyle", "fontVariant", "fontStretch",
   "fontKerning", "fontFeatureSettings", "lineHeight", "letterSpacing", "wordSpacing",
@@ -402,22 +399,52 @@ function 걷기() {
   깔개 = null;
 }
 
+/** 이전 검사 결과는 표시와 조작 상태를 함께 버림. 편집 글은 건드리지 않음. */
+function 결과걷기() {
+  후보들 = [];
+  기준글 = null;
+  고른것 = null;
+  끝난것보기 = false;
+  걷기();
+  if (판) {
+    판.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
+    판.remove();
+    판 = null;
+  }
+}
+
 // 사람이 고친 만큼 자리를 옮긴다 — 고친 구간에 걸린 후보는 '손댐', 뒤의 것은 민다
 var 기준글 = null;
+// 소도구가 직접 하는 고침 {시작, 끝, 글} — 넣은 글자가 앞뒤와 같으면 앞뒤 비교로는 자리를 잘못 짚으므로 따로 알림
+var 아는고침 = null;
 function 따라가기() {
   var 상자 = 편집상자();
   if (!상자 || 기준글 === null) return;
   var 새 = 상자.value, 옛 = 기준글;
   if (새 === 옛) return;
-  var n = Math.min(옛.length, 새.length), a = 0, b = 0;
-  while (a < n && 옛.charCodeAt(a) === 새.charCodeAt(a)) a++;
-  while (b < n - a && 옛.charCodeAt(옛.length - 1 - b) === 새.charCodeAt(새.length - 1 - b)) b++;
-  var 옛끝 = 옛.length - b, 차 = 새.length - 옛.length;
+  var a, 옛끝, 차 = 새.length - 옛.length, k = 아는고침;
+  var 앎 = !!k && 새 === 옛.slice(0, k.시작) + k.글 + 옛.slice(k.끝);
+  if (앎) { a = k.시작; 옛끝 = k.끝; }
+  else {
+    var n = Math.min(옛.length, 새.length), b = 0;
+    a = 0;
+    while (a < n && 옛.charCodeAt(a) === 새.charCodeAt(a)) a++;
+    while (b < n - a && 옛.charCodeAt(옛.length - 1 - b) === 새.charCodeAt(새.length - 1 - b)) b++;
+    옛끝 = 옛.length - b;
+  }
   후보들.forEach(function (c) {
     if (c.끝남) return;
-    if (c.끝 <= a) return;
-    if (c.시작 >= 옛끝) { c.시작 += 차; c.끝 += 차; return; }
-    c.끝남 = "손댐";
+    // 누락의 앞뒤 원문은 소도구의 고침만 반영해 다시 적음(다른 고침이면 넣기를 막음)
+    var 맞던 = 앎 && c.갈래 === "누락" && c.시작 >= c.앞원문.length
+      && 옛.slice(c.시작 - c.앞원문.length, c.시작) === c.앞원문 && 옛.slice(c.시작, c.시작 + c.뒤원문.length) === c.뒤원문;
+    if (c.갈래 === "누락" && a <= c.시작 && c.시작 <= 옛끝) { c.끝남 = "손댐"; return; }
+    if (c.끝 <= a) { /* 앞쪽 — 그대로 */ }
+    else if (c.시작 >= 옛끝) { c.시작 += 차; c.끝 += 차; }
+    else { c.끝남 = "손댐"; return; }
+    if (맞던) {
+      c.앞원문 = 새.slice(Math.max(0, c.시작 - 6), c.시작);
+      c.뒤원문 = 새.slice(c.시작, c.시작 + 6);
+    }
   });
   기준글 = 새;
   if (깔개) { 깔개.기준 = 새; 깔개.그리기(); }
@@ -446,7 +473,7 @@ function 자리보기(c) {
     var y = 위치재기(상자, c.시작);
     상자.scrollTop = Math.max(0, y - 상자.clientHeight / 3);
     상자.focus({ preventScroll: true });
-    상자.setSelectionRange(c.시작, Math.max(c.끝, c.시작 + 1));
+    상자.setSelectionRange(c.시작, c.갈래 === "누락" ? c.시작 : Math.max(c.끝, c.시작 + 1));
     상자.scrollTop = Math.max(0, y - 상자.clientHeight / 3);
   }
   if (깔개) 깔개.그리기();
@@ -465,19 +492,42 @@ function 바꾸기(c) {
     알림("이 자리는 틀과 섞여 있어 자동으로 바꾸지 않습니다 — 직접 고쳐 주세요.");
     return;
   }
-  상자.focus({ preventScroll: true });
-  상자.setSelectionRange(c.시작, c.끝);
-  // execCommand 로 넣어야 되돌리기(Ctrl+Z)가 된다. 안 되면 setRangeText.
-  var 됨 = false;
-  try { 됨 = document.execCommand("insertText", false, c.스캔); } catch (e) { 됨 = false; }
-  if (!됨) {
-    상자.setRangeText(c.스캔, c.시작, c.끝, "end");
-    상자.dispatchEvent(new Event("input", { bubbles: true }));
-  }
-  따라가기();
+  글넣기(상자, c);
   c.끝남 = "바꿈";
   if (깔개) 깔개.그리기();
   목록그리기();
+}
+
+// 누락 의심 자리(다음 글자 앞)에 스캔 글자를 끼워 넣는다 — 앞뒤 원문이 맞댈 때와 같을 때만
+function 넣기(c) {
+  var 상자 = 편집상자();
+  if (상자.value.slice(c.시작 - c.앞원문.length, c.시작) !== c.앞원문
+      || 상자.value.slice(c.시작, c.시작 + c.뒤원문.length) !== c.뒤원문) {
+    알림("그 자리 글이 그사이 바뀌어 넣지 않았습니다 — 직접 고쳐 주세요.");
+    return;
+  }
+  글넣기(상자, c);
+  c.끝남 = "넣음";
+  if (깔개) 깔개.그리기();
+  목록그리기();
+}
+
+function 글넣기(상자, c) {
+  상자.focus({ preventScroll: true });
+  상자.setSelectionRange(c.시작, c.끝);
+  // execCommand 로 넣어야 Ctrl+Z 가 됨(안 되면 setRangeText) · 고친 자리는 `따라가기` 에 알려 둠
+  아는고침 = { 시작: c.시작, 끝: c.끝, 글: c.스캔 };
+  try {
+    var 됨 = false;
+    try { 됨 = document.execCommand("insertText", false, c.스캔); } catch (e) { 됨 = false; }
+    if (!됨) {
+      상자.setRangeText(c.스캔, c.시작, c.끝, "end");
+      상자.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    따라가기();
+  } finally {
+    아는고침 = null;
+  }
 }
 
 // ── 목록 ──
@@ -501,7 +551,7 @@ function 목록그리기() {
   if (끝난것.length) {
     var 셈 = {};
     끝난것.forEach(function (ck) { 셈[ck[0].끝남] = (셈[ck[0].끝남] || 0) + 1; });
-    var 말 = { "넘김": "넘긴 곳", "바꿈": "바꾼 곳", "손댐": "손댄 곳" };
+    var 말 = { "넘김": "넘긴 곳", "바꿈": "바꾼 곳", "넣음": "넣은 곳", "손댐": "손댄 곳" };
     var 접 = document.createElement("div");
     접.style.cssText = "padding:6px 4px;border-top:1px solid #eaecf0;font-size:13px;color:#36c;cursor:pointer";
     접.textContent = (끝난것보기 ? "▾ " : "▸ ")
@@ -541,7 +591,7 @@ function 줄그리기(몸, c, k) {
     본.appendChild(document.createTextNode(c.앞));
     var b = document.createElement("b");
     b.style.cssText = "background:" + 색[c.갈래];
-    b.textContent = c.전사;
+    b.textContent = c.갈래 === "누락" ? "〔" + c.스캔 + " 누락?〕" : c.전사;
     본.appendChild(b);
     본.appendChild(document.createTextNode(c.뒤));
     if (c.갈래 === "바뀜" || c.갈래 === "모르는자모") {
@@ -556,6 +606,7 @@ function 줄그리기(몸, c, k) {
       설.style.cssText = "margin-left:14px;color:#54595d;font-size:13px";
       설.textContent = c.갈래 === "빠짐" ? "이 근처에서 전사문에 글자가 " + c.칸 + "자 빠졌을 수 있습니다"
                                        : "이 근처에서 전사문에 글자가 " + c.칸 + "자 더 들어갔을 수 있습니다";
+      if (c.갈래 === "누락") 설.textContent = "이 사이에 " + c.칸 + "글자 누락 의심 · 스캔: " + c.스캔 + " · 다음 글자 앞을 표시했습니다";
       본.appendChild(설);
     }
     글.appendChild(머리); 글.appendChild(본);
@@ -565,13 +616,19 @@ function 줄그리기(몸, c, k) {
     function 단추하나(이름, 할일) {
       var x = document.createElement("button");
       x.type = "button"; x.className = "cdx-button"; x.textContent = 이름;
-      x.addEventListener("click", 할일);
+      x.addEventListener("click", function () {
+        if (후보들.indexOf(c) < 0) return;   // 제거된 검사 결과의 단추/클로저도 실행하지 않음
+        할일();
+      });
       단.appendChild(x);
       return x;
     }
     단추하나("자리 보기", function () { 자리보기(c); });
     if (!c.끝남 && 바꿀수(c)) {
       단추하나("바꾸기 → " + c.스캔, function () { 바꾸기(c); });
+    }
+    if (!c.끝남 && 넣을수(c)) {
+      단추하나("넣기 → " + c.스캔, function () { 넣기(c); });
     }
     if (!c.끝남) 단추하나("넘기기", function () { c.끝남 = "넘김"; if (깔개) 깔개.그리기(); 목록그리기(); });
     줄.appendChild(단);
@@ -624,8 +681,7 @@ function 판세우기(답) {
 }
 
 // ── 서버 ────────────────────────────────────────────────────────────
-// Toolforge 서버(`툴포지/app.py`) — 있으면 맞대기를 서버에 맡김(파이썬 `대조.한쪽` — 답의 꼴이 `셈.한쪽` 과 같음).
-// 서버가 내주는 이 파일의 맨 앞 줄이 채움. OCR 소도구와 같은 서버 · 같은 판형 살피기
+// Toolforge 서버 주소 — 서버가 내주는 이 파일의 맨 앞 줄이 채움(`소도구.js` 와 같은 서버)
 var 서버 = window.옛한글OCR서버 || "";
 if (서버 && 서버.charAt(서버.length - 1) !== "/") 서버 += "/";
 
@@ -650,10 +706,10 @@ async function 서버로(경로, 몸) {
 
 async function 시작() {
   var 쪽 = 지금쪽(), 상자 = 편집상자();
-  if (!쪽 || !상자) return;
+  if (!쪽 || !상자 || 단추.disabled) return;
+  결과걷기();
   if (!서버) { 알림("서버 주소가 없습니다 — Toolforge 도구가 내주는 주소(…/ocr.js · …/compare.js)로 불러와 주세요."); return; }
   단추.disabled = true;
-  걷기();
   var 공 = 공용도구(), 고른모델 = 공.모델(), 고른단 = 공.단();
   var t0 = performance.now();
   var 언제 = new Date(), 때 = {}, 결과 = [], 살핀 = null, 답 = null, t;
@@ -677,6 +733,10 @@ async function 시작() {
     답.초 = ((performance.now() - t0) / 1000).toFixed(1);
     후보들 = 답.후보.map(function (c) {
       c.원문 = 본문.slice(c.시작, c.끝);
+      if (c.갈래 === "누락") {           // 넣기 전에 앞뒤가 그대로인지 볼 원문 몇 자
+        c.앞원문 = 본문.slice(Math.max(0, c.시작 - 6), c.시작);
+        c.뒤원문 = 본문.slice(c.시작, c.시작 + 6);
+      }
       return c;
     });
     기준글 = 본문;
@@ -685,6 +745,7 @@ async function 시작() {
     var 칠함 = 깔기(상자);
     알림("볼 곳 " + 후보들.filter(확실).length + "곳" + (칠함 ? "" : " — 구문 강조가 켜져 있어 편집 상자에는 칠하지 못했습니다(끄면 칠합니다)"));
   } catch (e) {
+    결과걷기();                         // 결과 구성 도중 실패한 경우도 남기지 않음
     console.error(e);
     var 메시지 = e && e.message ? e.message : e;
     알림("✗ " + 메시지);
@@ -721,9 +782,7 @@ function 세우기() {
   // 순서대로 편집으로 쪽을 옮기면 앞 쪽의 칠 · 후보 목록을 걷음
   if (/[?&]prp_editinsequence=/i.test(location.search)) {
     window.addEventListener("hashchange", function () {
-      걷기();
-      if (판) { 판.remove(); 판 = null; }
-      후보들 = []; 기준글 = null; 고른것 = null;
+      결과걷기();
       if (!단추.disabled) 알림("");
     });
   }

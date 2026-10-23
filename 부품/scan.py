@@ -17,16 +17,43 @@ SPAN_EXTEND = True
 SPAN_LOW = 0.15     # 열 폭의 이만큼 넘는 줄을 잇는다
 SPAN_REACH = 1.5    # 구간 밖으로 이 자간까지만
 SPAN_GAP = 0.4      # 빈 줄이 이 자간 넘게 이어지면 멈춤
+# (읽을 때만) 흐린 열 머리 — 이웃 열보다 늦게 시작한 열을 이 밝기 미만(옅은 잉크)으로 위로 다시 찾음(`_연한머리잇기`).
+#   0 = 끔. JS 짝 `연한머리잇기` · 설정 `연한머리`
+SPAN_FAINT = 160
+# (읽을 때만) 아래쪽 꼬리선(쪽번호 줄 · 휜 아래 광곽선) 빼기를 끄는 '세로줄 판' — 이웃 열 사이 세로줄(`세로줄있나`)이
+#   열 쌍의 이 몫 넘게 있을 때만 끔. 0 = 한 쌍만 있어도 끔. JS 짝 `쪽기하` · 설정 `꼬리선판`
+TAIL_RULED = 0.5
 # 읽을 때 광곽 높이를 열마다 따로 (_열광곽) — 기운·휜 광곽 대비
 FRAME_LOCAL = True
 FRAME_LOCAL_FILL = 0.6    # 열 + 안쪽 고랑 띠의 이만큼이 잉크인 줄을 광곽 가로줄로
 FRAME_LOCAL_REACH = 0.35  # 쪽 광곽 줄에서 세로 자간의 이만큼 안에서만 찾음
 FRAME_LOCAL_EDGE = 8      # 찬 줄에서 이 px 까지 흐린 줄(열 폭의 GLYPH 넘는 줄)도 광곽 줄로 친다
+# (읽을 때만) 휜 위 광곽 가로줄 — 쪽 광곽(`_frame_read`)을 못 찾은 쪽에서 열마다 쪽 T 근처의 옅은(이 밝기 미만) 가로줄을
+#   기울어도 찾아 그 아래에서 열을 시작(`_휜광곽`). 0 = 끔. JS 짝 `휜광곽` · 설정 `휜광곽`
+FRAME_CURVE = 160
+FRAME_CURVE_BAND = 0.08          # 띠 높이(세로 자간 몫) — 줄이 이만큼 기울어도 찬 것으로
+FRAME_CURVE_FILL = (0.8, 0.6)    # 열 띠 · 양옆 고랑(있는 것 모두)을 이만큼 덮어야 광곽 줄
+FRAME_CURVE_REACH = 1.0          # 쪽 T 에서 세로 자간의 이만큼 위아래만 찾음
+FRAME_CURVE_JUMP = 0.3           # 가장 가까운 찾은 열(양옆)과 모두 이 자간 넘게 다르면 버림
+FRAME_CURVE_BG = 0.75            # 잉크 문턱 = min(FRAME_CURVE, 띠 밝기 중앙값(종이) × 이것) — 회색 종이 대비
+# (읽을 때만) 흐린 잉크 쪽 — 잉크 문턱을 min(쪽 가운데 잉크(1 백분위) + 앞 값, 종이(90 백분위) − 뒤 값)까지 올림(`연한잉크문턱`).
+#   기본 문턱 기하와 둘 중 고르기는 `align.잉크골라`. None = 끔. JS 짝 `연한잉크문턱` · 설정 `연한잉크`
+INK_FAINT = (70, 45)
+
+
+def 연한잉크문턱(g):
+    """이 쪽의 잉크 문턱 — 흐린 쪽이면 `INK_FAINT` 로 올린 값, 아니면 `INK`."""
+    if not INK_FAINT:
+        return INK
+    H, W = g.shape
+    c = g[int(H * 0.1):int(H * 0.9), int(W * 0.1):int(W * 0.9)]
+    종이, 잉크 = np.percentile(c, 90), np.percentile(c, 1)
+    return int(max(INK, min(잉크 + INK_FAINT[0], 종이 - INK_FAINT[1])))
 
 # ── 열 찾기 ──────────────────────────────────────────────────────────
 def _columns_at(ink, W, th, 얇음=0):
     """한 문턱으로 잉크 덩어리를 잡아 (덩어리들, 자간). 쓸 만하지 않으면 None. `find_columns` 의 ①② 부분.
-    얇음: 이 폭(px) 안 되는 덩어리를 먼저 버림(점선 계선 — `PITCH_THIN`). 0 = 예전 그대로."""
+    얇음: 이 폭(px) 안 되는 덩어리를 먼저 버림(점선 계선). 0 = 끔."""
     runs, s = [], None
     for x, v in enumerate(ink):
         if v > th and s is None:
@@ -51,15 +78,22 @@ def _columns_at(ink, W, th, 얇음=0):
 
 PITCH_OFF, PITCH_ON = 0.15, 0.12     # 표준 자간에서 이 몫 넘게 벗어나면 / 이 몫 안인 다른 문턱으로 바꿈(읽을 때만)
 PITCH_MORE = 1.5    # 간격이 표준 근처라도 다른 문턱이 열을 이 배 넘게 더 찾으면(간격은 PITCH_ON 안) 바꿈. 0 = 끔
-# (읽을 때만, 2026-10-09) 위 두 문턱으로도 표준에서 PITCH_OFF 넘게 벗어나면 — 점선 계선이 가는 덩어리로 끼어 자간이 절반(쥬역언해 0127 ·
-#   관셰음), 문턱이 낮아 이웃 열이 붙어 두 배(쥬역언해 0014) — 가는 덩어리(표준 자간의 PITCH_THIN 안 되는 폭)를 버리고, 더 높은 문턱
-#   (최대값의 PITCH_SCAN 배)도 시험해 PITCH_ON 안인 첫 것을 씀. () = 끔. JS 짝 `열찾기` · 설정 `열다시찾기` · `열가는덩이`
+# (읽을 때만) 위 두 문턱으로도 표준에서 PITCH_OFF 넘게 벗어나면(점선 계선 · 붙은 열) 가는 덩어리(표준 자간의 PITCH_THIN 미만 폭)를
+#   버리고, 더 높은 문턱(최대값의 PITCH_SCAN 배)도 시험해 PITCH_ON 안인 첫 것을 씀. () = 끔.
+#   JS 짝 `열찾기` · 설정 `열다시찾기` · `열가는덩이`
 PITCH_SCAN = (0.2, 0.3, 0.4, 0.5)
 PITCH_THIN = 0.25
-INK_EDGE = 0.0      # 스캔 양 끝 이 몫에 걸친 거의 위아래가 다 검은 띠(제본 그림자)를 열 찾기 전에 지움 — 판심떼기=True 일 때만. 0 = 끔
+# (읽을 때만) 빠진 열 칸수: 잰 간격으로 센 간격이 표준에서 PITCH_ON 넘게 벗어나고 표준으로 센 간격은 그 안이면 그 칸수로.
+#   잰 간격 > 표준 × 이 값이면 안 함. 0 = 끔. JS 짝 `열찾기` · 설정 `빈자리표준`
+PITCH_FILL = 1.6
+# 조각 문턱 — 고른 간격이 표준에서 PITCH_ON 넘게(PITCH_OFF 안) 벗어났을 때, 열 수(`_열수`)가 ±1 안이고 간격이 표준의 이 몫 안인
+#   다른 문턱으로 바꿈. 0 = 끔. JS 짝 `열찾기` · 설정 `조각문턱`
+#   ⚠ 읽는 경로에는 꺼 둠 — 전사대조만 `find_columns(…, 조각=0.12)` 를 후보 기하로 씀(`대조.조각문턱`).
+PITCH_NEAR = 0.0
+INK_EDGE = 0.0      # 스캔 양 끝 이 몫에 걸친 진한 띠(제본 그림자)를 열 찾기 전에 지움 — 판심떼기=True 일 때만. 0 = 끔
                     # ⚠ 늘 켜지 말 것 — 전사대조만 `find_columns(…, 끝띠=True)` 로 후보 하나로 씀
 EDGE_ZONE = 0.03    # `끝띠=True` 로 부를 때의 그 몫
-STRIP_FILL = 0.6    # 그 띠: 띠 높이의 이 몫 넘게 잉크인 세로줄(본문 열은 많아야 40% 안팎, 그림자 60~90%)
+STRIP_FILL = 0.6    # 그 띠: 띠 높이의 이 몫 넘게 잉크인 세로줄
 
 
 def _끝띠지우기(ink, 높이, W, 몫):
@@ -84,7 +118,7 @@ def _끝띠지우기(ink, 높이, W, 몫):
     return out
 
 
-def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None):
+def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None, 정보=None, 조각=None):
     """
     활자 조판이라 열 간격이 일정하다는 성질을 쓴다.
     ① 잉크로 대략 열을 잡고 ② 여백의 쪽번호를 폭으로 걸러내고
@@ -93,18 +127,17 @@ def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None):
 
     판심떼기=False 는 읽을 때(한 단 판형) — 대신 양 끝 후보 열(`_가장자리후보`)을 확신도로 가린다.
     표준자간: 문헌 표준 가로 자간(읽을 때만). 끝띠: None 이면 INK_EDGE, True 면 EDGE_ZONE 로 끝 띠 지우기.
+    조각: 이 호출만 PITCH_NEAR 대신. 정보: dict 면 빠진 열을 다듬은 범위를 담아 줌.
     """
     H, W = g.shape
     ink = (g[int(H*0.12):int(H*0.88), :] < INK).sum(axis=0).astype(float)
-    # 스캔 끝의 제본 그림자 띠를 지우고 잰다(`_끝띠지우기`) — 띠가 문턱 잣대 · 헛열이 되는 것을 막음. 판심떼기=True 일 때만.
-    #   ⚠ 잣대(가장 진한 줄)가 바뀌어 결과가 양쪽으로 튀므로 기본 끔 — 다른 후보 기하로만 씀.
+    # 끝 띠 지우기(`_끝띠지우기`) — 판심떼기=True 일 때만.
     몫 = INK_EDGE if 끝띠 is None else (EDGE_ZONE if 끝띠 else 0.0)
     if 몫 and 판심떼기:
         ink = _끝띠지우기(ink, int(H*0.88) - int(H*0.12), W, 몫)
     if ink.max() <= 0:
         return None, []
-    # 문턱은 최대값(보통 세로 광곽선)의 0.12. 광곽선이 흐리거나 없으면 문턱이 높아 열의 뾰족한 끝만 잡히므로,
-    #   잡은 덩어리 폭이 자간의 0.18 이하면(자기 진단) 90 백분위 기준 문턱으로 다시 잡는다.
+    # 문턱은 최대값의 0.12. 잡은 덩어리 폭이 자간의 0.18 이하면 90 백분위 기준 문턱으로 다시.
     #   ⚠ 문턱을 늘 낮추면 멀쩡한 쪽에 없던 열이 생긴다.
     골랐 = None
     잡은 = []
@@ -120,8 +153,8 @@ def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None):
             골랐 = got; break
     if 골랐 is None:
         return None, []
-    # 읽을 때만 — 고른 자간이 문헌 표준에서 PITCH_OFF 넘게 벗어나거나(흐린 쪽에서 제본 골 띠가 최대값을 차지해
-    #   진한 몇 열만 잡힌 경우), 다른 문턱이 열을 PITCH_MORE 배 넘게 더 찾으면, 자간이 표준의 PITCH_ON 안인 다른 문턱으로 바꾼다.
+    # 읽을 때만 — 고른 자간이 표준에서 PITCH_OFF 넘게 벗어나거나 다른 문턱이 열을 PITCH_MORE 배 넘게 더 찾으면,
+    #   자간이 표준의 PITCH_ON 안인 다른 문턱으로 바꾼다.
     if 표준자간:
         r0, p0 = 골랐
         멀다 = abs(p0 - 표준자간) > 표준자간 * PITCH_OFF
@@ -133,6 +166,13 @@ def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None):
                         abs(got[1] - 표준자간) <= 표준자간 * PITCH_ON and \
                         (멀다 or len(got[0]) >= len(r0) * PITCH_MORE):
                     골랐 = got; break
+        근처 = PITCH_NEAR if 조각 is None else 조각     # 조각: 이 호출만 PITCH_NEAR 대신(전사대조 후보 '조각')
+        if 근처 and abs(골랐[1] - 표준자간) > 표준자간 * PITCH_ON:
+            n0 = _열수(*골랐)
+            for got in 잡은:
+                if got is not None and got is not 골랐 and abs(got[1] - 표준자간) <= 표준자간 * 근처 \
+                        and abs(_열수(*got) - n0) <= 1:
+                    골랐 = got; break
         if PITCH_SCAN and abs(골랐[1] - 표준자간) > 표준자간 * PITCH_OFF:
             얇 = 표준자간 * PITCH_THIN
             문턱들 = [ink.max() * 0.12, float(np.percentile(ink, 90)) * 0.25] + [ink.max() * f for f in PITCH_SCAN]
@@ -140,7 +180,7 @@ def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None):
             넓다, n0 = 골랐[1] > 표준자간, _열수(*골랐)
             for t, w in 시험:
                 got = _columns_at(ink, W, t, w)
-                # 간격이 넓게(열을 묶어) 잡혔던 쪽은 열이 줄어드는 후보를 받지 않음 — 열은 맞는데 간격 셈만 벗어난 쪽(쥬역언해 3책 0024)
+                # 간격이 넓게 잡혔던 쪽은 열이 줄어드는 후보를 받지 않음
                 if got is not None and abs(got[1] - 표준자간) <= 표준자간 * PITCH_ON and                         not (넓다 and _열수(*got) < n0):
                     골랐 = got; break
     runs, pitch = 골랐
@@ -153,6 +193,8 @@ def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None):
             merged.append(r)
     cen = [(a + b) / 2 for a, b in merged]
     if len(cen) > 2: pitch = float(np.median(np.diff(cen)))
+    원자간 = pitch
+    pitch = _빠진열자간(cen, pitch, 표준자간)
 
     wmed2 = float(np.median([b - a for a, b in merged]))
     boxes = [tuple(merged[0])]                           # ④ 사이에 빠진 열 채우기
@@ -160,6 +202,11 @@ def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None):
         c = (r[0] + r[1]) / 2
         prev_c = (boxes[-1][0] + boxes[-1][1]) / 2
         k = max(1, int(round((c - prev_c) / pitch)))
+        if 표준자간 and PITCH_FILL and pitch <= 표준자간 * PITCH_FILL and k >= 2 and \
+                abs((c - prev_c) / k - 표준자간) > 표준자간 * PITCH_ON:
+            k2 = max(1, int(round((c - prev_c) / 표준자간)))
+            if abs((c - prev_c) / k2 - 표준자간) <= 표준자간 * PITCH_ON:
+                k = k2
         for t in range(1, k):
             mid = prev_c + (c - prev_c) * t / k
             boxes.append((int(mid - wmed2/2), int(mid + wmed2/2)))
@@ -170,10 +217,68 @@ def find_columns(g, 판심떼기=True, 표준자간=None, 끝띠=None):
             c = (a + b) / 2; a, b = int(c - wmed2/2), int(c + wmed2/2)
         out.append((max(0, a), min(W, b)))
 
-    # ⑤ 판심 걸러내기 — 판심(쪽 이름·쪽 번호 줄)은 광곽 밖이라 이웃 열과 간격이 확 벌어진다. 양 끝에서 그런 열을 뗀다.
+    if pitch != 원자간:
+        out, 범위, 짧은열 = _빠진열다듬기(g, out, merged, pitch)
+        if 정보 is not None and 범위:
+            정보["본문범위"] = 범위
+            정보["짧은열"] = [out[i] for i in 짧은열]
+
+    # ⑤ 판심 걸러내기 — 양 끝에서 이웃과 간격이 확 벌어진 열(판심)을 뗀다.
     if 판심떼기:
         out = _drop_margin_column(out)
     return pitch, list(reversed(out))
+
+
+def _빠진열자간(cen, pitch, standard):
+    """열 사이 거리가 표준 간격의 정수 배로 모이면 빠진 열을 감안해 간격을 잰다."""
+    if not standard or len(cen) < 4 or abs(pitch - standard) <= standard * 0.15:
+        return pitch
+    gaps = np.diff(cen)
+    k = np.maximum(1, np.rint(gaps / standard))
+    normalized = gaps / k
+    good = np.abs(normalized - standard) <= standard * 0.12
+    if np.count_nonzero(good) < 3 or np.mean(good) < 0.8 or not np.any(k[good] >= 2):
+        return pitch
+    return float(np.median(normalized[good]))
+
+
+def _빠진열다듬기(g, cols, merged, pitch):
+    """끼워 넣은 열의 잉크 중심을 긴 본문 열의 높이 안에서 다시 찾는다."""
+    H, W = g.shape
+    T, B = page_frame(g, merged, True)
+    bounds = []
+    for (a, b), p in zip(merged, ink_profile(g, merged)):
+        ys = np.flatnonzero(p[T:B] > (b - a) * GLYPH)
+        if len(ys) and ys[-1] - ys[0] > pitch * 3:
+            bounds.append((T + int(ys[0]), T + int(ys[-1]) + 1))
+    if len(bounds) < 3:
+        return cols, None, []
+    top = max(T, int(np.median([a for a, b in bounds]) - pitch * 0.75))
+    bottom = min(B, max(b for a, b in bounds))
+    ink = (g[top:bottom] < INK).sum(axis=0)
+    out, recovered = [], []
+    for i, (a, b) in enumerate(cols):
+        if (a, b) in [tuple(c) for c in merged]:
+            out.append((a, b)); continue
+        c = (a + b) / 2
+        lo, hi = max(0, int(c - pitch * 0.4)), min(W, int(c + pitch * 0.4))
+        band = ink[lo:hi]
+        peak = float(band.max()) if len(band) else 0
+        if peak < pitch * 0.15:
+            out.append((a, b)); continue
+        runs = []
+        for y in np.flatnonzero(band > peak * 0.12):
+            if runs and y - runs[-1][1] <= pitch * 0.08:
+                runs[-1][1] = int(y)
+            else:
+                runs.append([int(y), int(y)])
+        runs = [r for r in runs if r[1] - r[0] >= pitch * 0.2]
+        if not runs:
+            out.append((a, b)); continue
+        r = min(runs, key=lambda r: abs(lo + (r[0] + r[1]) / 2 - c))
+        out.append((lo + r[0], lo + r[1] + 1))
+        recovered.append(i)
+    return out, (top, bottom), recovered
 
 
 def _열수(runs, pitch):
@@ -211,8 +316,8 @@ def _drop_margin_column(cols, ratio=1.18):
 def _가장자리후보(cols, pitch, W):
     """
     읽을 때 양 끝에 후보 열을 붙인다 — 버릴지는 `align.가장자리다듬기` 가 확신도로 정한다.
-    한쪽에 둘: 제자리(둘째 열에서 자간 하나 바깥 — 끌려 밀린 가장자리 열 대신) · 한 칸 더 바깥(못 찾은 열).
-    그림 밖 후보와 이미 있는 열과 똑같은 후보는 붙이지 않는다(똑같은 상자는 점수 동점이라 CUDA · WASM 에서 갈림).
+    한쪽에 둘: 제자리(둘째 열에서 자간 하나 바깥) · 한 칸 더 바깥(못 찾은 열).
+    그림 밖 후보와 이미 있는 열과 똑같은 후보는 붙이지 않는다(동점이 CUDA · WASM 에서 갈림).
     ⚠ 자를 때는 쓰지 말 것.
     """
     w = int(np.median([b - a for a, b in cols]))
@@ -230,6 +335,55 @@ def _가장자리후보(cols, pitch, W):
     return out
 
 
+def _첫글자잇기(prof, cols, spans, Ts, pitch):
+    """이웃 열의 시작 높이와 맞는 가는 첫 글자를 빈 줄 너머에서 복구한다."""
+    real = [s[0] for s in spans if s]
+    if len(real) < 3:
+        return spans
+    anchor = float(np.median(real))
+    for i, s in enumerate(spans):
+        if not s or not anchor + pitch * 0.6 < s[0] <= anchor + pitch * 1.5:
+            continue
+        p, w, end = prof[i], cols[i][1] - cols[i][0], s[0]
+        for y in range(s[0] - 1, max(Ts[i], int(s[0] - 1.5 * pitch)) - 1, -1):
+            if p[y] > w * SPAN_LOW:
+                end = y
+            elif end - y > 0.8 * pitch:
+                break
+        if abs(end - anchor) <= pitch * 0.35 and np.count_nonzero(p[end:s[0]] > w * SPAN_LOW) >= max(3, pitch * 0.1):
+            spans[i] = (end, s[1])
+    return spans
+
+
+def _연한머리잇기(faint, cols, spans, Ts, pitch):
+    """
+    이웃 열보다 늦게 시작한 열(위쪽 글자가 흐림)을 옅은 잉크 무늬 `faint`(`SPAN_FAINT` 미만)로 위로 다시 잇는다.
+    빈 줄 한 자간까지 `SPAN_LOW` 를 넘는 줄을 따라 올라가 이웃 열 시작(위에서 1/4) 0.5 자간 안에 닿고,
+    그 사이 줄의 30% 넘게 `SPAN_LOW` 를 넘을 때만(뒷면 비침 거름).
+    """
+    real = sorted(s[0] for s in spans if s)
+    if len(real) < 3:
+        return spans
+    anchor = real[(len(real) - 1) // 4]     # 위에서 1/4 — 흐린 열이 반 넘어도 성한 열 높이를 기준으로
+    for i, s in enumerate(spans):
+        if not s or s[0] <= anchor + pitch * 0.6:
+            continue
+        p, w, end = faint[i], cols[i][1] - cols[i][0], s[0]
+        for y in range(s[0] - 1, max(Ts[i], int(anchor - pitch * 0.5)) - 1, -1):
+            if p[y] > w * SPAN_LOW:
+                end = y
+            elif end - y > pitch:
+                break
+        if abs(end - anchor) > pitch * 0.5:
+            continue
+        if np.count_nonzero(p[end:s[0]] > w * SPAN_LOW) < (s[0] - end) * 0.3:
+            continue
+        # 이웃 열 시작까지 올림 — 맨 첫 글자는 옅은 문턱으로도 안 잡힐 수 있음
+        a = max(Ts[i], min(end, anchor))
+        spans[i] = (Ts[i] if a - Ts[i] < pitch * 0.5 else a, s[1])
+    return spans
+
+
 def 칸모양(g, b):
     """
     상자 b=(x0,y0,x1,y1) 안 잉크의 (가로 폭 비율, 한 행이 폭을 채운 최대 비율).
@@ -244,8 +398,8 @@ def 칸모양(g, b):
 
 FRAME_SEG, FRAME_FILL, FRAME_AGREE = 300, 0.85, 0.6
 FRAME_GUTTER_CUT = 0.6     # 자르는 경로(교정서버 · 자동 라벨 · 데이터셋)의 `FRAME_GUTTER` — 0 = 끔
-# (읽을 때만) 옛 규칙이 위 · 아래 둘 다 기본값(6% · 95%)으로 떨어진 쪽만 한쪽씩 다시 찾음 — 광곽 없이 쪽 머리 줄 · 쪽 번호 줄표만 있는 책.
-#   고랑 규칙(`FRAME_GUTTER`)도 같이 씀. False = 끔. JS 짝 `광곽` · 설정 `광곽한쪽`
+# (읽을 때만) 위 · 아래 둘 다 기본값(6% · 95%)으로 떨어진 쪽만 한쪽씩 다시 찾음(쪽 머리 줄 · 쪽 번호 줄표).
+#   False = 끔. JS 짝 `광곽` · 설정 `광곽한쪽`
 FRAME_ONESIDE = True
 FRAME_GUTTER = 0.6        # (읽을 때만) 옛 `_frame` 이 열마다 찾은 줄은 옆 고랑의 이 몫 넘게 찬 것만 광곽으로(0 = 끔 · `page_frame`)
 
@@ -364,9 +518,8 @@ def _frame_read(g, cols, fill=0.90, agree=0.30):
     """
     광곽(테두리) 안쪽 위·아래를 '열들의 합의'로 찾는다. 못 찾으면 None. 읽을 때만(`page_frame(읽기=True)`).
 
-    세로쓰기에서 여러 열을 한꺼번에 가로지르는 것은 광곽뿐이다. 행마다 열 폭의 `fill` 넘게 찬 열의
-    비율이 `agree` 이상인 줄을 모아, 위 30% · 아래 30% 에서 가장 안쪽 줄의 안쪽을 쓴다
-    (`_frame` 의 바깥 줄 · 스캔 가장자리 띠를 피함).
+    행마다 열 폭의 `fill` 넘게 찬 열의 비율이 `agree` 이상인 줄을 모아,
+    위 30% · 아래 30% 에서 가장 안쪽 줄의 안쪽을 쓴다(쌍줄의 바깥 줄 · 스캔 가장자리 띠를 피함).
     """
     H = g.shape[0]
     표 = np.zeros(H)
@@ -391,8 +544,8 @@ def page_frame(g, cols, 읽기=False):
     이 쪽의 광곽(테두리) 안쪽 위·아래.
 
     읽을 때와 자를 때가 일부러 다르다:
-      · 읽기 — `_frame_read` 로 광곽 안쪽까지 바짝(짐작 `est` 이 맞아야 칸 수를 고른다).
-      · 자르기 — 옛 방식(`_frame` 중앙값)으로 넉넉하게.
+      · 읽기 — `_frame_read` 로 광곽 안쪽까지 바짝.
+      · 자르기 — `_frame` 중앙값으로 넉넉하게.
     ⚠ 자르는 쪽에 `_frame_read` 를 쓰지 말 것 — 띠가 글자를 물어 상자가 밀린다.
     """
     if 읽기:
@@ -411,8 +564,7 @@ def page_frame(g, cols, 읽기=False):
         B = int(np.median([f[1] for f in got]))
         문턱 = FRAME_GUTTER if 읽기 else FRAME_GUTTER_CUT
         if 문턱:
-            # 열마다 찾은 줄 중 옆 고랑(열 사이)까지 찬 것만 광곽으로 — 굵은 글자 획은 열 폭을 채워도 고랑에서 끊김.
-            #   위 · 아래 따로, 인정된 것이 둘 미만이면 기본값.
+            # 열마다 찾은 줄 중 옆 고랑까지 찬 것만 광곽으로(굵은 글자 획 거름). 위 · 아래 따로, 둘 미만이면 기본값.
             순 = sorted(cols)
             위 = [f[0] for f, c in zip(frames, cols) if f and _고랑찬몫(g, 순, c, f[0] - 10, f[0] - 2) >= 문턱]
             아래 = [f[1] for f, c in zip(frames, cols) if f and _고랑찬몫(g, 순, c, f[1] + 2, f[1] + 10) >= 문턱]
@@ -436,6 +588,15 @@ def page_frame(g, cols, 읽기=False):
             T = 위
         if 아래 is not None and B - H * 0.1 < 아래 < B:
             B = 아래
+    if 읽기 and B기본:
+        # 기본 아래끝을 여러 본문 열이 가로지르면 마지막 글자를 함께 읽는다.
+        w = max(1, int(np.median([b - a for a, b in cols])))
+        near = 0
+        for a, b in cols:
+            p = (g[:, a:b] < INK).sum(axis=1)
+            near += int(np.count_nonzero(p[max(T, B - w):B] > (b - a) * GLYPH) >= w * 0.15 and np.count_nonzero(p[B:min(H, B + w)] > (b - a) * GLYPH) >= w * 0.15)
+        if near >= max(3, len(cols) * 0.3):
+            B = H
     if B - T < H * 0.4:
         T, B = int(H * 0.06), int(H * 0.95)
     return T, B
@@ -536,6 +697,76 @@ def _열광곽(g, cols, T, B, xpitch, pitch):
     return 잇기(위, T, max), 잇기(아래, B, min)
 
 
+def _휜광곽(g, cols, T, pitch):
+    """
+    열마다 휜 위 광곽 가로줄 아래 — 읽을 때만, 쪽 광곽(`_frame_read`)을 못 찾은 쪽에서(`FRAME_CURVE`).
+    반환: 열마다 시작 높이 목록(쪽 T 보다 안쪽으로만), 못 찾으면 None.
+
+    열 띠와 양옆 고랑(있는 것 모두)을 함께 덮는 줄을 쪽 T ± `FRAME_CURVE_REACH` 자간에서 아래부터 찾는다.
+    줄이 기울어도 되게 `FRAME_CURVE_BAND` 자간 높이 띠 안의 x 마다 '잉크가 있나' 로 덮개를 잼.
+    양옆 가장 가까운 찾은 열과 모두 `FRAME_CURVE_JUMP` 자간 넘게 다르면 버림. 찾은 열이 셋 · 열의 30% 미만이면 None.
+    못 찾은 열은 양옆 찾은 열 사이면 x 로 곧게 잇고, 바깥이면 쪽 T 그대로.
+    """
+    H = g.shape[0]
+    h = max(3, int(FRAME_CURVE_BAND * pitch))
+    lo, hi = max(0, int(T - FRAME_CURVE_REACH * pitch)), min(H - h, int(T + FRAME_CURVE_REACH * pitch))
+    if hi <= lo or len(cols) < 3:
+        return None
+    s0, s1 = max(0, lo - h), min(H, hi + 2 * h)
+    문턱 = min(FRAME_CURVE, float(np.median(g[lo:hi])) * FRAME_CURVE_BG)
+    ink = (g[s0:s1] < 문턱).astype(np.int32)
+    cs = np.vstack([np.zeros((1, ink.shape[1]), np.int32), np.cumsum(ink, axis=0)])
+    띠 = (cs[h:] - cs[:-h]) > 0                     # 띠[y - s0, x] = 줄 y..y+h-1 에 잉크가 있나
+    순 = sorted(cols)
+    f열, f고랑 = FRAME_CURVE_FILL
+    v = []
+    for x0, x1 in cols:
+        k = 순.index((x0, x1))
+        고랑 = []
+        for j in (k - 1, k + 1):
+            if 0 <= j < len(순):
+                a, b = (순[j][1], x0) if j < k else (x1, 순[j][0])
+                if b - a >= 3:
+                    고랑.append((a, b))
+        y찾음 = None
+        for y in range(hi - 1, lo - 1, -1):          # 아래부터 — 쌍줄이면 안쪽 줄
+            if 띠[y - s0, x0:x1].mean() < f열:
+                continue
+            if 고랑 and all(띠[max(0, y - h - s0):y + h + 1 - s0, a:b].mean(axis=1).max() >= f고랑 for a, b in 고랑):
+                y찾음 = y
+                break
+        v.append(y찾음)
+    xs = [(a + b) / 2 for a, b in cols]
+    차례 = sorted(range(len(cols)), key=lambda i: xs[i])
+    J = FRAME_CURVE_JUMP * pitch
+    남김 = list(v)
+    for n, i in enumerate(차례):
+        if v[i] is None:
+            continue
+        이웃 = []
+        for 방향 in (차례[n - 1::-1] if n > 0 else [], 차례[n + 1:]):
+            for j in 방향:
+                if v[j] is not None:
+                    이웃.append(v[j]); break
+        if 이웃 and all(abs(v[i] - u) > J for u in 이웃):
+            남김[i] = None
+    있 = [i for i in 차례 if 남김[i] is not None]
+    if len(있) < max(3, len(cols) * 0.3):
+        return None
+    out = []
+    for i in range(len(cols)):
+        t = 남김[i]
+        if t is None:
+            왼 = [j for j in 있 if xs[j] < xs[i]]
+            오 = [j for j in 있 if xs[j] > xs[i]]
+            if not 왼 or not 오:
+                out.append(T); continue
+            l, r = 왼[-1], 오[0]
+            t = int(np.floor(남김[l] + (남김[r] - 남김[l]) * (xs[i] - xs[l]) / (xs[r] - xs[l])))
+        out.append(max(T, t + h))
+    return out
+
+
 def ink_profile(g, cols):
     """열마다 '그 줄에 잉크가 몇 픽셀인가'. 뒤 계산이 모두 이것을 돌려쓴다."""
     return [(g[:, x0:x1] < INK).sum(axis=1).astype(float) for x0, x1 in cols]
@@ -544,8 +775,7 @@ def ink_profile(g, cols):
 def _이어잡기(p, a, b, w, T, B, pitch):
     """
     구간 끝의 가는 글자를 이어 붙인다 — 읽을 때만 (`SPAN_EXTEND`).
-    `GLYPH` 를 못 넘는 첫·끝 글자(`이` 처럼 획이 열 밖으로 나가는 것)가 구간에서 빠지지 않게, 구간 밖으로
-    `SPAN_REACH` 자간 안에서 `SPAN_LOW` 를 넘는 줄을, 빈 줄이 `SPAN_GAP` 자간 넘게 끊기기 전까지 잇는다.
+    구간 밖 `SPAN_REACH` 자간 안에서 `SPAN_LOW` 를 넘는 줄을, 빈 줄이 `SPAN_GAP` 자간 넘게 끊기기 전까지 잇는다.
     """
     reach = SPAN_REACH
     lim, 끝 = max(T, int(a - reach * pitch)), a
@@ -560,14 +790,15 @@ def _이어잡기(p, a, b, w, T, B, pitch):
     return a, 끝
 
 
-def spans_between(prof, cols, T, B, pitch, 이어=False):
+def spans_between(prof, cols, T, B, pitch, 이어=False, 첫글자=False, 꼬리선=False, 연한=None):
     """
     T~B 안에서 열마다 글자가 실제로 시작하고 끝나는 y 범위.
 
-    뒷면 비침 · 계선 때문에 열 폭의 `GLYPH` 이상이 잉크인 줄만 글자 줄로 본다
-    (그래야 중간에서 시작하거나 일찍 끝나는 열을 잡는다).
+    열 폭의 `GLYPH` 이상이 잉크인 줄만 글자 줄로 본다(뒷면 비침 · 계선 거름).
     `이어=True`(읽을 때) 면 구간 끝의 가는 글자를 `_이어잡기` 로 붙인다.
     T · B 는 열마다의 목록이어도 된다(`_열광곽` — 읽을 때).
+    연한: 열마다 옅은 잉크 무늬(읽을 때 · `SPAN_FAINT`) — 주면 흐린 열 머리를 `_연한머리잇기` 로 잇는다.
+    꼬리선: 본문과 멀리 떨어진 아래쪽 가는 가로줄을 뺀다. 첫글자: `_첫글자잇기` 도 한다.
     """
     Ts = list(T) if isinstance(T, (list, tuple)) else [T] * len(cols)
     Bs = list(B) if isinstance(B, (list, tuple)) else [B] * len(cols)
@@ -575,6 +806,13 @@ def spans_between(prof, cols, T, B, pitch, 이어=False):
     for i, (x0, x1) in enumerate(cols):
         p, t, b = prof[i], Ts[i], Bs[i]
         hit = np.where(p[t:b] > (x1 - x0) * GLYPH)[0]
+        if 꼬리선 and len(hit) > 1:
+            gaps = np.flatnonzero(np.diff(hit) > pitch * 3)
+            if len(gaps):
+                k = int(gaps[-1]) + 1
+                tail = hit[k:]
+                if t + tail[0] > len(p) * 0.8 and tail[-1] - tail[0] < pitch * 0.15 and np.mean(p[t + tail]) > (x1 - x0) * 0.8:
+                    hit = hit[:k]
         s = None if len(hit) == 0 else (t + int(hit[0]), t + int(hit[-1]) + 1)
         if s and 이어 and SPAN_EXTEND:
             s = _이어잡기(p, s[0], s[1], x1 - x0, t, b, pitch)
@@ -591,6 +829,10 @@ def spans_between(prof, cols, T, B, pitch, 이어=False):
         if a - Ts[i] < pitch * 0.5:   a = Ts[i]        # 첫 글자가 흐릿해도 위에서 시작한 것으로
         if Emax - b < pitch * 0.6:    b = min(Emax, Bs[i])   # 끝도 마찬가지 (열 광곽 너머로는 안 감)
         out.append((a, b))
+    if 첫글자 and 이어 and SPAN_EXTEND:
+        out = _첫글자잇기(prof, cols, out, Ts, pitch)
+    if 첫글자 and 연한 is not None:
+        out = _연한머리잇기(연한, cols, out, Ts, pitch)
     return out
 
 
@@ -642,7 +884,7 @@ def tier_divider(g, cols, agree=0.70):
 def tier_measure(path):
     """
     이 쪽에서 (가운데 가로줄의 합의도, 쪽 높이에서의 자리). 못 재면 None.
-    문헌이 두 단인지 정할 때 몇 쪽에 물어보는 용도다 — `page.doc_tiers` 참고.
+    문헌이 두 단인지 정할 때 쓴다(`page.doc_tiers`).
     """
     g = np.array(Image.open(path).convert("L"))
     xpitch, cols = find_columns(g)
@@ -791,12 +1033,11 @@ def _가름판_geometry(path, g, ratio, 가름):
 
 
 # ── 자를 자리 후보 ───────────────────────────────────────────────────
-# ── 분주(열 안의 두 줄) 후보 (`분주후보`, 2026-10-09) ────────────────────────
-# 열 가운데 좁은 띠는 비고 좌우 양쪽에 글자 반쪽 넘는 잉크가 있는 가로 띠가 이어진 구간. 판정은 느슨하게 — 받을지는
-# `align.분주읽기` 가 모델 확신으로 정함(그림 모양만으로는 쪽 끝 열 · 판심 · '이 · 니' 같은 글자에 헛잡음).
+# ── 분주(열 안의 두 줄) 후보 (`분주후보`) ─────────────────────────────────
+# 열 가운데는 비고 좌우 양쪽에 잉크가 있는 가로 띠가 이어진 구간. 판정은 느슨하게 — 받을지는 `align.분주읽기` 가 모델 확신으로 정함.
 BUNJU_BAND = 0.25    # 가로 띠 높이(세로 자간의 몫)
-BUNJU_WIDE = 1.25    # 열 가운데에서 좌우로 글자 폭의 이 배까지 봄(분주 글자는 열 밖으로 삐져나옴 — 증남포)
-BUNJU_MID = 0.3      # 두 줄 사이 빈틈을 열 가운데에서 글자 폭의 ± 이 몫 안에서 찾음(정가운데가 아닐 수 있음 — 증남포 0018)
+BUNJU_WIDE = 1.25    # 열 가운데에서 좌우로 글자 폭의 이 배까지 봄(분주 글자는 열 밖으로 삐져나옴)
+BUNJU_MID = 0.3      # 두 줄 사이 빈틈을 열 가운데에서 글자 폭의 ± 이 몫 안에서 찾음
 BUNJU_GAP = 3        # 그 빈틈은 적어도 이 px
 BUNJU_SIDE = 0.3     # 좌우 잉크가 각각 글자 폭의 이 몫은 넘어야
 BUNJU_MIN = 0.6      # 구간이 세로 자간의 이 배는 돼야
@@ -854,7 +1095,7 @@ def 분주후보(g, cols, i, sp, pitch):
         wl = (x - 왼[0]) if len(왼) else 0
         wr = (오[-1] + 1) if len(오) else 0
         ok = wl >= w * BUNJU_SIDE and wr >= w * BUNJU_SIDE
-        # 가운데가 비고 한쪽 줄에만 글자가 있는 띠(두 줄 길이가 다름 — 증남포 0018 「증남포 / 목포」)는 끊지 않음
+        # 가운데가 비고 한쪽 줄에만 글자가 있는 띠(두 줄 길이가 다름)는 끊지 않음
         상태.append(1 if ok else 0); 가름.append(x if ok else None)
     out, k = [], 0
     while k < len(상태):
@@ -956,13 +1197,19 @@ RATIO_FIT = (1.0, 1.7)
 RATIO_FIT_OVER = 2.0
 
 
-def page_ratio(path, lo=0.55, hi=1.45, steps=120, 단=1):
+RATIO_HI = 1.45   # `page_ratio` 가 훑는 자간비의 위쪽 끝
+RATIO_RECHECK = (1.15, 1.1)   # **문헌 중앙값**이 앞 값을 넘으면(둘 · 세 글자 주기) 뒤 값을 위쪽 끝으로 다시 잼. None = 끔
+
+
+def page_ratio(path, lo=0.55, hi=None, steps=120, 단=1):
     """
     이 쪽의 '세로 자간 ÷ 가로 자간'을 **그림만 보고** 잰다. 전사문이 필요 없다.
     열마다 여러 간격으로 접어 보고 가장 또렷한 것을 고른 뒤, 열들의 중앙값을 쓴다.
 
-    단=2 일 때는 단을 나눈 뒤에 잰다(이어 붙인 채면 가운데 줄 · 여백이 무늬를 흩뜨림).
+    단=2 일 때는 단을 나눈 뒤에 잰다.
     """
+    if hi is None:
+        hi = RATIO_HI
     g = np.array(Image.open(path).convert("L"))
     xpitch, cols = find_columns(g)
     if not cols or not xpitch:
@@ -1002,16 +1249,23 @@ def page_ratio(path, lo=0.55, hi=1.45, steps=120, 단=1):
 
 
 def estimate_ratio(paths, 단=1):
-    """여러 쪽에서 재서 중앙값. 못 재면 None."""
-    vals = []
-    for p in paths:
-        try:
-            v = page_ratio(p, 단=단)
-        except Exception:
-            v = None
-        if v:
-            vals.append(v)
-    return float(np.median(vals)) if vals else None
+    """여러 쪽에서 재서 중앙값. 못 재면 None. 중앙값이 `RATIO_RECHECK[0]` 을 넘으면 위쪽 끝을 `RATIO_RECHECK[1]` 로 낮춰 다시 잰다."""
+    def 재기(hi):
+        vals = []
+        for p in paths:
+            try:
+                v = page_ratio(p, hi=hi, 단=단)
+            except Exception:
+                v = None
+            if v:
+                vals.append(v)
+        return float(np.median(vals)) if vals else None
+    r = 재기(None)
+    if r is not None and RATIO_RECHECK and r > RATIO_RECHECK[0]:
+        r2 = 재기(RATIO_RECHECK[1])
+        if r2 is not None:
+            r = r2
+    return r
 
 
 # ── 쪽 하나의 기하 정보 ──────────────────────────────────────────────
@@ -1034,8 +1288,132 @@ def _글자폭몫(g, crop_cols, spans):
     return float(np.median(v)) if len(v) >= 3 else None
 
 
-def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 표준자간=None, 이어=None, 끝띠=None, 판심=None):
+def _빈띠(g, x0, x1, lo, hi, 최소):
+    """본문 폭 전체에 잉크가 거의 없는 연속 행. 좁은 글자 사이 빈틈은 제외한다."""
+    quiet = (g[:, x0:x1] < INK).mean(axis=1) < 0.003
+    out, start = [], None
+    for y in range(lo, hi + 1):
+        if y < hi and quiet[y]:
+            if start is None:
+                start = y
+        elif start is not None:
+            if y - start >= 최소:
+                out.append((start, y))
+            start = None
+    return out
+
+
+def 빈단경계(g):
+    """가름선 없는 두 단. 양쪽에 넓고 긴 본문이 있는 큰 빈 띠만 인정한다."""
+    h, w = g.shape
+    xp, cols = find_columns(g)
+    if not xp or len(cols) < 12:
+        return None
+    gaps = _빈띠(g, min(a for a, b in cols), max(b for a, b in cols),
+                 int(h * 0.25), int(h * 0.75), xp * 0.7)
+    if not gaps or 고랑곡선(g, cols, 채움=0.6)[int(h*0.25):int(h*0.75)].max(initial=0) >= 0.4:
+        return None                     # 가름선과 빈 띠가 함께 있는 복잡한 판형은 기존 경로에 맡긴다
+    found = []
+    for a, b in gaps:
+        panels = []
+        for lo, hi in ((0, a), (b, h)):
+            xx, cs = find_columns(g[lo:hi])
+            if not xx or len(cs) < 12:
+                break
+            long = 0
+            for l, r in cs:
+                hit = np.flatnonzero((g[lo:hi, l:r] < INK).sum(axis=1) > max(2, (r-l)*0.1))
+                if len(hit) and hit[-1] - hit[0] >= xx * 8:
+                    long += 1
+            if long < len(cs) * 0.65 or max(v for u, v in cs) - min(u for u, v in cs) < w * 0.65:
+                break
+            panels.append((lo, hi, xx, cs))
+        if len(panels) == 2:
+            found.append((a, b, panels))
+    # 큰 빈 띠가 여럿인 복잡한 판형은 자동으로 두 단으로 나누지 않는다.
+    return found[0] if len(found) == 1 else None
+
+
+def _빈단기하(path, g, ratio):
+    split = 빈단경계(g)
+    if split is None:
+        return None
+    a, b, panels = split
+    cols, crop_cols, spans, sm, est, pitches, ratios, counts = [], [], [], [], [], [], [], []
+    for lo, hi, xp, cs in panels:
+        x0, x1 = min(l for l, r in cs), max(r for l, r in cs)
+        # 넓고 진한 장식 바로 아래의 여백만 머리 경계로 쓴다. 작은 제목은 남긴다.
+        ink = (g[lo:hi, x0:x1] < INK).mean(axis=1)
+        top = lo
+        for s, e in _빈띠(g[lo:hi], x0, x1, int((hi-lo)*0.1), int((hi-lo)*0.3), xp*0.5):
+            if float(ink[max(0, s-int(xp)):s].max(initial=0)) > 0.35:
+                top = lo + e
+        prof = ink_profile(g, cs)
+        rough = spans_between(prof, cs, top, hi, xp * YX_RATIO)
+        if rough is None:
+            return None
+        crops = [(max(0, int((l+r)/2-xp*0.45)), min(g.shape[1], int((l+r)/2+xp*0.45))) for l, r in cs]
+        q = _글자폭몫(g, crops, rough)
+        gw = 0.9 * q if RATIO_FIT and q is not None else None
+        values = []
+        for p, sp in zip(prof, rough):
+            if sp is None or sp[1] - sp[0] < xp * 6:
+                continue
+            p = smooth(p, max(2.0, xp / 12))
+            best, bt = -1.0, None
+            for t in np.linspace(0.55, 1.45, 120):
+                score = _fold_contrast(p, sp[0], sp[1], xp*t)
+                if score > best:
+                    best, bt = score, float(t)
+            if gw and bt and bt > gw * RATIO_FIT_OVER:
+                best, bt = -1.0, None
+                for t in np.linspace(gw*RATIO_FIT[0], gw*RATIO_FIT[1], 120):
+                    score = _fold_contrast(p, sp[0], sp[1], xp*t)
+                    if score > best:
+                        best, bt = score, float(t)
+            elif bt and RATIO_HALF and bt/2 >= 0.55 and _fold_contrast(p, sp[0], sp[1], xp*bt/2) >= RATIO_HALF*best:
+                bt /= 2
+            if bt:
+                values.append(bt)
+        r = float(np.median(values)) if len(values) >= 3 else ratio
+        pitch = xp * r
+        sp = spans_between(prof, cs, top, hi, pitch, 이어=True, 첫글자=True)
+        if sp is None:
+            return None
+        cols.extend(cs); spans.extend(sp)
+        crop_cols.extend(crops)
+        sm.extend(smooth(p, max(2.0, pitch/9)) for p in prof)
+        est.extend(0 if s is None else max(1, int(round((s[1]-s[0])/pitch))) for s in sp)
+        pitches.append(pitch); ratios.append(r); counts.append(len(cs))
+    return dict(cols=cols, crop_cols=crop_cols, spans=spans, sm=sm, est=est,
+                pitch=float(np.median(pitches)), xpitch=float(np.median([p[2] for p in panels])),
+                단=2, 가장자리=False, 본열수=int(np.median(counts)), 빈단=[a, b],
+                단별자간비=ratios, 단별열수=counts, image=Image.open(path).convert('L'))
+
+
+def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 표준자간=None, 이어=None, 끝띠=None, 판심=None, 빈단=True, 조각=None, 잉크=None):
     """
+    쪽 기하 — `_쪽기하` 에 잉크 문턱을 더한 것.
+    잉크: (읽을 때만) 잉크 문턱. None 이면 `연한잉크문턱`. 문턱이 `INK` 보다 높으면 그만큼 어둡게 한 그림(`잉크그림`)으로
+    잉크를 세고(모델에는 원래 그림) `잉크` · `잉크그림` · `기본기하`(기본 문턱으로 다시 — `align.잉크골라`)를 붙인다.
+    그 그림으로 못 읽으면 기본 문턱 기하.
+    """
+    원본 = np.array(Image.open(path).convert("L"))
+    문턱 = (연한잉크문턱(원본) if 잉크 is None else int(잉크)) if 읽기 else INK
+    인자 = (ratio, 단, 읽기, 가장자리, 표준자간, 이어, 끝띠, 판심, 빈단, 조각)
+    if 문턱 <= INK:
+        return _쪽기하(path, 원본, 원본, *인자)
+    g = (원본.astype(np.int16) - (문턱 - INK)).clip(0, 255).astype(np.uint8)
+    out = _쪽기하(path, g, 원본, *인자)
+    if out is None:
+        return _쪽기하(path, 원본, 원본, *인자)
+    out.update(잉크=문턱, 잉크그림=g, 기본기하=lambda: page_geometry(path, *인자, 잉크=INK))
+    return out
+
+
+def _쪽기하(path, g, 원본, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 표준자간=None, 이어=None, 끝띠=None, 판심=None, 빈단=True, 조각=None):
+    """
+    g: 잉크를 셀 그림 · 원본: 쪽 그림(옅은 잉크 문턱 `SPAN_FAINT` · `FRAME_CURVE` 는 이것으로).
     쪽 이미지 → 열·글자 구간·세로 자간. 못 읽으면 None.
     무거운 계산은 여기 한 번뿐이고, 뒤 단계는 이 결과를 돌려쓴다.
 
@@ -1050,14 +1428,19 @@ def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 
     가장자리=False 는 후보를 안 붙인다(`to_text` 로 잴 때 — 겹친 후보를 가릴 장치가 없음).
     이어=None 이면 `읽기` 를 따른다. 이어=True 는 자를 때 가는 글자 이어 붙이기(`_이어잡기`)만 켠다(자동 라벨용).
     판심=False 는 판심 걸러내기만 끈다(가장자리 후보 없이).
+    빈단=True 는 읽기에서만 선 없는 두 단을 찾는다. 사람이 1단을 강제할 때는 False.
+    조각: 열 찾기의 조각 문턱(`PITCH_NEAR`)을 이 호출만 이 값으로 — 전사대조의 '조각' 후보 기하.
     """
     이어 = bool(읽기) if 이어 is None else bool(이어)
-    g = np.array(Image.open(path).convert("L"))
     if isinstance(단, (list, tuple)):             # 가름줄 판형 — 위 `_가름판_geometry`
         return _가름판_geometry(path, g, ratio, 단)
+    if 읽기 and 단 == 1 and 빈단:
+        split = _빈단기하(path, g, ratio)
+        if split is not None:
+            return split
     후보 = bool(읽기) and 단 == 1 and 가장자리
-    # 판심=False 는 판심 걸러내기만 끔(가장자리 후보 없이)
-    xpitch, cols = find_columns(g, 판심떼기=(not 후보) if 판심 is None else 판심, 표준자간=표준자간 if 읽기 else None, 끝띠=끝띠)
+    정보 = {}
+    xpitch, cols = find_columns(g, 판심떼기=(not 후보) if 판심 is None else 판심, 표준자간=표준자간 if 읽기 else None, 끝띠=끝띠, 정보=정보, 조각=조각)
     if not cols or not xpitch:
         return None
     본열수 = None
@@ -1067,6 +1450,8 @@ def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 
     pitch = xpitch * ratio
     prof = ink_profile(g, cols)
     T, B = page_frame(g, cols, 읽기)
+    if 정보.get("본문범위"):
+        T, B = max(T, 정보["본문범위"][0]), min(B, 정보["본문범위"][1])
     쪽광곽 = bool(읽기) and FRAME_LOCAL and _frame_read(g, cols) is not None   # 열마다 다듬을 수 있나(`_열광곽`)
     if 후보 and EDGE_MOVE:
         cols = _줄에서비키기(g, cols, xpitch, T, B)
@@ -1088,14 +1473,34 @@ def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 
         TT, BB = T, B
         if 쪽광곽:
             TT, BB = _열광곽(g, cols, T, B, xpitch, pitch)
-        spans = spans_between(prof, cols, TT, BB, pitch, 이어=이어)
+        휜 = None
+        if not 쪽광곽 and 읽기 and FRAME_CURVE:
+            휜 = _휜광곽(원본, cols, T, pitch)
+            TT = 휜 or T
+        연한 = [(원본[:, a:b] < SPAN_FAINT).sum(axis=1) for a, b in cols] if 읽기 and SPAN_FAINT else None
+        꼬리선 = bool(읽기) and not 쪽광곽
+        if 꼬리선:
+            줄쌍 = [세로줄있나(g, (a[0] + a[1]) / 2, (b[0] + b[1]) / 2, T, B) for a, b in zip(cols[:-1], cols[1:])]
+            꼬리선 = not (줄쌍 and sum(줄쌍) > len(줄쌍) * TAIL_RULED)
+        spans = spans_between(prof, cols, TT, BB, pitch, 이어=이어, 첫글자=bool(읽기), 꼬리선=꼬리선, 연한=연한)
+        if 휜 and spans:
+            # 쪽 T 와 휜 줄 아래 사이에 글자 줄이 있던 열은 줄 바로 아래에서 시작(흐린 첫 글자를 놓치지 않게).
+            for i, (x0, x1) in enumerate(cols):
+                s = spans[i]
+                if s and 휜[i] > T and s[0] > 휜[i] and np.any(prof[i][T:휜[i]] > (x1 - x0) * GLYPH):
+                    spans[i] = (휜[i], s[1])
         sm = [smooth(p, max(2.0, pitch / 9)) for p in prof]
+    if spans and 정보.get("짧은열") and not div:
+        for i, c in enumerate(cols):
+            if c in 정보["짧은열"]:
+                hit = np.flatnonzero(prof[i][T:B] > (c[1] - c[0]) * SPAN_LOW)
+                if len(hit):
+                    spans[i] = (T + int(hit[0]), T + int(hit[-1]) + 1)
     if spans is None:
         return None
     est = [0 if s is None else max(1, int(round((s[1] - s[0]) / pitch))) for s in spans]
 
-    # 글자를 오려낼 상자는 열보다 넓어야 한다 — 모음(ㅏ ㅓ ㅣ)의 가는 획이 열 밖으로 밀려나 잘리면
-    # ㅏ·ㅓ·ㅣ 와 아래아를 못 가른다. 넓이는 가로 자간(열 간격)에 맞춘다.
+    # 오려낼 상자는 열보다 넓게(가로 자간 기준) — 열 밖으로 나간 모음 획이 잘리면 ㅏ·ㅓ·ㅣ 와 아래아를 못 가른다.
     half = xpitch * 0.45
     W = g.shape[1]
     crop_cols = [(max(0, int((a + b) / 2 - half)), min(W, int((a + b) / 2 + half)))

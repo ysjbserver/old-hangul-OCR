@@ -1,19 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-ONNX 로 읽는 모델 — torch 없이 도는 곳(Toolforge 서버)에서 `ocr.Model` · `경계검출.검출기` 대신 씀.
+ONNX 로 읽는 모델 — torch 없는 곳(Toolforge)에서 `ocr.Model` · `경계검출.검출기` 대신 씀.
 
-모델 파일은 브라우저판과 같은 `옛한글모델.onnx` · `경계검출.onnx` · `설정.json`.
-겉모습(메서드 이름 · 돌려주는 값)은 둘과 같게 — `align` · `대조.py` 가 그대로 받음:
+모델 파일: `옛한글모델.onnx` · `경계검출.onnx` · `설정.json`.
+겉모습은 둘과 같게 — `align` · `대조.py` 가 그대로 받음:
   · `모델.read(im, boxes)` → (초성번호, 중성번호, 종성번호, 확신) — `ocr.Model.read` 와 같음(확신 = 세 머리 최댓값의 최솟값)
   · `모델.확률(im, boxes)` → 세 머리 확률 — `대조.확률읽기` 와 같음
   · `모델.letter` · `모델.codes` · `모델.Ls/Vs/Ts` · `모델.size`
   · `검출기.경계확률(g, x0, x1)` — `경계검출.검출기` 와 같음
 ⚠ 그림 오리기는 `ocr.Model.crops` · `경계검출.띠` 와 같은 PIL 셈이어야 함(고치면 셋 다).
-⚠ `enable_cpu_mem_arena=False` — 켜면 메모리가 크게 늚(Toolforge 기본 512MB).
+⚠ `enable_cpu_mem_arena=False` 필수 — 켜면 메모리가 Toolforge 한도(512MB)를 넘음.
 """
 import hashlib
 import json
 import os
+from contextlib import contextmanager
 
 import numpy as np
 from PIL import Image
@@ -49,7 +50,7 @@ class 모델:
         self.iL = {c: i for i, c in enumerate(self.Ls)}
         self.iV = {c: i for i, c in enumerate(self.Vs)}
         self.iT = {c: i for i, c in enumerate(self.Ts)}
-        self.뭉치 = v.get("뭉치", 뭉치)          # 설정.json '뭉치' — 브라우저판 `읽기.js` 와 같은 값
+        self.뭉치 = v.get("뭉치", 뭉치)          # 설정.json '뭉치'
         self.세션 = _세션(os.path.join(폴더, "옛한글모델.onnx"), 스레드)
         self.폴더 = 폴더
         self.dev = "onnx"
@@ -63,11 +64,27 @@ class 모델:
                                  .resize((self.size, self.size)), dtype=np.float32)
         return (X / 255 - 0.5) / 0.5
 
+    def _그림열쇠(self, im):
+        고정 = getattr(self, "_고정그림", None)
+        if 고정 is not None and 고정[0] is im:
+            return 고정[1]
+        return (im.size, im.mode, hashlib.blake2b(im.tobytes(), digest_size=16).digest())
+
+    @contextmanager
+    def 그림고정(self, im):
+        """이 구간 동안 그림 내용 해시를 재사용(그림을 바꾸지 않을 때만 · 계산 잠금 안에서)."""
+        이전 = getattr(self, "_고정그림", None)
+        self._고정그림 = (im, self._그림열쇠(im))
+        try:
+            yield
+        finally:
+            self._고정그림 = 이전
+
     def _머리들(self, im, boxes, batch):
-        # 뭉치는 self.뭉치 를 넘지 않게 — 크면 ORT 중간값 메모리가 커짐. 결과는 안 바뀜.
+        # ⚠ 뭉치는 self.뭉치 를 넘지 않게 — 크면 ORT 메모리가 커짐
         batch = min(batch, self.뭉치)
-        # 같은 상자는 한 번만 읽음 — 부름 사이에도 기억(그림 내용이 열쇠, 마지막 그림 하나만). 결과는 그대로.
-        열쇠그림 = (im.size, im.mode, hashlib.blake2b(im.tobytes(), digest_size=16).digest())
+        # 같은 상자는 한 번만 읽음 — 마지막 그림 하나의 결과를 부름 사이에도 기억
+        열쇠그림 = self._그림열쇠(im)
         if self._기억[0] != 열쇠그림:
             self._기억 = (열쇠그림, {})
         기억 = self._기억[1]
@@ -117,17 +134,16 @@ def _한자인가(c):
 
 
 class 혼용모델(모델):
-    """'근대 국한문' — `제작/도구/ocr혼용.혼용Model` 과 같은 모양을 ONNX 로 읽음(머리 다섯: 갈래 K · 초 L · 중 V · 종 T · 한자 H).
+    """'근대 국한문' 모델(머리 다섯: 갈래 K · 초 L · 중 V · 종 T · 한자 H). 폴더: `국한문모델.onnx` + `글자표.json`.
 
-    폴더: `국한문모델.onnx` + `글자표.json`(`제작/만들기/내보내기_국한문.py`). 한자는 초성 표 **뒤에 이어 붙인 자리**(`Ls[nL + k]`)로,
-    중성 · 종성은 빈 자리('')로 실어 보냄 — `Ls[l] + Vs[v] + Ts[t]` 가 곧 그 한자라 `align` · `page` · `대조` 가 고침 없이 돎.
-    확신 = 한글이면 min(갈래, 초, 중, 종), 한자면 min(갈래, 한자). ⚠ 결과는 파이토치 `ocr혼용` 과 같아야 함(고치면 둘 다).
+    한자는 초성 표 뒤 자리(`Ls[nL + k]`) + 빈 중성 · 종성으로 냄 — `Ls[l] + Vs[v] + Ts[t]` 가 곧 그 한자.
+    확신 = 한글이면 min(갈래, 초, 중, 종), 한자면 min(갈래, 한자). ⚠ 파이토치 `ocr혼용` 과 같아야 함(고치면 둘 다).
     """
 
     def __init__(self, 폴더, 설정, 스레드=1):
         with open(os.path.join(폴더, "글자표.json"), encoding="utf-8") as f:
             v = json.load(f)
-        self.설정 = 설정                                    # 스캔너비 · 뭉치 — 옛한글 모델 설정과 같은 값
+        self.설정 = 설정                                    # 옛한글 모델 설정(스캔너비 · 뭉치)
         self.뭉치 = 설정.get("뭉치", 64)
         Ls, Vs, Ts, Hs = v["초성"], v["중성"], v["종성"], v["한자"]
         self.Hs, self.nL = Hs, len(Ls)
@@ -145,12 +161,12 @@ class 혼용모델(모델):
         self.dev = "onnx"
         self._기억 = (None, {})
 
-    상위 = 64             # 한자 확률은 상자마다 위 64개만 기억(나머지는 모두 1/65 이하 → 0 으로 둠). 11,000종을 다 들고 있으면 메모리가 폭발(Toolforge 512MB)
+    상위 = 64             # ⚠ 한자 확률은 상자마다 위 64개만 기억(나머지는 0) — 다 들면 메모리 한도를 넘음
 
     def _머리들(self, im, boxes, batch):
-        # 마지막 그림 하나의 (갈래 · 초 · 중 · 종 · 한자 위 64개 번호 · 확률)을 상자별로 기억 — 부름 사이에도(옛한글 모델과 같은 까닭)
+        # 마지막 그림의 (갈래 · 초 · 중 · 종 · 한자 위 64개 번호 · 확률)을 상자별로 기억
         batch = min(batch, self.뭉치)
-        열쇠그림 = (im.size, im.mode, hashlib.blake2b(im.tobytes(), digest_size=16).digest())
+        열쇠그림 = self._그림열쇠(im)
         if self._기억[0] != 열쇠그림:
             self._기억 = (열쇠그림, {})
         기억 = self._기억[1]
@@ -185,9 +201,8 @@ class 혼용모델(모델):
         return l, v, t, c
 
     def 확률(self, im, boxes, batch=None):
-        """`대조.확률읽기` 용 — 세 머리 꼴(초 · 중 · 종)로. 갈래로 한글 · 한자를 가르고(`read` 와 같은 쪽), 그쪽 머리 확률에 갈래 확률을 곱함.
-        한글: 초 [갈래0 × 초, 0…] · 중 [중, 0] · 종 [종, 0] / 한자: 초 [0…, 갈래1 × 한자(위 64개만)] · 중 · 종은 빈 자리 하나만 1 →
-        '초 × 중 × 종' 이 곧 그 글자의 확률이고 1순위가 `read` 와 같음. 초성 표는 float32(한자 11,000열 × 상자 수라 큼)."""
+        """`대조.확률읽기` 용 — 세 머리 꼴(초 · 중 · 종). 갈래로 한글 · 한자를 가르고 그쪽 머리 확률 × 갈래 확률.
+        한자는 초성 표 뒤 자리에, 중 · 종은 빈 자리만 1 — 1순위가 `read` 와 같음. 초성 표는 float32(큼)."""
         if not boxes:
             z = np.zeros((0, 1))
             return z, z, z
@@ -235,14 +250,14 @@ class 검출기:
     def 경계확률(self, g, x0, x1):
         b, s = 띠(g, x0, x1)
         z = self.세션.run(None, {"x": b[None, None]})[0][0]
-        p = 1.0 / (1.0 + np.exp(-z.astype(np.float64)))      # float64 — `경계검출.검출기` 와 같은 까닭
+        p = 1.0 / (1.0 + np.exp(-z.astype(np.float64)))      # float64 — `경계검출.검출기` 와 같게
         ys = np.arange(g.shape[0]) * s
         return np.interp(ys, np.arange(len(p)), p)
 
 
 def 끼우기(폴더, 스레드=1):
-    """`폴더`(= 묶음의 `모델/`)에서 근대 순한글 모델을 돌려주고, `align` 의 경계 검출기도 ONNX 것으로 끼움(torch 를 부르지 않게).
-    폴더 짜임: `근대 순한글/`(옛한글모델.onnx · 설정.json) · `근대 국한문/` · (앞으로 중세 …) · `공용/`(경계검출.onnx — 모델마다 같이 씀)"""
+    """`폴더`(묶음의 `모델/`)에서 근대 순한글 모델을 돌려주고, `align` 의 경계 검출기도 ONNX 것으로 끼움.
+    폴더: `근대 순한글/`(옛한글모델.onnx · 설정.json) · `근대 국한문/` · `공용/`(경계검출.onnx)"""
     import align
     align._검출기 = 검출기(os.path.join(폴더, "공용"), 스레드)
     return 모델(os.path.join(폴더, "근대 순한글"), 스레드)
