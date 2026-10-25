@@ -858,6 +858,7 @@ def 모델자르기계획(mdl, geo, span=3):
 
 EDGE_MEDIAN = 0.6     # 끝 열 보호 — 글자 수가 열들 중앙값의 이 몫 넘고
 EDGE_MEDIAN_LOW = 0.15  #   확신 0.5 미만 칸이 이 몫 이하인 열은 확신으로 떼지 않음. None = 끔
+EDGE_FEW = 4          # 끝에서 뗄 때 읽은 열(빈 후보 열 빼고)이 이만큼 이하면 확신으로 떼지 않음. None = 옛 셈(빈 열까지 셈)
 
 
 def 가장자리다듬기(geo, 열들, δ=EDGE_DROP, 최대=EDGE_MAX, 겹침=EDGE_OVERLAP,
@@ -960,10 +961,14 @@ def 가장자리다듬기(geo, 열들, δ=EDGE_DROP, 최대=EDGE_MAX, 겹침=EDG
                 return True
         return False
     나쁨 = lambda i, d, j: 열들[i] is None or (점(i) < 기준 - d and not 보호(i, j)) or 막대(i) or 막대줄(i)
+    if EDGE_FEW is None:
+        넉넉 = lambda i: len(남) > 4
+    else:                                   # 빈 후보 열은 늘 뗄 수 있고, 읽은 열은 `EDGE_FEW` 넘게 남을 때만
+        넉넉 = lambda i: 열들[i] is None or sum(열들[q] is not None for q in 남) > EDGE_FEW
     for _ in range(최대):
-        if len(남) > 4 and 나쁨(남[0], d앞, 남[0] - 1): 남.pop(0)
+        if 남 and 넉넉(남[0]) and 나쁨(남[0], d앞, 남[0] - 1): 남.pop(0)
         else: break
     for _ in range(최대):
-        if len(남) > 4 and 나쁨(남[-1], d뒤, 남[-1] + 1): 남.pop()
+        if 남 and 넉넉(남[-1]) and 나쁨(남[-1], d뒤, 남[-1] + 1): 남.pop()
         else: break
     return 남

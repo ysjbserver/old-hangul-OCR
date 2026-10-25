@@ -2383,9 +2383,10 @@ let NOTCHAR_CONF = 0.5, NOTCHAR_WIDTH = 0.5, NOTCHAR_ROW = 0.9, NOTCHAR_KEEP = [
  * ① 겹친 이웃(가운데가 자간×겹침 안)은 점수 높은 쪽만 — 같으면 앞의 것
  * ② 끝 쪽 이웃 사이에 광곽 세로줄이 있으면 가장 안쪽 줄 너머를 떼고, 그쪽 문턱은 안δ
  * ③ 끝에서부터, 가운데 열 중앙값보다 로그 확신이 문턱 넘게 낮은 열을 한쪽에 `최대` 개까지.
- *   다섯 열 아래로는 안 뗌
+ *   읽은 열(빈 열 빼고)이 `EDGE_FEW` 이하면 확신으로는 안 뗌
  */
 let EDGE_MEDIAN = 0.6, EDGE_MEDIAN_LOW = 0.15;   // align.EDGE_MEDIAN · EDGE_MEDIAN_LOW — 설정 `끝열보호` [몫, 낮은칸]
+let EDGE_FEW = 4;   // align.EDGE_FEW — 설정 `끝열적음` (null = 빈 열까지 셈)
 
 function 가장자리다듬기(geo, 열들, δ, 최대, 겹침, 안δ) {
   if (δ === undefined) δ = EDGE_DROP;
@@ -2506,11 +2507,13 @@ function 가장자리다듬기(geo, 열들, δ, 최대, 겹침, 안δ) {
     return false;
   };
   const 나쁨 = function (i, d, j) { return 열들[i] === null || (점(i) < 기준 - d && !보호(i, j)) || 막대(i) || 막대줄(i); };
+  const 넉넉 = EDGE_FEW === null ? function () { return 남.length > 4; }
+    : function (i) { return 열들[i] === null || 남.filter(function (q) { return 열들[q] !== null; }).length > EDGE_FEW; };
   for (let t = 0; t < 최대; t++) {
-    if (남.length > 4 && 나쁨(남[0], d앞, 남[0] - 1)) 남.shift(); else break;
+    if (남.length && 넉넉(남[0]) && 나쁨(남[0], d앞, 남[0] - 1)) 남.shift(); else break;
   }
   for (let t = 0; t < 최대; t++) {
-    if (남.length > 4 && 나쁨(남[남.length - 1], d뒤, 남[남.length - 1] + 1)) 남.pop(); else break;
+    if (남.length && 넉넉(남[남.length - 1]) && 나쁨(남[남.length - 1], d뒤, 남[남.length - 1] + 1)) 남.pop(); else break;
   }
   return 남;
 }
@@ -2890,6 +2893,7 @@ const API = {
     if (s.광곽한쪽 !== undefined) FRAME_ONESIDE = s.광곽한쪽;
     if (s.광곽고랑줄 !== undefined) FRAME_GUTTER_LINE = s.광곽고랑줄;
     if (s.끝열보호 !== undefined) { EDGE_MEDIAN = s.끝열보호 ? s.끝열보호[0] : null; if (s.끝열보호) EDGE_MEDIAN_LOW = s.끝열보호[1]; }
+    if (s.끝열적음 !== undefined) EDGE_FEW = s.끝열적음;
     if (s.상자맞춤 !== undefined) { CROP_FIT = s.상자맞춤[0]; CROP_FIT_RATIO = s.상자맞춤[1]; CROP_FIT_TO = s.상자맞춤[2]; }
     if (s.자간글자폭 !== undefined) { RATIO_FIT = s.자간글자폭 ? s.자간글자폭.slice(0, 2) : null; if (s.자간글자폭) RATIO_FIT_OVER = s.자간글자폭[2]; }
     if (s.잉크끝 !== undefined) { INK_EDGE = s.잉크끝; EDGE_ZONE = s.끝띠몫; STRIP_FILL = s.끝띠채움; }

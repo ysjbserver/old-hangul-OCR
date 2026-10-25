@@ -50,7 +50,7 @@ def 후보찾기(mdl, geo, 글자들, raw):
         mid = max(1.0, float(np.median(heights)))
         if any(h < mid * 0.55 or h > mid * 1.7 for h in heights):
             continue
-        L, V, T, cf = mdl.read(geo['image'], align._맞춤상자(np.asarray(geo['image']), boxes, geo))
+        L, V, T, cf = mdl.read(geo['image'], align._맞춤상자(align.잉크판(geo), boxes, geo))
         if [norm(mdl.letter(l, v, t)) for l, v, t in zip(L, V, T)] != [z[0] for z in 주변]:
             continue
         if min(cf) < 0.8 or min(cf[3:3 + d - c]) < 0.90:

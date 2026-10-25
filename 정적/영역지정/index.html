@@ -303,6 +303,7 @@ function 그림받기(url) {
   });
 }
 
+let 읽은주소 = null;   // 마지막으로 불러온 주소 칸 글 — 바뀌었으면 그 안의 쪽 번호가 쪽 칸보다 앞섬
 async function 불러오기() {
   const p = 해석($("src").value);
   if (!p.file) { 알림("파일 이름을 넣어 주세요", true); return; }
@@ -311,7 +312,12 @@ async function 불러오기() {
   $("autoBtn").disabled = true;
   $("stage").hidden = true; $("empty").hidden = false;
   const multi = /\.(pdf|djvu|tiff?)$/i.test(p.file);
-  const page = $("pageNo").value ? +$("pageNo").value : (p.page || (multi ? 1 : null));
+  const 새주소 = $("src").value.trim() !== 읽은주소;
+  읽은주소 = $("src").value.trim();
+  const 칸쪽 = parseInt($("pageNo").value, 10);
+  const page = !multi ? null                       // 한 장짜리 그림은 쪽 번호 없음(서버에는 1쪽)
+    : (새주소 && p.page) ? p.page
+    : (칸쪽 >= 1 ? 칸쪽 : (p.page || 1));
   $("pageNo").value = page || "";
   Object.assign(st, { host: p.host, file: p.file, page, 조각: [], 고름: null, g: null });
   그리기목록();
@@ -343,12 +349,20 @@ async function 불러오기() {
     st.자간비 = 잰.자간비 || 설정.기본자간비;
     st.열간격 = 잰.열간격;
     st.열들 = 잰.열들;
+    let 파일자간 = false;
+    if (서버 && st.file) {              // 서버가 파일을 살펴 고른 읽기 자간비가 있으면 그것을 씀
+      try {
+        const 살 = await (await fetch(서버 + "api/inspect?file=" + encodeURIComponent(st.file))).json();
+        if (세대 !== 쪽세대) return;
+        if (살 && 살.상태 === "끝" && 살.값 && 살.값.읽기자간비 > 0.2) { st.자간비 = 살.값.읽기자간비; 파일자간 = true; }
+      } catch (e) { /* 못 받으면 이 쪽에서 잰 값 */ }
+    }
     $("ratioIn").value = st.자간비.toFixed(3);
     await 모델준비;
     if (세대 !== 쪽세대) return;
     $("autoBtn").disabled = false;
     알림(p.file + (page ? " · " + page + "쪽" : "") + " — 자간비 " + st.자간비.toFixed(3)
-         + (잰.자간비 ? "" : "(못 재서 기본값)") + (st.열간격 ? " · 열 간격 " + Math.round(st.열간격) + "px" : " · 열 간격 못 잼")
+         + (파일자간 ? "(파일에서 고른 읽기 자간)" : 잰.자간비 ? "" : "(못 재서 기본값)") + (st.열간격 ? " · 열 간격 " + Math.round(st.열간격) + "px" : " · 열 간격 못 잼")
          + ". 스캔 위에 상자를 치세요.");
     history.replaceState(null, "", "?" + new URLSearchParams(Object.assign({ host: p.host, file: p.file, page: page || "" }, 모델이름 !== "hangul" ? { model: 모델이름 } : {})));
   } catch (e) { if (세대 === 쪽세대) 알림(e.message || String(e), true); }

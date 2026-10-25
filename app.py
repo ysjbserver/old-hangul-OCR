@@ -181,11 +181,13 @@ def 스캔(파일, 쪽):
             raise 손님오류(f"스캔을 받지 못했습니다({r}) — {파일} {쪽}쪽")
     else:
         p = os.path.join(d, "0001.png")
-        if not os.path.exists(p):
-            im = Image.open(__import__("io").BytesIO(step1_collect._open(정보["주소"]))).convert("L")
-            if im.size[0] != 너비:
-                im = im.resize((너비, round(im.size[1] * 너비 / im.size[0])), Image.BICUBIC)
-            im.save(p)
+        with _한장잠금:                    # 같은 그림을 동시에 받지 않게 · 다 쓴 뒤 옮김(반쯤 쓴 그림을 읽지 않게)
+            if not os.path.exists(p):
+                im = Image.open(__import__("io").BytesIO(step1_collect._open(정보["주소"]))).convert("L")
+                if im.size[0] != 너비:
+                    im = im.resize((너비, round(im.size[1] * 너비 / im.size[0])), Image.BICUBIC)
+                im.save(p + ".part", "PNG")
+                os.replace(p + ".part", p)
     os.utime(p)
     if r_정리.acquire(blocking=False):
         try:
@@ -226,6 +228,7 @@ def 진단정보(파일, 쪽, 경로, 결과):
 
 
 r_정리 = threading.Lock()
+_한장잠금 = threading.Lock()
 _그림들 = OrderedDict()                   # (파일, 쪽) → (PIL 회색 그림, numpy) — 최근 6쪽
 _그림잠금 = threading.Lock()
 
@@ -247,7 +250,7 @@ def 그림(파일, 쪽):
 
 # ── 파일마다 처음 한 번 — 판형 · 자간비 · 판짜임 (`읽기.js` `판형살피기` 와 같은 셈) ─────
 설정파일 = os.path.join(캐시, "_파일설정.json")
-판형판 = 4                               # 판정 규칙을 바꾸면 올림(기억한 값을 버림) — `읽기.js` `판형판` 과 같은 뜻
+판형판 = 5                               # 판정 규칙을 바꾸면 올림(기억한 값을 버림) — `읽기.js` `판형판` 과 같은 뜻
 _살핀 = {}
 _살핌일 = {}                              # 파일 → {진행, 오류}
 _살핌잠금 = threading.Lock()
@@ -304,6 +307,14 @@ def _살피기(파일):
             짜 = page.판짜임정하기(짜임)
             if 짜:
                 값["판짜임"] = 짜
+            if 잰:                         # 읽기 자간 — 순한글 모델 확신으로 고름(`page.읽기자간고르기`)
+                _살핌일[파일]["진행"] = "읽기 자간 고르는 중"
+                단쪽그림 = [길[p] for p in 단쪽 if p in 길]
+                표준 = 짜["자간"] if 짜 and page.SCAN_PITCH else None
+                고를쪽 = page.읽기자간쪽(단쪽그림, float(잰), 판형, 짜) or 단쪽그림[:page.READ_PICK_PAGES]
+                고른, _ = page.읽기자간고르기(고를쪽, float(잰), 판형, 모델, 표준)
+                if 고른 != float(잰):
+                    값["읽기자간비"] = float(고른)
         with _살핌잠금:
             _살핀[파일] = 값
             _살핌일.pop(파일, None)

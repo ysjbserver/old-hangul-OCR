@@ -567,7 +567,7 @@ def 맞대기(mdl, geo, 글자들, span=3, 경계=False):
     if r.get("사유"):
         return dict(사유=r["사유"])
     boxes, assign = r["boxes"], r["assign"]
-    sL, sV, sT = 확률읽기(mdl, geo["image"], align._맞춤상자(np.asarray(geo["image"]), boxes, geo))   # 상자 맞춤(행간 넓은 쪽)
+    sL, sV, sT = 확률읽기(mdl, geo["image"], align._맞춤상자(align.잉크판(geo), boxes, geo))   # 상자 맞춤(행간 넓은 쪽) — `to_text` 와 같은 그림으로
     rL, rV, rT = mdl.codes(letters, decompose)
     kL, kV, kT = sL.argmax(1), sV.argmax(1), sT.argmax(1)
     확신 = np.minimum(np.minimum(sL.max(1), sV.max(1)), sT.max(1))
