@@ -43,6 +43,7 @@ TOP_MIN   = 0.80    # 모델 1순위의 확신(세 머리 중 가장 낮은 것)
 조각문턱 = 0.12     # "조각" 후보 — 열 간격이 표준에서 벗어난 쪽에서 간격이 표준의 이 몫 안인 다른 문턱으로 찾은 읽는 기하
                     #   (전사대조만 — 인식은 `scan.PITCH_NEAR` 0 그대로)
 쪽자간차이 = 0.02   # "쪽자간" 후보 — 이 쪽 그림으로 잰 자간비가 쓰던 값과 이만큼(몫) 넘게 다를 때만 해 본다
+끝맞춤    = (0.3, 1.5)   # "끝맞춤" 후보 — 꽉 찬 열의 위 · 아래 끝이 다른 열들(중앙값)보다 자간의 이 범위만큼 짧으면 거기까지 늘림
 열문턱    = 0.75    # 한 열에서 모델과 전사문이 이만큼 안 맞으면 그 열의 '글자가 다름' 후보는 내지 않는다(열이 통째로 어긋난 것)
 받침잘림높이 = 0.8   # 스캔 쪽에서 받침만 빠졌고 상자가 그 열 가운데 높이의 이만큼도 안 되면 버린다
                     # (상자를 짧게 잘라 받침이 다음 칸으로 넘어간 것)
@@ -395,6 +396,35 @@ def 연한구간기하(geo):
     return out
 
 
+def 열끝맞춤기하(geo):
+    """꽉 찬 열끼리 위 · 아래 끝을 맞춘 후보(구간만 늘림) — 획이 가는 첫 · 끝 글자를 구간이 놓쳐
+    그 열에서 글자를 쪼개 칸 수를 채운 쪽용. 늘리기만 하고 줄이지 않음."""
+    if geo is None or geo["단"] != 1 or len(geo["cols"]) < 4:
+        return None
+    real = [s for s in geo["spans"] if s]
+    if len(real) < 4:
+        return None
+    pitch = geo["pitch"]
+    lo, hi = pitch * 끝맞춤[0], pitch * 끝맞춤[1]
+    위 = int(np.median([a for a, _ in real]))
+    아래 = int(np.median([b for _, b in real]))
+    spans, 바뀜 = [], 0
+    for s in geo["spans"]:
+        if s is None or s[0] > 위 + hi or s[1] < 아래 - hi:   # 짧은 열(장 끝 · 들여 쓴 열)은 그대로
+            spans.append(s)
+            continue
+        a = 위 if lo < s[0] - 위 <= hi else s[0]
+        b = 아래 if lo < 아래 - s[1] <= hi else s[1]
+        바뀜 += (a, b) != tuple(s)
+        spans.append((a, b))
+    if not 바뀜:
+        return None
+    out = geo.copy()
+    out["spans"] = spans
+    out["est"] = [0 if s is None else max(1, round((s[1] - s[0]) / pitch)) for s in spans]
+    return out
+
+
 def 본문열기하(geo):
     """광곽 안의 잉크로만 열을 다시 찾은 후보(바깥 그림자 · 이웃 쪽이 열 문턱을 끌어올린 쪽용)."""
     body = 본문기하(geo)
@@ -567,7 +597,7 @@ def 맞대기(mdl, geo, 글자들, span=3, 경계=False):
     if r.get("사유"):
         return dict(사유=r["사유"])
     boxes, assign = r["boxes"], r["assign"]
-    sL, sV, sT = 확률읽기(mdl, geo["image"], align._맞춤상자(np.asarray(geo["image"]), boxes, geo))   # 상자 맞춤(행간 넓은 쪽)
+    sL, sV, sT = 확률읽기(mdl, geo["image"], align._맞춤상자(align.잉크판(geo), boxes, geo))   # 상자 맞춤(행간 넓은 쪽) — `to_text` 와 같은 그림으로
     rL, rV, rT = mdl.codes(letters, decompose)
     kL, kV, kT = sL.argmax(1), sV.argmax(1), sT.argmax(1)
     확신 = np.minimum(np.minimum(sL.max(1), sV.max(1)), sT.max(1))
@@ -800,6 +830,8 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     "연한구간" = 그때까지 가장 잘 맞은 기하의 흐린 구간을 되살림(`연한구간기하`).
     "책머리" = 책 이름을 떼고 첫 짧은 열을 되살림(`책머리기하`).
     "연한" · "연한가장자리" = 흐린 쪽 잉크 문턱(`scan.INK_FAINT`)으로 잡은 읽는 기하 · 가장자리 기하 — 문턱이 올라가는 쪽만, 맨 뒤.
+    "끝맞춤" = 그때까지 가장 잘 맞은 기하에서 꽉 찬 열끼리 위 · 아래 끝을 맞춤(`열끝맞춤기하`) — 맨 뒤.
+               일치가 `다시볼일치` 를 넘어도 흔들린 열이 있으면 해 봄.
     후보가 앞 기하와 같으면 건너뜀.
     큰빼기 = 큰 활자 틀(`{{더크게|…}}` 책 이름) 안 글자를 빼고 맞대기. None 이면 일치가 모자라고 큰 활자 틀이 있을 때만 빼고도 해 봄.
     """
@@ -822,9 +854,9 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
         if 빼기 and 큰빼기 is None and (not 큰있음 or (best and (best[0].get("일치") or 0) >= 다시볼일치)):
             break                                 # 큰 활자 틀이 없거나 이미 잘 맞음
         for 판 in 기하들:
-            if best and (best[0].get("일치") or 0) >= 다시볼일치:
-                break                             # 자르는 기하로 잘 맞았으면 그만
-            if 판 in ("쪽자간", "본문", "연한본문", "본문열", "조각열", "가장자리", "연한구간", "책머리", "연한", "연한가장자리"):
+            if best and (best[0].get("일치") or 0) >= 다시볼일치 and not (판 == "끝맞춤" and best[0].get("흔들린열")):
+                continue                          # 잘 맞았으면 그만(흔들린 열이 남으면 끝맞춤만)
+            if 판 in ("쪽자간", "본문", "연한본문", "본문열", "조각열", "가장자리", "연한구간", "책머리", "연한", "연한가장자리", "끝맞춤"):
                 if 판 not in 본열:
                     if 판 in ("연한", "연한가장자리"):
                         if "연한" not in 본열:
@@ -842,6 +874,8 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                         본열[판] = 가장자리기하(mdl, slug, ip, 설정, 본열["읽기"])
                     elif 판 == "연한구간":
                         본열[판] = 연한구간기하(bestgeo)
+                    elif 판 == "끝맞춤":
+                        본열[판] = 열끝맞춤기하(bestgeo)
                     elif 판 == "책머리":
                         본열[판] = 책머리기하(본열.get("읽기자료") or 기하(slug, ip, True, 설정=설정))
                     elif 판 == "조각열":
@@ -864,7 +898,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                     이전 = len(글자들)
                     r = 맞대기(mdl, geo, 글자들, 경계=경계)
                     r["기하"], r["제목"], r["큰빼기"] = 판, kh, 빼기
-                    if 판 in ("본문", "연한본문", "본문열", "조각열", "가장자리", "연한구간", "책머리", "연한", "연한가장자리"):
+                    if 판 in ("본문", "연한본문", "본문열", "조각열", "가장자리", "연한구간", "책머리", "연한", "연한가장자리", "끝맞춤"):
                         r["_본문기하"] = geo
                     시도기록.append(dict(기하=판, 제목=kh, 큰빼기=빼기, 경계=경계,
                                       전사글자수=len(글자들), 일치=r.get("일치"),
@@ -917,7 +951,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     return best
 
 
-def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문", "연한본문", "본문열", "조각열", "연한구간", "책머리", "가장자리", "조각", "연한", "연한가장자리"), 합의=True, 밀림=False, 깨진=False,
+def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문", "연한본문", "본문열", "조각열", "연한구간", "책머리", "가장자리", "조각", "연한", "연한가장자리", "끝맞춤"), 합의=True, 밀림=False, 깨진=False,
          설정=None, 누락=True):
     """
     위키 원문(편집 상자의 본문) 한 쪽을 그 쪽 스캔과 맞댄다.
@@ -941,7 +975,7 @@ def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들
     for c in r["후보"]:
         c["합의"] = c["갈래"] not in 낱갈래 or not 합의
     # 연한구간 · 책머리는 그것을 고른 쪽에서만 합의에도 씀
-    조건후보 = ("연한구간", "책머리", "연한", "연한가장자리")
+    조건후보 = ("연한구간", "책머리", "연한", "연한가장자리", "끝맞춤")
     합의기하들 = tuple(p for p in 기하들 if p not in 조건후보 or p == r.get("기하"))
     읽기합의 = (True, "판심", "본문", "연한본문", "본문열", "조각열", "가장자리", "조각")
     if r.get("기하") in 조건후보:

@@ -104,14 +104,65 @@ def 판짜임정하기(잰것들):
             "열수": int(np.median([v[1] for v in got]))}
 
 
-읽기배율 = (0.88, 0.94, 1.00, 1.06, 1.12, 1.18, 1.24)
+읽기배율 = (0.88, 0.94, 1.00, 1.06, 1.12, 1.18, 1.24, 1.30, 1.36)
+READ_PICK_GAIN = 0.02    # 읽기 자간은 바탕보다 확신 로그 평균이 이만큼 넘게 나을 때만 바꿈
+READ_PICK_PAGES = 4      # 읽기 자간을 고를 때 읽어 볼 '좋음' 쪽 수
 
 
-def doc_read_ratio(slug, mdl=None):
+def 읽기자간고르기(그림들, 바탕, 단, mdl, 표준=None, 이득=READ_PICK_GAIN, 빈단=True, 알림=None):
     """
-    전사문 없이 읽을 때 쓰는 자간. 적혀 있으면 그것, 없으면 자간을 `읽기배율` 로 바꿔 읽어 보고
-    모델 확신도(로그 평균)가 가장 높은 값을 골라 적어 둔다(`교정/_자간.json` 의 `_읽기자간`).
-    이미 적힌 값은 건드리지 않는다.
+    쪽 그림(경로)들을 자간 `바탕` × `읽기배율` 로 읽어 확신 로그 평균이 가장 높은 자간을 고른다(전사문 안 씀).
+    하나 건너 배율부터 읽고 가장 좋은 배율의 양옆만 더 읽음. 바탕보다 `이득` 넘게 나을 때만 바꿈.
+    `알림` — 한 쪽을 읽을 때마다 부름(진행 표시용, 많아야 `읽기자간횟수(len(그림들))` 번).
+    반환: (자간, {배율: 점수})
+    """
+    import align as _align
+    점수 = {}
+    def 재기(m):
+        if m not in 점수:
+            점 = []
+            for ip in 그림들:
+                geo = scan.page_geometry(ip, 바탕 * m, 단, True, True, 표준, 빈단=빈단)
+                if 알림:
+                    알림()
+                if geo is None:
+                    continue
+                _, (hyp, conf) = _align.잉크골라(geo, lambda g: _align.read_page(mdl, g), lambda r: r[1])
+                점 += list(np.log(np.clip(conf, 1e-6, None)))
+            점수[m] = float(np.mean(점)) if 점 else None
+        return 점수[m]
+    최고 = lambda: max((m for m in 점수 if 점수[m] is not None), key=점수.get, default=None)
+    for m in 읽기배율[::2]:
+        재기(m)
+    좋은 = 최고()
+    if 좋은 is not None:
+        k = 읽기배율.index(좋은)
+        for q in (k - 1, k + 1):
+            if 0 <= q < len(읽기배율):
+                재기(읽기배율[q])
+        좋은 = 최고()
+    기준 = 점수.get(1.0)
+    if 좋은 is None or 기준 is None or 점수[좋은] - 기준 < 이득:
+        return 바탕, 점수
+    return 바탕 * 좋은, 점수
+
+
+def 읽기자간횟수(쪽수):
+    """`읽기자간고르기` 가 쪽을 읽는 횟수의 위 끝 — 하나 건너 배율 + 양옆 둘."""
+    return 쪽수 * (len(읽기배율[::2]) + 2)
+
+
+def 읽기자간쪽(그림들, 바탕, 단, 판짜임=None, n=READ_PICK_PAGES, 빈단=True):
+    """읽기 자간을 고를 쪽 — '좋음' 쪽에서 고르게 n 장(앞머리 · 표지가 섞이면 확신이 흐려짐). 판짜임 = {자간, 열수}."""
+    표준 = (판짜임 or {}).get("자간")
+    좋음 = [ip for ip in 그림들 if 쪽건강(None, scan.page_geometry(ip, 바탕, 단, True, True, 표준, 빈단=빈단), 표준=판짜임)[0] == "좋음"]
+    return corpus.sample(좋음, n) if len(좋음) > n else 좋음
+
+
+def doc_read_ratio(slug, mdl=None, 전사문무시=False):
+    """
+    전사문 없이 읽을 때 쓰는 자간. 적혀 있으면 그것, 없으면 `읽기자간고르기` 로 골라 적어 둔다(`교정/_자간.json` 의 `_읽기자간`).
+    이미 적힌 값은 건드리지 않는다. 전사문이 있으면 재지 않음 — `전사문무시`('처음보는' 책)면 그래도 잼.
     """
     r = corpus.read_ratio(slug)
     if r:
@@ -119,37 +170,14 @@ def doc_read_ratio(slug, mdl=None):
     바탕 = doc_ratio(slug)
     if not 바탕 or mdl is None:
         return 바탕
-    # 전사문이 있으면 자동 추정을 쓰지 않는다 — 전사문으로 재는 쪽이 낫다
-    if corpus.pages(slug):
+    if corpus.pages(slug) and not 전사문무시:
         return 바탕
-    import align as _align
     단 = doc_tiers(slug)
-    # '좋음' 쪽만 본다 — 앞머리(표지·목차)가 섞이면 확신도가 흐려진다
-    후보 = [t for t in corpus.sample(corpus.images(slug), 30)
-            if 쪽건강(slug, scan.page_geometry(t[2], 바탕, 단))[0] == "좋음"]
-    골라 = corpus.sample(후보, 6) or corpus.sample(corpus.images(slug), 6)
-    최고, 고른, 기준 = None, 바탕, None
-    for m in 읽기배율:
-        점 = []
-        for _, pg, ip in 골라:
-            geo = scan.page_geometry(ip, 바탕 * m, 단, True)
-            if geo is None:
-                continue
-            hyp, conf = _align.read_page(mdl, geo)
-            if hyp:
-                점 += list(np.log(np.clip(conf, 1e-6, None)))
-        if 점:
-            v = float(np.mean(점))
-            if m == 1.0:
-                기준 = v
-            if 최고 is None or v > 최고:
-                최고, 고른 = v, 바탕 * m
-    # 바탕값보다 뚜렷이 나을 때만 바꾼다 — 근소한 차이로 옮기면 손해
-    if 기준 is not None and 최고 is not None and 최고 - 기준 < 0.02:
-        고른 = 바탕
+    표준 = doc_layout(slug)
+    그림 = [t[2] for t in corpus.sample(corpus.images(slug), 8)]
+    고른, 점수 = 읽기자간고르기(읽기자간쪽(그림, 바탕, 단, 표준) or 그림[:READ_PICK_PAGES], 바탕, 단, mdl, (표준 or {}).get("자간"))
     corpus.save_read_ratio(slug, 고른)
-    print(f"[{slug}] 읽기 자간을 {고른:.4f} 로 정했습니다 "
-          f"(바탕 {바탕:.4f} 의 {고른/바탕:.2f}배 — 전사문 없이 확신도로).")
+    print(f"[{slug}] 읽기 자간을 {고른:.4f} 로 정했습니다 (바탕 {바탕:.4f} 의 {고른/바탕:.2f}배 — 전사문 없이 확신도로).")
     return 고른
 
 

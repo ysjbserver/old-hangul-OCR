@@ -40,6 +40,7 @@ import time
 import traceback
 import urllib.parse
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 
 여기 = os.path.dirname(os.path.abspath(__file__))
 os.chdir(여기)
@@ -181,11 +182,13 @@ def 스캔(파일, 쪽):
             raise 손님오류(f"스캔을 받지 못했습니다({r}) — {파일} {쪽}쪽")
     else:
         p = os.path.join(d, "0001.png")
-        if not os.path.exists(p):
-            im = Image.open(__import__("io").BytesIO(step1_collect._open(정보["주소"]))).convert("L")
-            if im.size[0] != 너비:
-                im = im.resize((너비, round(im.size[1] * 너비 / im.size[0])), Image.BICUBIC)
-            im.save(p)
+        with _한장잠금:                    # 같은 그림을 동시에 받지 않게 · 다 쓴 뒤 옮김(반쯤 쓴 그림을 읽지 않게)
+            if not os.path.exists(p):
+                im = Image.open(__import__("io").BytesIO(step1_collect._open(정보["주소"]))).convert("L")
+                if im.size[0] != 너비:
+                    im = im.resize((너비, round(im.size[1] * 너비 / im.size[0])), Image.BICUBIC)
+                im.save(p + ".part", "PNG")
+                os.replace(p + ".part", p)
     os.utime(p)
     if r_정리.acquire(blocking=False):
         try:
@@ -226,6 +229,7 @@ def 진단정보(파일, 쪽, 경로, 결과):
 
 
 r_정리 = threading.Lock()
+_한장잠금 = threading.Lock()
 _그림들 = OrderedDict()                   # (파일, 쪽) → (PIL 회색 그림, numpy) — 최근 6쪽
 _그림잠금 = threading.Lock()
 
@@ -247,7 +251,7 @@ def 그림(파일, 쪽):
 
 # ── 파일마다 처음 한 번 — 판형 · 자간비 · 판짜임 (`읽기.js` `판형살피기` 와 같은 셈) ─────
 설정파일 = os.path.join(캐시, "_파일설정.json")
-판형판 = 4                               # 판정 규칙을 바꾸면 올림(기억한 값을 버림) — `읽기.js` `판형판` 과 같은 뜻
+판형판 = 5                               # 판정 규칙을 바꾸면 올림(기억한 값을 버림) — `읽기.js` `판형판` 과 같은 뜻
 _살핀 = {}
 _살핌일 = {}                              # 파일 → {진행, 오류}
 _살핌잠금 = threading.Lock()
@@ -277,26 +281,37 @@ def _살피기(파일):
             가름쪽, 단쪽 = 고르게쪽(n, 12), 고르게쪽(n, 8)
             모두 = 가름쪽 + [p for p in 단쪽 if p not in 가름쪽]
             가름, 단, 길, 짜임 = {}, {}, {}, []
-            for i, p in enumerate(모두):
-                _살핌일[파일]["진행"] = f"{i + 1}/{len(모두)}쪽"
-                try:
-                    ip = 스캔(파일, p)
-                    if p in 가름쪽:
-                        가름[p] = scan.가름줄측정(ip)
-                    if p in 단쪽:
-                        단[p] = scan.tier_measure(ip)
-                        길[p] = ip
-                    g = np.array(Image.open(ip).convert("L"))
-                    xp, cols = scan.find_columns(g)
-                    짜임.append((xp, len(cols)) if xp and cols else None)
-                except 손님오류:
-                    raise
-                except Exception:
-                    traceback.print_exc()
-                    가름[p] = None
-                    단[p] = None
+            # 진행 "n/N쪽" — 받아 재는 쪽 + 읽기 자간을 고르며 읽는 쪽을 한 줄로 셈(N 은 읽을 쪽이 정해지면 줄어듦)
+            셈 = {"한": 0, "모두": len(모두) + page.읽기자간횟수(page.READ_PICK_PAGES)}
+            def 진행(더=0):
+                셈["한"] += 더
+                _살핌일[파일]["진행"] = f"{min(셈['한'], 셈['모두'])}/{셈['모두']}쪽"
+            # 스캔은 `step1_collect.WORKERS` 장씩 함께 받고(위키미디어 권장 상한), 재기는 쪽 차례대로
+            받기 = ThreadPoolExecutor(max_workers=step1_collect.WORKERS)
+            받을것 = [받기.submit(스캔, 파일, p) for p in 모두]
+            try:
+                for i, p in enumerate(모두):
+                    셈["한"] = i
+                    진행(1)
+                    try:
+                        ip = 받을것[i].result()
+                        if p in 가름쪽:
+                            가름[p] = scan.가름줄측정(ip)
+                        if p in 단쪽:
+                            단[p] = scan.tier_measure(ip)
+                            길[p] = ip
+                        g = np.array(Image.open(ip).convert("L"))
+                        xp, cols = scan.find_columns(g)
+                        짜임.append((xp, len(cols)) if xp and cols else None)
+                    except 손님오류:
+                        raise
+                    except Exception:
+                        traceback.print_exc()
+                        가름[p] = None
+                        단[p] = None
+            finally:
+                받기.shutdown(wait=False, cancel_futures=True)
             판형, _ = page.판형정하기([가름.get(p) for p in 가름쪽], [단.get(p) for p in 단쪽])
-            _살핌일[파일]["진행"] = "자간 재는 중"
             잰 = scan.estimate_ratio([길[p] for p in 단쪽 if p in 길], 판형)   # 너무 크면 다시 잼(scan.RATIO_RECHECK)
             값 = {"단": list(판형) if isinstance(판형, (list, tuple)) else 판형}
             if 잰:
@@ -304,6 +319,15 @@ def _살피기(파일):
             짜 = page.판짜임정하기(짜임)
             if 짜:
                 값["판짜임"] = 짜
+            if 잰:                         # 읽기 자간 — 순한글 모델 확신으로 고름(`page.읽기자간고르기`)
+                단쪽그림 = [길[p] for p in 단쪽 if p in 길]
+                표준 = 짜["자간"] if 짜 and page.SCAN_PITCH else None
+                고를쪽 = page.읽기자간쪽(단쪽그림, float(잰), 판형, 짜) or 단쪽그림[:page.READ_PICK_PAGES]
+                셈["한"], 셈["모두"] = len(모두), len(모두) + page.읽기자간횟수(len(고를쪽))
+                진행()
+                고른, _ = page.읽기자간고르기(고를쪽, float(잰), 판형, 모델, 표준, 알림=lambda: 진행(1))
+                if 고른 != float(잰):
+                    값["읽기자간비"] = float(고른)
         with _살핌잠금:
             _살핀[파일] = 값
             _살핌일.pop(파일, None)
@@ -598,7 +622,9 @@ def _json기본(o):
         ".md": "text/plain; charset=utf-8", ".onnx": "application/octet-stream"}
 
 # 바깥 주소 → 정적 파일(앞에 서버 주소를 붙여 줄 소도구는 따로)
-소도구들 = {"/ocr.js": "소도구.js", "/소도구.js": "소도구.js", "/compare.js": "전사대조.js", "/전사대조.js": "전사대조.js"}
+# 소도구는 한 묶음(공용 · 인식 · 교정) — 옛 주소 compare.js 도 같은 묶음(두 줄을 다 두어도 한 번만 섬)
+소도구묶음 = ("공용.js", "소도구.js", "전사대조.js")
+소도구들 = {"/ocr.js": 소도구묶음, "/소도구.js": 소도구묶음, "/compare.js": 소도구묶음, "/전사대조.js": 소도구묶음}
 영역길 = ("/area/", "/영역지정/")
 옛영역길 = "/region"                 # → /area/ 로 넘김
 
@@ -664,11 +690,14 @@ def _경로(env):
 
 
 def _정적(start, 이름, 앞=b""):
-    p = os.path.normpath(os.path.join(정적, 이름))
-    if not p.startswith(os.path.normpath(정적) + os.sep) or not os.path.isfile(p):
-        return _응답(start, {"오류": "없는 주소"}, 404)
-    with open(p, "rb") as f:
-        b = 앞 + f.read()
+    # 이름이 여럿이면 줄바꿈으로 이어 붙임(소도구 묶음)
+    b = 앞
+    for i, 하나 in enumerate((이름,) if isinstance(이름, str) else 이름):
+        p = os.path.normpath(os.path.join(정적, 하나))
+        if not p.startswith(os.path.normpath(정적) + os.sep) or not os.path.isfile(p):
+            return _응답(start, {"오류": "없는 주소"}, 404)
+        with open(p, "rb") as f:
+            b += (b"\n" if i else b"") + f.read()
     머리 = 공통머리 + [("Content-Type", 갈래.get(os.path.splitext(p)[1], "application/octet-stream")),
                     ("Content-Length", str(len(b))), ("Cache-Control", "no-cache")]
     start("200 OK", 머리)

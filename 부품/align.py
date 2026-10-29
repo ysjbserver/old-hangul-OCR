@@ -62,6 +62,8 @@ CUT_CLIP  = 0.0       # 경계 확률을 [이것, 1 − 이것] 으로 자른다
 CUT_ROUND = 10000     # 경계 확률을 1/이것 단위로 반올림(은행가) — 빈 종이에서 검출기가 내는 '평평한' 값을 정확히 평평하게
 CUT_LEARN_PATH = os.path.join(경로.모델, "경계검출.pt")
 _검출기 = None
+_경계기억 = []                      # [(검출기, 그림, {(x0, x1): 경계 확률})]
+경계기억수 = 6                      # 경계 확률을 둘 그림 수
 
 
 def 경계프로파일(geo):
@@ -70,15 +72,26 @@ def 경계프로파일(geo):
     if _검출기 is None:
         import 경계검출
         _검출기 = 경계검출.검출기(CUT_LEARN_PATH)
-    g = np.asarray(geo["image"].convert("L")) if hasattr(geo["image"], "convert") else np.asarray(geo["image"])
+    global _경계기억
+    im = geo["image"]
+    기억 = next((d for 검, 그림, d in _경계기억 if 검 is _검출기 and 그림 is im), None)
+    if 기억 is None:                               # 같은 검출기 · 같은 그림의 열은 다시 셈하지 않음(최근 몇 장)
+        기억 = {}
+        _경계기억 = [(_검출기, im, 기억)] + _경계기억[:max(0, 경계기억수 - 1)]
+    g = None
     out = []
     for i, (x0, x1) in enumerate(geo["crop_cols"]):
         sm = np.asarray(geo["sm"][i], dtype=float)
         sp = geo["spans"][i]
         if sp is None:
             out.append(sm); continue
+        q = 기억.get((x0, x1))
+        if q is None:
+            if g is None:
+                g = np.asarray(im.convert("L")) if hasattr(im, "convert") else np.asarray(im)
+            q = 기억[(x0, x1)] = _검출기.경계확률(g, x0, x1)
         # 1e-4 반올림 — 빈 종이의 거의 일정한 값을 평평하게 해 파이토치 · ONNX(읽기.js) 후보가 같아지게
-        p = np.clip(_검출기.경계확률(g, x0, x1)[:len(sm)], CUT_CLIP, 1 - CUT_CLIP)
+        p = np.clip(q[:len(sm)], CUT_CLIP, 1 - CUT_CLIP)
         p = np.round(p * CUT_ROUND) / CUT_ROUND
         크기 = max(1.0, float(sm[sp[0]:sp[1]].max())) if sp[1] > sp[0] else 1.0
         out.append((1 - CUT_MIX) * sm + CUT_MIX * (1 - p) * 크기)
@@ -315,8 +328,21 @@ FAINT_PICK = 0.93
 
 def 잉크판(geo):
     """잉크를 셀 그림 — 흐린 쪽이면 `scan.page_geometry` 가 문턱에 맞춰 어둡게 한 `잉크그림`. 모델에는 늘 `geo["image"]`."""
+    global _잉크판기억
     g = geo.get("잉크그림")
-    return g if g is not None else np.asarray(geo["image"])
+    if g is not None:
+        return g
+    im = geo["image"]
+    기억 = _잉크판기억
+    for 그림, a in 기억:
+        if 그림 is im:
+            return a
+    g = np.asarray(im)                             # PIL 에서 온 배열은 읽기 전용 — 같은 그림이면 함께 씀
+    _잉크판기억 = [(im, g)] + 기억[:2]
+    return g
+
+
+_잉크판기억 = []
 
 
 def 잉크골라(geo, 읽기, 확신들=None):
@@ -520,15 +546,23 @@ def _맞춤상자(g, boxes, geo):
 
 def _잉크몫(g, boxes):
     """상자마다 잉크(`scan.INK` 보다 어두운 화소)가 상자 넓이에서 차지하는 몫."""
-    ink = (g < scan.INK).astype(np.int64)
-    I = np.zeros((ink.shape[0] + 1, ink.shape[1] + 1), np.int64)
-    I[1:, 1:] = ink.cumsum(0).cumsum(1)
-    H, W = ink.shape
     out = np.zeros(len(boxes))
-    for k, (x0, y0, x1, y1) in enumerate(boxes):
-        x0, x1 = max(0, int(x0)), min(W, int(x1)); y0, y1 = max(0, int(y0)), min(H, int(y1))
-        if x1 > x0 and y1 > y0:
-            out[k] = (I[y1, x1] - I[y0, x1] - I[y1, x0] + I[y0, x0]) / ((x1 - x0) * (y1 - y0))
+    if not len(boxes):
+        return out
+    H, W = g.shape
+    b = np.asarray(boxes)
+    b = b.astype(np.int64) if b.dtype.kind in "iu" else np.trunc(b.astype(np.float64)).astype(np.int64)   # int() 와 같게
+    x0, y0 = np.maximum(b[:, 0], 0), np.maximum(b[:, 1], 0)
+    x1, y1 = np.minimum(b[:, 2], W), np.minimum(b[:, 3], H)
+    ok = np.flatnonzero((x1 > x0) & (y1 > y0))
+    # 상자는 열 띠(같은 x 범위)끼리 모여 있음 — 띠마다 줄별 잉크 수의 누적합 하나로 센다(정수라 값은 같음)
+    띠 = x0[ok] * (W + 1) + x1[ok]
+    for v in np.unique(띠):
+        k = ok[띠 == v]
+        a, z = int(x0[k[0]]), int(x1[k[0]])
+        C = np.zeros(H + 1, np.int64)
+        np.cumsum((g[:, a:z] < scan.INK).sum(1), out=C[1:])
+        out[k] = (C[y1[k]] - C[y0[k]]) / ((z - a) * (y1[k] - y0[k]))
     return out
 
 
@@ -559,22 +593,26 @@ def 열마다읽기(mdl, geo, span=3):
                    else build_plans(geo, geo["est"], span, allow_empty=False,
                                     그림자=경계프로파일(geo) if CUT_LEARN else None))
     g = 잉크판(geo)
-    pL, pV, pT, cf = mdl.read(geo["image"], _맞춤상자(g, flat, geo))
-    logc = np.log(np.clip(cf, 1e-6, None))
-    inkflag = None
-    pick = logc                              # 칸수를 고르는 데 쓰는 확신 — 빈 칸을 평균에서 뺄 때만 달라짐(열 점수는 그대로 logc)
-    if BLANK_SKIP is not None and len(flat):
-        ink = _잉크몫(g, flat)
-        pick = np.where(ink >= BLANK_SKIP, logc, np.nan)
-        inkflag = ink >= BLANK_SKIP
-    out = []
-    for opts in plans:
+
+    def 읽어(flat):
+        pL, pV, pT, cf = mdl.read(geo["image"], _맞춤상자(g, flat, geo))
+        logc = np.log(np.clip(cf, 1e-6, None))
+        inkflag = None
+        pick = logc                          # 칸수를 고르는 데 쓰는 확신 — 빈 칸을 평균에서 뺄 때만 달라짐(열 점수는 그대로 logc)
+        if BLANK_SKIP is not None and len(flat):
+            ink = _잉크몫(g, flat)
+            pick = np.where(ink >= BLANK_SKIP, logc, np.nan)
+            inkflag = ink >= BLANK_SKIP
+        return pL, pV, pT, cf, logc, pick, inkflag
+
+    def 고르기(opts, r):
+        """가장 자신 있는 칸수 후보 → (점수, 열 결과). 산술평균은 엉망인 칸 몇 개를 가려 버려 기하평균을 쓴다."""
+        pL, pV, pT, cf, logc, pick, inkflag = r
         opts = [o for o in opts if o[0] > 0]
         if not opts:
-            out.append(None)
-            continue
-        # 산술평균은 몇 개의 엉망인 칸을 나머지가 가려 버린다. 기하평균을 쓴다.
-        n, bx, s0, ln, _ = max(opts, key=lambda o: _고름점수(pick, logc, o, inkflag))
+            return None, None
+        o = max(opts, key=lambda o: _고름점수(pick, logc, o, inkflag))
+        n, bx, s0, ln, _ = o
         글, 확, 상 = [], [], []
         for j in range(ln):
             c = float(cf[s0 + j])
@@ -584,7 +622,26 @@ def 열마다읽기(mdl, geo, span=3):
                 if 폭 < NOTCHAR_WIDTH or 가로 >= NOTCHAR_ROW:
                     continue
             글.append(자); 확.append(c); 상.append(bx[j])
-        out.append((float(np.mean(logc[s0:s0+ln])), 글, 확, ln, 상))
+        return _고름점수(pick, logc, o, inkflag), (float(np.mean(logc[s0:s0+ln])), 글, 확, ln, 상)
+
+    r = 읽어(flat)
+    점수, out = [], []
+    for opts in plans:
+        s, o = 고르기(opts, r)
+        점수.append(s); out.append(o)
+    끝 = geo.get("끝맞춤") if scan.SPAN_ALIGN else None
+    if 끝:
+        # 끝을 맞춘 구간(`scan._끝맞추기`)으로도 읽어 고름 점수가 더 높은 열만 바꾼다.
+        geo2 = dict(geo, spans=끝, est=[0 if s is None else max(1, int(round((s[1] - s[0]) / geo["pitch"]))) for s in 끝])
+        plans2, flat2 = build_plans(geo2, geo2["est"], span, allow_empty=False,
+                                    그림자=경계프로파일(geo2) if CUT_LEARN else None)
+        r2 = 읽어(flat2)
+        for i, opts in enumerate(plans2):
+            if 끝[i] is None or out[i] is None:
+                continue
+            s, o = 고르기(opts, r2)
+            if s is not None and s > 점수[i]:
+                out[i] = o
     if HEADING:
         큰제목읽기(mdl, geo, out, span)
     if BUNJU:
@@ -858,6 +915,7 @@ def 모델자르기계획(mdl, geo, span=3):
 
 EDGE_MEDIAN = 0.6     # 끝 열 보호 — 글자 수가 열들 중앙값의 이 몫 넘고
 EDGE_MEDIAN_LOW = 0.15  #   확신 0.5 미만 칸이 이 몫 이하인 열은 확신으로 떼지 않음. None = 끔
+EDGE_FEW = 4          # 끝에서 뗄 때 읽은 열(빈 후보 열 빼고)이 이만큼 이하면 확신으로 떼지 않음. None = 옛 셈(빈 열까지 셈)
 
 
 def 가장자리다듬기(geo, 열들, δ=EDGE_DROP, 최대=EDGE_MAX, 겹침=EDGE_OVERLAP,
@@ -960,10 +1018,14 @@ def 가장자리다듬기(geo, 열들, δ=EDGE_DROP, 최대=EDGE_MAX, 겹침=EDG
                 return True
         return False
     나쁨 = lambda i, d, j: 열들[i] is None or (점(i) < 기준 - d and not 보호(i, j)) or 막대(i) or 막대줄(i)
+    if EDGE_FEW is None:
+        넉넉 = lambda i: len(남) > 4
+    else:                                   # 빈 후보 열은 늘 뗄 수 있고, 읽은 열은 `EDGE_FEW` 넘게 남을 때만
+        넉넉 = lambda i: 열들[i] is None or sum(열들[q] is not None for q in 남) > EDGE_FEW
     for _ in range(최대):
-        if len(남) > 4 and 나쁨(남[0], d앞, 남[0] - 1): 남.pop(0)
+        if 남 and 넉넉(남[0]) and 나쁨(남[0], d앞, 남[0] - 1): 남.pop(0)
         else: break
     for _ in range(최대):
-        if len(남) > 4 and 나쁨(남[-1], d뒤, 남[-1] + 1): 남.pop()
+        if 남 and 넉넉(남[-1]) and 나쁨(남[-1], d뒤, 남[-1] + 1): 남.pop()
         else: break
     return 남

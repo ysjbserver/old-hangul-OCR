@@ -97,7 +97,16 @@ def _width_of(path):
     except Exception:
         return 0
 
+_받는쪽 = {}                    # 파일 경로 → 잠금 — 같은 쪽은 한 번에 한 스레드만 받음
+_받는쪽잠금 = threading.Lock()
+
 def fetch_one(pat, n, path):
+    with _받는쪽잠금:
+        잠금 = _받는쪽.setdefault(os.path.abspath(path), threading.Lock())
+    with 잠금:
+        return _fetch_one(pat, n, path)
+
+def _fetch_one(pat, n, path):
     # 이미 있어도 너비가 WIDTH 가 아니면 다시 받는다.
     if os.path.exists(path):
         if _width_of(path) == WIDTH:
@@ -106,10 +115,17 @@ def fetch_one(pat, n, path):
     data = _open(pat.replace("{N}", str(n)))
     if not data.startswith(b"\xff\xd8"):          # JPEG인지 확인
         return "fail"
-    with open(path, "wb") as f:
-        f.write(data)
-    if _width_of(path) != WIDTH:                  # 엉뚱한 크기를 받았으면 실패 처리
-        return "small"
+    # 임시 파일에 다 쓴 뒤 옮김 — 다른 프로세스가 반쯤 쓴 그림을 읽지 않게
+    tmp = f"{path}.{os.getpid()}.part"
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+        if _width_of(tmp) != WIDTH:               # 엉뚱한 크기를 받았으면 실패 처리
+            return "small"
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
     return "ok"
 
 def collect(pdf, slug, limit=None):

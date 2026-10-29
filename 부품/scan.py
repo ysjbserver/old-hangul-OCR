@@ -5,9 +5,39 @@
 여기서는 '몇 칸으로 자를지'를 정하지 않는다. 그것은 align.py 가 정한다.
 이 파일이 하는 일은 자를 자리의 후보를 만들어 주는 것까지다.
 """
+import os
+import threading
 import numpy as np
 from PIL import Image, ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+_그림기억, _그림기억수, _그림잠금 = {}, 6, threading.Lock()
+
+
+def _쪽그림(path):
+    """쪽 그림 파일 → {"그림": PIL 회색조, …} — 같은 파일은 최근 몇 장만 한 번 디코드(쪽에 딸린 셈도 이 항목에 둠).
+    ⚠ 그림은 여러 기하가 함께 씀(고치지 말 것). 배열은 `_쪽배열` 로 사본을 받을 것."""
+    try:
+        st = os.stat(path)
+        열쇠 = (os.path.abspath(path), st.st_mtime_ns, st.st_size)
+    except (TypeError, ValueError, OSError):
+        return {"그림": Image.open(path).convert("L")}
+    with _그림잠금:
+        항목 = _그림기억.pop(열쇠, None)
+        if 항목 is not None:
+            _그림기억[열쇠] = 항목
+            return 항목
+    항목 = {"그림": Image.open(path).convert("L")}
+    with _그림잠금:
+        _그림기억[열쇠] = 항목
+        while len(_그림기억) > _그림기억수:
+            _그림기억.pop(next(iter(_그림기억)))
+    return 항목
+
+
+def _쪽배열(path):
+    """`np.array(Image.open(path).convert("L"))` 와 같은 배열(새 사본)."""
+    return np.array(_쪽그림(path)["그림"])
 
 INK = 120           # 이보다 어두우면 잉크로 본다
 YX_RATIO = 0.867    # 세로 자간 ÷ 가로 자간 기본값
@@ -17,6 +47,9 @@ SPAN_EXTEND = True
 SPAN_LOW = 0.15     # 열 폭의 이만큼 넘는 줄을 잇는다
 SPAN_REACH = 1.5    # 구간 밖으로 이 자간까지만
 SPAN_GAP = 0.4      # 빈 줄이 이 자간 넘게 이어지면 멈춤
+# (읽을 때만) 끝맞춤 — 꽉 찬 열의 위 · 아래 끝이 열 중앙값보다 세로 자간의 이 범위만큼 짧으면 중앙값까지 늘림(`_끝맞추기`). 0 = 끔
+SPAN_ALIGN = (0.3, 1.5)
+SPAN_ALIGN_Q = 75       # 맞출 끝: 아래는 열 끝들의 이 백분위, 위는 (100 − 이것) 백분위
 # (읽을 때만) 흐린 열 머리 — 이웃 열보다 늦게 시작한 열을 이 밝기 미만(옅은 잉크)으로 위로 다시 찾음(`_연한머리잇기`).
 #   0 = 끔. JS 짝 `연한머리잇기` · 설정 `연한머리`
 SPAN_FAINT = 160
@@ -719,6 +752,8 @@ def _휜광곽(g, cols, T, pitch):
     띠 = (cs[h:] - cs[:-h]) > 0                     # 띠[y - s0, x] = 줄 y..y+h-1 에 잉크가 있나
     순 = sorted(cols)
     f열, f고랑 = FRAME_CURVE_FILL
+    ys = np.arange(lo, hi)
+    R = len(띠)
     v = []
     for x0, x1 in cols:
         k = 순.index((x0, x1))
@@ -729,12 +764,19 @@ def _휜광곽(g, cols, T, pitch):
                 if b - a >= 3:
                     고랑.append((a, b))
         y찾음 = None
-        for y in range(hi - 1, lo - 1, -1):          # 아래부터 — 쌍줄이면 안쪽 줄
-            if 띠[y - s0, x0:x1].mean() < f열:
-                continue
-            if 고랑 and all(띠[max(0, y - h - s0):y + h + 1 - s0, a:b].mean(axis=1).max() >= f고랑 for a, b in 고랑):
-                y찾음 = y
-                break
+        if 고랑:
+            # 줄마다 덮개(참 칸 수 ÷ 폭 — `.mean()` 과 같은 값)를 한 번에. 아래부터 첫 자리 = 가장 큰 y
+            된다 = 띠[ys - s0, x0:x1].sum(axis=1) / (x1 - x0) >= f열
+            for a, b in 고랑:
+                줄 = 띠[:, a:b].sum(axis=1) / (b - a)
+                최대 = np.full(len(ys), -np.inf)
+                for d in range(-h, h + 1):           # 창 [y−h, y+h] 의 최댓값(그림 밖은 뺌)
+                    r = ys - s0 + d
+                    안 = (r >= 0) & (r < R)
+                    최대[안] = np.maximum(최대[안], 줄[r[안]])
+                된다 &= 최대 >= f고랑
+            if 된다.any():
+                y찾음 = int(ys[np.flatnonzero(된다)[-1]])
         v.append(y찾음)
     xs = [(a + b) / 2 for a, b in cols]
     차례 = sorted(range(len(cols)), key=lambda i: xs[i])
@@ -836,6 +878,29 @@ def spans_between(prof, cols, T, B, pitch, 이어=False, 첫글자=False, 꼬리
     return out
 
 
+def _끝맞추기(spans, Ts, Bs, pitch):
+    """
+    꽉 찬 열끼리 위 · 아래 끝을 맞춘다 — 획이 가는 첫 · 끝 글자를 구간이 놓친 열(읽을 때만, `SPAN_ALIGN`).
+    끝이 중앙값보다 `SPAN_ALIGN` 범위만큼 짧은 열만 중앙값까지 늘림(줄이지 않음 · 짧은 열 · 열 광곽 너머는 그대로).
+    대조.열끝맞춤기하 와 같은 규칙.
+    """
+    real = [s for s in spans if s]
+    if len(real) < 4:
+        return spans
+    lo, hi = pitch * SPAN_ALIGN[0], pitch * SPAN_ALIGN[1]
+    위 = int(np.percentile([a for a, _ in real], 100 - SPAN_ALIGN_Q))
+    아래 = int(np.percentile([b for _, b in real], SPAN_ALIGN_Q))
+    out = []
+    for i, s in enumerate(spans):
+        if s is None or s[0] > 위 + hi or s[1] < 아래 - hi:
+            out.append(s)
+            continue
+        a = max(위, Ts[i]) if lo < s[0] - 위 <= hi else s[0]
+        b = min(아래, Bs[i]) if lo < 아래 - s[1] <= hi else s[1]
+        out.append((min(a, s[0]), max(b, s[1])))
+    return out
+
+
 def text_spans(g, cols, pitch):
     prof = ink_profile(g, cols)
     T, B = page_frame(g, cols)
@@ -886,7 +951,7 @@ def tier_measure(path):
     이 쪽에서 (가운데 가로줄의 합의도, 쪽 높이에서의 자리). 못 재면 None.
     문헌이 두 단인지 정할 때 쓴다(`page.doc_tiers`).
     """
-    g = np.array(Image.open(path).convert("L"))
+    g = _쪽배열(path)
     xpitch, cols = find_columns(g)
     if not cols:
         return None
@@ -931,7 +996,7 @@ def _줄덩이(G, 문턱=0.15):
 
 def 가름줄측정(path):
     """(쪽 안쪽의 가장 센 봉우리, [(가운데 높이 비율, 세기), …]). 못 재면 None."""
-    g = np.array(Image.open(path).convert("L"))
+    g = _쪽배열(path)
     H = g.shape[0]
     xp, cols = find_columns(g)
     if not cols:
@@ -1029,7 +1094,7 @@ def _가름판_geometry(path, g, ratio, 가름):
                  for a, b in cols_all]
     return dict(cols=cols_all, crop_cols=crop_cols, spans=spans_all, sm=sm_all, pitch=pitch,
                 xpitch=xpitch, est=est, 단=len(단들), 가장자리=False, 본열수=len(cols0),
-                image=Image.open(path).convert("L"))
+                image=_쪽그림(path)["그림"])
 
 
 # ── 자를 자리 후보 ───────────────────────────────────────────────────
@@ -1084,10 +1149,13 @@ def 분주후보(g, cols, i, sp, pitch):
         return []
     h = max(2, int(pitch * BUNJU_BAND))
     상태, 가름 = [], []
-    for y in range(0, blk.shape[0], h):
-        occ = blk[y:y + h].any(axis=0)
-        if not occ.any():
+    시작 = np.arange(0, blk.shape[0], h)
+    띠들 = np.logical_or.reduceat(blk, 시작, axis=0) if len(시작) and blk.shape[1] else blk[:0]   # 띠마다 any(axis=0)
+    빈띠 = ~띠들.any(axis=1) if len(띠들) else np.ones(len(시작), bool)
+    for k in range(len(시작)):
+        if 빈띠[k]:
             상태.append(0); 가름.append(None); continue
+        occ = 띠들[k]
         x = _가름자리(occ, m0, m1, c)
         if x is None:
             상태.append(-1); 가름.append(None); continue
@@ -1120,8 +1188,13 @@ def smooth(a, s):
 
 def cut_points(sp, y0, y1, pitch):
     """글자 사이 골짜기(잉크가 적은 자리)를 자를 자리 후보로 삼는다."""
-    c = [y for y in range(y0 + 1, min(y1 - 1, len(sp) - 1))
-         if sp[y] <= sp[y-1] and sp[y] < sp[y+1]]
+    a, b = y0 + 1, min(y1 - 1, len(sp) - 1)
+    if isinstance(sp, np.ndarray) and b > a:
+        ys = np.arange(a, b)
+        v = sp[ys]
+        c = ys[(v <= sp[ys - 1]) & (v < sp[ys + 1])].tolist()
+    else:
+        c = [y for y in range(a, b) if sp[y] <= sp[y-1] and sp[y] < sp[y+1]]
     if len(c) < 4:
         c = list(range(y0 + int(pitch*0.5), y1 - int(pitch*0.5), max(4, int(pitch/6))))
     return c
@@ -1143,6 +1216,60 @@ def split_column(sp, y0, y1, n, cands, lam=1.2):
     if m < n + 1: return None, INF
     mx = max(1.0, sp[y0:min(y1, len(sp))].max())
     lo, hi = pitch * 0.45, pitch * 2.0
+    if (type(pitch) is float and type(lam) in (float, int) and isinstance(sp, np.ndarray)
+            and sp.dtype == np.float64 and all(type(p) is int for p in pts)):
+        dp, prev = _split_dp(sp, n, lam, pts, pitch, lo, hi, mx, INF)
+    else:
+        dp, prev = _split_dp_loop(sp, n, lam, pts, pitch, lo, hi, mx, INF)
+    if dp[n][m-1] >= INF: return None, INF
+    out, c, j = [], n, m - 1
+    while c > 0:
+        out.append(pts[j]); j = prev[c][j]; c -= 1
+    out.append(pts[0])
+    return sorted(out), float(dp[n][m-1])
+
+
+def _split_dp(sp, n, lam, pts, pitch, lo, hi, mx, INF):
+    """`_split_dp_loop` 와 같은 값(비트까지)을 행렬로. 행 = j, 칸 = i 를 j-1 부터 거꾸로.
+    ⚠ 칸 높이 벌점은 원래 식(파이썬 `**`)으로 높이마다 한 번 — numpy 제곱은 비트가 다를 수 있음."""
+    m = len(pts)
+    P = np.array(pts, dtype=np.int64)
+    j = np.arange(1, m)
+    imin = np.searchsorted(P, P[1:] - hi, "left") - 1           # 한 칸 넉넉히 — 참 경계는 아래 정수 비교가 정함
+    W = int(max(1, (j - np.maximum(imin, 0)).max()))
+    I = j[:, None] - 1 - np.arange(W)[None, :]
+    Ic = np.maximum(I, 0)
+    H = P[1:, None] - P[Ic]
+    ok = (I >= 0) & (H >= lo) & (H <= hi)
+    hs = np.unique(H[ok])
+    PEN = np.full(H.shape, np.inf)
+    if len(hs):
+        pen = np.array([((h - pitch) / pitch) ** 2 * lam for h in hs.tolist()], dtype=np.float64)
+        PEN[ok] = pen[np.searchsorted(hs, H[ok])]
+    A = (sp[np.minimum(P[1:], len(sp) - 1)] / mx)[:, None]
+    rows = np.arange(m - 1)
+    B = np.empty((n + 1, m - 1)); K = np.empty((n + 1, m - 1), dtype=np.intp)
+    D = np.full(m, np.inf); D[0] = 0.0                           # dp[c-1] — 못 가는 자리는 inf
+    for c in range(1, n + 1):
+        cost = D[Ic]
+        cost += PEN
+        if c < n:
+            cost += A
+        k = cost.argmin(1)                                       # 같은 값이면 앞 칸(큰 i) — `cost < best` 와 같음
+        K[c] = k
+        D[1:] = B[c] = cost[rows, k]
+        D[0] = np.inf
+    dp = np.full((n + 1, m), INF)
+    prev = np.full((n + 1, m), -1, dtype=int)
+    dp[0][0] = 0.0
+    good = B[1:] < np.inf
+    dp[1:, 1:][good] = B[1:][good]
+    prev[1:, 1:][good] = Ic[np.broadcast_to(rows, (n, m - 1)), K[1:]][good]
+    return dp, prev
+
+
+def _split_dp_loop(sp, n, lam, pts, pitch, lo, hi, mx, INF):
+    m = len(pts)
     dp = np.full((n + 1, m), INF)
     prev = np.full((n + 1, m), -1, dtype=int)
     dp[0][0] = 0.0
@@ -1159,12 +1286,7 @@ def split_column(sp, y0, y1, n, cands, lam=1.2):
                 if c < n: cost += sp[min(yj, len(sp) - 1)] / mx
                 if cost < best: best, bi = cost, i
             dp[c][j], prev[c][j] = best, bi
-    if dp[n][m-1] >= INF: return None, INF
-    out, c, j = [], n, m - 1
-    while c > 0:
-        out.append(pts[j]); j = prev[c][j]; c -= 1
-    out.append(pts[0])
-    return sorted(out), float(dp[n][m-1])
+    return dp, prev
 
 
 # ── 그림만으로 세로 자간 재기 ────────────────────────────────────────
@@ -1210,7 +1332,7 @@ def page_ratio(path, lo=0.55, hi=None, steps=120, 단=1):
     """
     if hi is None:
         hi = RATIO_HI
-    g = np.array(Image.open(path).convert("L"))
+    g = _쪽배열(path)
     xpitch, cols = find_columns(g)
     if not cols or not xpitch:
         return None
@@ -1388,7 +1510,7 @@ def _빈단기하(path, g, ratio):
     return dict(cols=cols, crop_cols=crop_cols, spans=spans, sm=sm, est=est,
                 pitch=float(np.median(pitches)), xpitch=float(np.median([p[2] for p in panels])),
                 단=2, 가장자리=False, 본열수=int(np.median(counts)), 빈단=[a, b],
-                단별자간비=ratios, 단별열수=counts, image=Image.open(path).convert('L'))
+                단별자간비=ratios, 단별열수=counts, image=_쪽그림(path)["그림"])
 
 
 def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 표준자간=None, 이어=None, 끝띠=None, 판심=None, 빈단=True, 조각=None, 잉크=None):
@@ -1398,12 +1520,24 @@ def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 
     잉크를 세고(모델에는 원래 그림) `잉크` · `잉크그림` · `기본기하`(기본 문턱으로 다시 — `align.잉크골라`)를 붙인다.
     그 그림으로 못 읽으면 기본 문턱 기하.
     """
-    원본 = np.array(Image.open(path).convert("L"))
-    문턱 = (연한잉크문턱(원본) if 잉크 is None else int(잉크)) if 읽기 else INK
+    항목 = _쪽그림(path)
+    원본 = np.array(항목["그림"])
+    if 읽기 and 잉크 is None:
+        열쇠 = ("연한잉크문턱", INK, str(INK_FAINT))
+        if 항목.get(열쇠) is None:
+            항목[열쇠] = 연한잉크문턱(원본)
+        문턱 = 항목[열쇠]
+    else:
+        문턱 = int(잉크) if 읽기 else INK
     인자 = (ratio, 단, 읽기, 가장자리, 표준자간, 이어, 끝띠, 판심, 빈단, 조각)
     if 문턱 <= INK:
         return _쪽기하(path, 원본, 원본, *인자)
-    g = (원본.astype(np.int16) - (문턱 - INK)).clip(0, 255).astype(np.uint8)
+    열쇠 = ("잉크그림", 문턱, INK)                 # 같은 쪽 · 같은 문턱이면 같은 배열(읽기 전용) — 잉크 적분을 다시 쓰게
+    g = 항목.get(열쇠)
+    if g is None:
+        g = (원본.astype(np.int16) - (문턱 - INK)).clip(0, 255).astype(np.uint8)
+        g.flags.writeable = False
+        항목[열쇠] = g
     out = _쪽기하(path, g, 원본, *인자)
     if out is None:
         return _쪽기하(path, 원본, 원본, *인자)
@@ -1464,6 +1598,7 @@ def _쪽기하(path, g, 원본, ratio=YX_RATIO, 단=1, 읽기=False, 가장자�
         위 = spans_between(prof, cols, T, max(T + 1, da - 6), pitch)
         아래 = spans_between(prof, cols, min(B - 1, db + 6), B, pitch)
         div = None if (위 is None or 아래 is None) else div
+    끝맞춤 = None
     if div:
         spans = list(위) + list(아래)
         cols = list(cols) + list(cols)          # 같은 x 자리를 두 번 쓴다
@@ -1498,6 +1633,10 @@ def _쪽기하(path, g, 원본, ratio=YX_RATIO, 단=1, 읽기=False, 가장자�
                     spans[i] = (T + int(hit[0]), T + int(hit[-1]) + 1)
     if spans is None:
         return None
+    if 읽기 and SPAN_ALIGN and not div:
+        Ts = list(TT) if isinstance(TT, (list, tuple)) else [TT] * len(cols)
+        Bs = list(BB) if isinstance(BB, (list, tuple)) else [BB] * len(cols)
+        끝맞춤 = [e if e != s else None for s, e in zip(spans, _끝맞추기(spans, Ts, Bs, pitch))]
     est = [0 if s is None else max(1, int(round((s[1] - s[0]) / pitch))) for s in spans]
 
     # 오려낼 상자는 열보다 넓게(가로 자간 기준) — 열 밖으로 나간 모음 획이 잘리면 ㅏ·ㅓ·ㅣ 와 아래아를 못 가른다.
@@ -1517,9 +1656,11 @@ def _쪽기하(path, g, 원본, ratio=YX_RATIO, 단=1, 읽기=False, 가장자�
             맞춤 = 2 * half
     out = dict(cols=cols, crop_cols=crop_cols, spans=spans, sm=sm, pitch=pitch,
                xpitch=xpitch, est=est, 단=2 if div else 1, 가장자리=후보,
-               image=Image.open(path).convert("L"))
+               image=_쪽그림(path)["그림"])
     if 맞춤:
         out["맞춤"] = 맞춤
+    if 끝맞춤 and any(끝맞춤):
+        out["끝맞춤"] = 끝맞춤   # 열마다 끝을 맞춘 구간(바뀐 열만) — `align.열마다읽기` 가 확신으로 고름
     if 글자폭 is not None:
         out["글자폭몫"] = 글자폭
     if 본열수 is not None:
