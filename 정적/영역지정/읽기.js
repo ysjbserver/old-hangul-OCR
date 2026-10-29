@@ -89,6 +89,7 @@ function 그림읽기(src) {
 let INK = 120;          // 이보다 어두우면 잉크로 본다
 let GLYPH = 0.35;       // 글자가 있는 줄은 열 폭의 이만큼 이상이 잉크다
 let SPAN_EXTEND = true, SPAN_LOW = 0.15, SPAN_REACH = 1.5, SPAN_GAP = 0.4;   // scan._이어잡기
+let SPAN_ALIGN = [0.3, 1.5], SPAN_ALIGN_Q = 75;   // scan._끝맞추기 — (읽을 때만) 꽉 찬 열의 끝을 맞춘 구간을 후보로(null = 끔)
 let SPAN_FAINT = 160;   // scan._연한머리잇기 — 흐린 열 머리를 이 밝기 미만으로 다시 찾음(0 = 끔)
 let INK_FAINT = [70, 45];   // scan.INK_FAINT — (읽을 때만) 흐린 잉크 쪽의 잉크 문턱(`연한잉크문턱`). null = 끔
 let FAINT_PICK = 0.93;     // align.FAINT_PICK — 흐린 쪽 두 기하 중 이 확신 넘는 글자가 많은 쪽(`잉크골라`)
@@ -891,6 +892,29 @@ function 글자구간(prof, cols, T, B, pitch, 이어, 첫글자, 꼬리선, 연
   return out;
 }
 
+/** numpy `np.percentile`(선형) 과 같은 셈 차례 — 끝자리까지 맞춰 `자름` 이 갈리지 않게. */
+function 백분위np(a, q) {
+  const s = Float64Array.from(a).sort();
+  const v = (q / 100) * (s.length - 1), lo = Math.floor(v), t = v - lo;
+  const x = s[lo], y = s[Math.min(s.length - 1, lo + 1)], d = y - x;
+  return t >= 0.5 ? y - d * (1 - t) : x + d * t;
+}
+
+/** `scan._끝맞추기` — 꽉 찬 열의 위 · 아래 끝이 열 끝들의 백분위보다 SPAN_ALIGN 범위만큼 짧으면 거기까지 늘린 구간. */
+function 끝맞추기(spans, Ts, Bs, pitch) {
+  const real = spans.filter(function (s) { return s; });
+  if (real.length < 4) return spans;
+  const lo = pitch * SPAN_ALIGN[0], hi = pitch * SPAN_ALIGN[1];
+  const 위 = 자름(백분위np(real.map(function (s) { return s[0]; }), 100 - SPAN_ALIGN_Q));
+  const 아래 = 자름(백분위np(real.map(function (s) { return s[1]; }), SPAN_ALIGN_Q));
+  return spans.map(function (s, i) {
+    if (!s || s[0] > 위 + hi || s[1] < 아래 - hi) return s;
+    const a = (lo < s[0] - 위 && s[0] - 위 <= hi) ? Math.max(위, Ts[i]) : s[0];
+    const b = (lo < 아래 - s[1] && 아래 - s[1] <= hi) ? Math.min(아래, Bs[i]) : s[1];
+    return [Math.min(a, s[0]), Math.max(b, s[1])];
+  });
+}
+
 /** `scan._연한머리잇기` — 이웃 열보다 늦게 시작한 열을 옅은 잉크 무늬로 위로 다시 잇는다(흐린 열 머리). */
 function 연한머리잇기(faint, cols, spans, Ts, pitch) {
   const starts = spans.filter(function (s) { return s; }).map(function (s) { return s[0]; }).sort(function (a, b) { return a - b; });
@@ -1452,7 +1476,7 @@ function 쪽기하속(g, 원본, ratio, 단, 읽기, 표준자간, 가장자리,
     if (위 === null || 아래 === null) div = null;
   }
   const sm0 = prof.map(function (p) { return 고르기(p, Math.max(2.0, pitch / 9)); });
-  let spans, cols, sm;
+  let spans, cols, sm, 열T = null, 열B = null;
   if (div) {
     spans = 위.concat(아래);
     cols = cols0.concat(cols0);              // 같은 x 자리를 두 번 쓴다
@@ -1476,7 +1500,7 @@ function 쪽기하속(g, 원본, ratio, 단, 읽기, 표준자간, 가장자리,
         for (let y = T; y < 휜[i]; y++) if (prof[i][y] > (c[1] - c[0]) * GLYPH) { spans[i] = [휜[i], s[1]]; return; }
       });
     }
-    cols = cols0; sm = sm0;
+    cols = cols0; sm = sm0; 열T = TT; 열B = BB;
   }
   if (spans && 찾.짧은열 && 찾.짧은열.length && !div) {
     cols.forEach(function (c, i) {
@@ -1490,6 +1514,14 @@ function 쪽기하속(g, 원본, ratio, 단, 읽기, 표준자간, 가장자리,
   const est = spans.map(function (s) {
     return s === null ? 0 : Math.max(1, 반올림((s[1] - s[0]) / pitch));
   });
+  let 끝맞춤 = null;
+  if (읽기 && SPAN_ALIGN && !div) {
+    const Ts = Array.isArray(열T) ? 열T : cols.map(function () { return 열T; });
+    const Bs = Array.isArray(열B) ? 열B : cols.map(function () { return 열B; });
+    const 늘 = 끝맞추기(spans, Ts, Bs, pitch);
+    끝맞춤 = 늘.map(function (e, i) { const s = spans[i]; return (e && s && (e[0] !== s[0] || e[1] !== s[1])) ? e : null; });
+    if (!끝맞춤.some(function (e) { return e; })) 끝맞춤 = null;
+  }
 
   // 글자 상자는 열보다 넓게(가로 자간 기준) — 오른쪽의 가는 모음 획이 잘리면 아래아와 구별이 안 됨
   let half = xpitch * 0.45;
@@ -1516,6 +1548,7 @@ function 쪽기하속(g, 원본, ratio, 단, 읽기, 표준자간, 가장자리,
   if (본열수 !== null) out.본열수 = 본열수;
   if (맞춤) out.맞춤 = 맞춤;
   if (글자폭 !== null) out.글자폭몫 = 글자폭;
+  if (끝맞춤) out.끝맞춤 = 끝맞춤;   // 열마다 끝을 맞춘 구간(바뀐 열만) — `열마다읽기` 가 확신으로 고름
   return out;
 }
 
@@ -2006,19 +2039,24 @@ function 고름확신(logc, 잉크, o, m) {
 
 async function 열마다읽기(모델, geo, span) {
   if (span === undefined) span = 3;
-  const 그림자 = (CUT_LEARN && 모델.경계) ? await 경계프로파일(모델, geo) : null;
-  const bp = 자를계획(geo, geo.est, span, false, 그림자);
-  const 읽음 = await 모델.읽기(geo.그림, 맞춤상자(잉크판(geo), bp.상자, geo));
-  const pL = 읽음.초, pV = 읽음.중, pT = 읽음.종, cf = 읽음.확신;
-  const logc = new Float64Array(cf.length);
-  for (let i = 0; i < cf.length; i++) logc[i] = Math.log(Math.max(cf[i], 1e-6));
+  const 판 = 잉크판(geo);
 
-  // align.BLANK_SKIP — 잉크 몫이 이 값 미만인 빈 칸(시의 띄어쓰기 칸)은 칸수를 고르는 평균 확신에서 뺀다(열 점수는 그대로)
-  const 잉크칸 = (BLANK_SKIP !== null) ? 잉크몫칸(잉크판(geo), bp.상자) : null;
-  const 열들 = [];
-  for (let i = 0; i < bp.계획.length; i++) {
-    const opts = bp.계획[i].filter(function (o) { return o.칸수 > 0; });
-    if (!opts.length) { 열들.push(null); continue; }
+  async function 읽어(g2) {
+    const 그림자 = (CUT_LEARN && 모델.경계) ? await 경계프로파일(모델, g2) : null;
+    const bp = 자를계획(g2, g2.est, span, false, 그림자);
+    const 읽음 = await 모델.읽기(geo.그림, 맞춤상자(판, bp.상자, geo));
+    const logc = new Float64Array(읽음.확신.length);
+    for (let i = 0; i < logc.length; i++) logc[i] = Math.log(Math.max(읽음.확신[i], 1e-6));
+    // align.BLANK_SKIP — 잉크 몫이 이 값 미만인 빈 칸(시의 띄어쓰기 칸)은 칸수를 고르는 평균 확신에서 뺀다(열 점수는 그대로)
+    const 잉크칸 = (BLANK_SKIP !== null) ? 잉크몫칸(판, bp.상자) : null;
+    return { bp: bp, 읽음: 읽음, logc: logc, 잉크칸: 잉크칸 };
+  }
+
+  // 한 열의 가장 자신 있는 칸수 → {고름: 고르는 점수, 열: 열 결과}. 칸수 후보가 없으면 null
+  function 고르기(r, i) {
+    const opts = r.bp.계획[i].filter(function (o) { return o.칸수 > 0; });
+    if (!opts.length) return null;
+    const pL = r.읽음.초, pV = r.읽음.중, pT = r.읽음.종, cf = r.읽음.확신, logc = r.logc;
     // ⚠ 파이썬 `max` 는 동점이면 먼저 나온 것 — 그래서 `>` (`>=` 아님)
     // 고르는 점수 = 평균 로그 확신 − CUT_COST_W × 비용 ÷ 칸수. ⚠ 열 점수(`가장자리다듬기` 가 씀)는 비용을 뺀 평균 로그 확신 그대로
     let best = null, bestv = -Infinity, bestm = NaN;
@@ -2027,7 +2065,7 @@ async function 열마다읽기(모델, geo, span) {
       let s = 0;
       for (let j = 0; j < o.개수; j++) s += logc[o.시작 + j];
       const m = o.개수 ? s / o.개수 : NaN;
-      const v = o.개수 ? 고름확신(logc, 잉크칸, o, m) - CUT_COST_W * o.비용 / Math.max(1, o.개수) : NaN;
+      const v = o.개수 ? 고름확신(logc, r.잉크칸, o, m) - CUT_COST_W * o.비용 / Math.max(1, o.개수) : NaN;
       if (v > bestv) { bestv = v; bestm = m; best = o; }
     }
     // 글자가 아닌 칸(작은 절 번호 · 광곽 가로줄)은 글자에서 뺀다 — 점수는 그대로
@@ -2036,18 +2074,38 @@ async function 열마다읽기(모델, geo, span) {
       const c = cf[best.시작 + j];
       const 자 = 모델.글자(pL[best.시작 + j], pV[best.시작 + j], pT[best.시작 + j]);
       if (c < NOTCHAR_CONF && NOTCHAR_KEEP.indexOf(자) < 0) {
-        const m = 칸모양(잉크판(geo), best.상자들[j]);
+        const m = 칸모양(판, best.상자들[j]);
         if (m[0] < NOTCHAR_WIDTH || m[1] >= NOTCHAR_ROW) continue;
       }
       글.push(자);
       확.push(c);
       상.push(best.상자들[j]);
     }
-    열들.push({ 점수: bestm, 글자: 글, 확신: 확, 칸수: best.개수, 상자: 상 });
+    return { 고름: bestv, 열: { 점수: bestm, 글자: 글, 확신: 확, 칸수: best.개수, 상자: 상 } };
   }
+
+  const r = await 읽어(geo);
+  const 고른 = r.bp.계획.map(function (_, i) { return 고르기(r, i); });
+  let 상자수 = r.bp.상자.length;
+  const 끝 = SPAN_ALIGN ? geo.끝맞춤 : null;
+  if (끝) {
+    // 끝을 맞춘 구간(`scan._끝맞추기`)으로도 읽어 고르는 점수가 더 높은 열만 바꾼다(`align.열마다읽기`)
+    const g2 = Object.assign({}, geo, {
+      spans: 끝,
+      est: 끝.map(function (s) { return s === null ? 0 : Math.max(1, 반올림((s[1] - s[0]) / geo.pitch)); }),
+    });
+    const r2 = await 읽어(g2);
+    상자수 += r2.bp.상자.length;
+    끝.forEach(function (s, i) {
+      if (s === null || 고른[i] === null) return;
+      const 새 = 고르기(r2, i);
+      if (새 !== null && 새.고름 > 고른[i].고름) 고른[i] = 새;
+    });
+  }
+  const 열들 = 고른.map(function (x) { return x === null ? null : x.열; });
   if (HEADING) await 큰제목읽기(모델, geo, 열들, span);
   if (BUNJU) await 분주읽기(모델, geo, 열들);
-  return { 열들: 열들, 상자수: bp.상자.length };
+  return { 열들: 열들, 상자수: 상자수 };
 }
 
 let CUT_LEARN = true, CUT_MIX = 0.5, 경계폭 = 32, CUT_CLIP = 0.0, CUT_ROUND = 10000;   // align.CUT_LEARN · CUT_MIX · 경계검출.폭
@@ -2923,6 +2981,7 @@ const API = {
       SPAN_EXTEND = s.구간이어; SPAN_LOW = s.구간이어잉크; SPAN_REACH = s.구간이어거리; SPAN_GAP = s.구간이어빈줄;
     }
     if (s.연한머리 !== undefined) SPAN_FAINT = s.연한머리;
+    if (s.끝맞춤) { SPAN_ALIGN = s.끝맞춤.slice(0, 2); SPAN_ALIGN_Q = s.끝맞춤[2]; } else SPAN_ALIGN = null;
     if (s.연한잉크 !== undefined) { INK_FAINT = s.연한잉크 ? s.연한잉크.slice(0, 2) : null; FAINT_PICK = s.연한잉크 ? s.연한잉크[2] : FAINT_PICK; } else INK_FAINT = null;
     if (s.휜광곽 !== undefined) {
       FRAME_CURVE = s.휜광곽; FRAME_CURVE_BAND = s.휜광곽띠; FRAME_CURVE_FILL = s.휜광곽채움; FRAME_CURVE_REACH = s.휜광곽거리; FRAME_CURVE_JUMP = s.휜광곽튐; FRAME_CURVE_BG = s.휜광곽바탕;
