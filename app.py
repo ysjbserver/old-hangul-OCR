@@ -609,7 +609,9 @@ def _json기본(o):
         ".md": "text/plain; charset=utf-8", ".onnx": "application/octet-stream"}
 
 # 바깥 주소 → 정적 파일(앞에 서버 주소를 붙여 줄 소도구는 따로)
-소도구들 = {"/ocr.js": "소도구.js", "/소도구.js": "소도구.js", "/compare.js": "전사대조.js", "/전사대조.js": "전사대조.js"}
+# 소도구는 한 묶음(공용 · 인식 · 교정) — 옛 주소 compare.js 도 같은 묶음(두 줄을 다 두어도 한 번만 섬)
+소도구묶음 = ("공용.js", "소도구.js", "전사대조.js")
+소도구들 = {"/ocr.js": 소도구묶음, "/소도구.js": 소도구묶음, "/compare.js": 소도구묶음, "/전사대조.js": 소도구묶음}
 영역길 = ("/area/", "/영역지정/")
 옛영역길 = "/region"                 # → /area/ 로 넘김
 
@@ -675,11 +677,14 @@ def _경로(env):
 
 
 def _정적(start, 이름, 앞=b""):
-    p = os.path.normpath(os.path.join(정적, 이름))
-    if not p.startswith(os.path.normpath(정적) + os.sep) or not os.path.isfile(p):
-        return _응답(start, {"오류": "없는 주소"}, 404)
-    with open(p, "rb") as f:
-        b = 앞 + f.read()
+    # 이름이 여럿이면 줄바꿈으로 이어 붙임(소도구 묶음)
+    b = 앞
+    for i, 하나 in enumerate((이름,) if isinstance(이름, str) else 이름):
+        p = os.path.normpath(os.path.join(정적, 하나))
+        if not p.startswith(os.path.normpath(정적) + os.sep) or not os.path.isfile(p):
+            return _응답(start, {"오류": "없는 주소"}, 404)
+        with open(p, "rb") as f:
+            b += (b"\n" if i else b"") + f.read()
     머리 = 공통머리 + [("Content-Type", 갈래.get(os.path.splitext(p)[1], "application/octet-stream")),
                     ("Content-Length", str(len(b))), ("Cache-Control", "no-cache")]
     start("200 OK", 머리)

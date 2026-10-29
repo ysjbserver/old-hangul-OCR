@@ -28,11 +28,12 @@ a { color: var(--accent); }
 
   <h2>1. 위키문헌 편집 창에서 쓰기</h2>
   <p>위키문헌의 <code>사용자:(내 이름)/common.js</code> 에 아래 줄을 넣고 저장한 뒤, 「페이지:」 문서를 편집하면
-     편집 상자 위에 단추가 생깁니다.</p>
+     편집 도구모음에 단추가 생깁니다.</p>
   <pre id="줄"></pre>
   <div class="card">
-    <b>인식 (전사)</b> — 그 쪽 스캔을 읽어 편집 상자에 넣습니다. 확신이 낮은 글자는 노랗게 칠합니다(칠은 저장되지 않음).<br>
-    <b>교정 (전사대조)</b> — 이미 전사된 글을 스캔과 맞대어 틀렸을 만한 글자를 짚습니다.<br>
+    <b>옛한글 OCR</b> — 그 쪽 스캔을 읽어 편집 상자에 넣습니다. 확신이 낮은 글자는 노랗게 칠합니다(칠은 저장되지 않음).<br>
+    <b>전사대조</b> — 이미 전사된 글을 스캔과 맞대어 틀렸을 만한 글자를 짚습니다.<br>
+    <b>▾</b> — 모델 · 단 · 띄어쓰기 설정, 영역 지정, 디버그 로그.<br>
     <span class="muted">파일마다 처음 한 번은 판형을 살피느라 1~3분 걸립니다.</span>
   </div>
 
@@ -51,7 +52,7 @@ a { color: var(--accent); }
 <script>
 const 바탕 = location.origin + location.pathname.replace(/[^/]*$/, "");
 document.getElementById("줄").textContent =
-  'mw.loader.load("' + 바탕 + 'ocr.js");\nmw.loader.load("' + 바탕 + 'compare.js");';
+  'mw.loader.load("' + 바탕 + 'ocr.js");';
 fetch("api/health").then(r => r.json()).then(v => {
   const m = v.모델 || {};
   document.getElementById("판").textContent = "판: " + (m.만든날 || "?") + " · 글자 모델 " + (m.글자모델 || "?") + " · 경계 검출기 " + (m.경계검출 || "?");
