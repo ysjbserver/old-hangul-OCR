@@ -128,7 +128,7 @@ function 꼴넣기() {
   var s = 만들기("style");
   s.id = "옛한글OCR-꼴";
   s.textContent = [
-    ".group-old-hangul-ocr{float:left;display:flex;align-items:center;box-sizing:border-box;height:32px;padding:0 4px}",
+    ".group-old-hangul-ocr{float:left;display:flex;align-items:center;box-sizing:border-box;padding:0 4px}",
     // OOUI 가 아이콘 칸을 단추 높이만큼 늘이므로 그림은 가운데 20px 로
     ".옛한글OCR-아이콘{min-width:20px;min-height:20px;background:currentColor;"
       + "-webkit-mask:" + 아이콘주소 + " center/20px 20px no-repeat;mask:" + 아이콘주소 + " center/20px 20px no-repeat}",
@@ -346,7 +346,8 @@ document.addEventListener("keydown", function (e) {
     var 답 = await 일.기다림(fetch(서버 + "api/inspect?file=" + encodeURIComponent(파일)).then(function (r) { return r.json(); }));
     if (답.상태 === "끝") return 답.값;
     if (답.상태 === "오류" || 답.오류) throw new Error(답.오류 || "서버가 판형을 못 살폈습니다");
-    일.진행("이 파일의 판형을 서버에서 살피는 중…", "(" + 답.진행 + " · 이 파일은 처음 한 번만)");
+    var 쪽셈 = /^\d+\/\d+쪽$/.test(답.진행 || "") ? 답.진행 : "";     // "n/N쪽" 만(옛 서버의 단계 이름은 안 보임)
+    일.진행("이 파일의 판형을 서버에서 살피는 중…", 쪽셈);
     await 일.쉼(2000);
   }
 };

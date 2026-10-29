@@ -109,10 +109,11 @@ READ_PICK_GAIN = 0.02    # 읽기 자간은 바탕보다 확신 로그 평균이
 READ_PICK_PAGES = 4      # 읽기 자간을 고를 때 읽어 볼 '좋음' 쪽 수
 
 
-def 읽기자간고르기(그림들, 바탕, 단, mdl, 표준=None, 이득=READ_PICK_GAIN, 빈단=True):
+def 읽기자간고르기(그림들, 바탕, 단, mdl, 표준=None, 이득=READ_PICK_GAIN, 빈단=True, 알림=None):
     """
     쪽 그림(경로)들을 자간 `바탕` × `읽기배율` 로 읽어 확신 로그 평균이 가장 높은 자간을 고른다(전사문 안 씀).
     하나 건너 배율부터 읽고 가장 좋은 배율의 양옆만 더 읽음. 바탕보다 `이득` 넘게 나을 때만 바꿈.
+    `알림` — 한 쪽을 읽을 때마다 부름(진행 표시용, 많아야 `읽기자간횟수(len(그림들))` 번).
     반환: (자간, {배율: 점수})
     """
     import align as _align
@@ -122,6 +123,8 @@ def 읽기자간고르기(그림들, 바탕, 단, mdl, 표준=None, 이득=READ_
             점 = []
             for ip in 그림들:
                 geo = scan.page_geometry(ip, 바탕 * m, 단, True, True, 표준, 빈단=빈단)
+                if 알림:
+                    알림()
                 if geo is None:
                     continue
                 _, (hyp, conf) = _align.잉크골라(geo, lambda g: _align.read_page(mdl, g), lambda r: r[1])
@@ -142,6 +145,11 @@ def 읽기자간고르기(그림들, 바탕, 단, mdl, 표준=None, 이득=READ_
     if 좋은 is None or 기준 is None or 점수[좋은] - 기준 < 이득:
         return 바탕, 점수
     return 바탕 * 좋은, 점수
+
+
+def 읽기자간횟수(쪽수):
+    """`읽기자간고르기` 가 쪽을 읽는 횟수의 위 끝 — 하나 건너 배율 + 양옆 둘."""
+    return 쪽수 * (len(읽기배율[::2]) + 2)
 
 
 def 읽기자간쪽(그림들, 바탕, 단, 판짜임=None, n=READ_PICK_PAGES, 빈단=True):

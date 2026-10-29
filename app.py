@@ -280,8 +280,14 @@ def _살피기(파일):
             가름쪽, 단쪽 = 고르게쪽(n, 12), 고르게쪽(n, 8)
             모두 = 가름쪽 + [p for p in 단쪽 if p not in 가름쪽]
             가름, 단, 길, 짜임 = {}, {}, {}, []
+            # 진행 "n/N쪽" — 받아 재는 쪽 + 읽기 자간을 고르며 읽는 쪽을 한 줄로 셈(N 은 읽을 쪽이 정해지면 줄어듦)
+            셈 = {"한": 0, "모두": len(모두) + page.읽기자간횟수(page.READ_PICK_PAGES)}
+            def 진행(더=0):
+                셈["한"] += 더
+                _살핌일[파일]["진행"] = f"{min(셈['한'], 셈['모두'])}/{셈['모두']}쪽"
             for i, p in enumerate(모두):
-                _살핌일[파일]["진행"] = f"{i + 1}/{len(모두)}쪽"
+                셈["한"] = i
+                진행(1)
                 try:
                     ip = 스캔(파일, p)
                     if p in 가름쪽:
@@ -299,7 +305,6 @@ def _살피기(파일):
                     가름[p] = None
                     단[p] = None
             판형, _ = page.판형정하기([가름.get(p) for p in 가름쪽], [단.get(p) for p in 단쪽])
-            _살핌일[파일]["진행"] = "자간 재는 중"
             잰 = scan.estimate_ratio([길[p] for p in 단쪽 if p in 길], 판형)   # 너무 크면 다시 잼(scan.RATIO_RECHECK)
             값 = {"단": list(판형) if isinstance(판형, (list, tuple)) else 판형}
             if 잰:
@@ -308,11 +313,12 @@ def _살피기(파일):
             if 짜:
                 값["판짜임"] = 짜
             if 잰:                         # 읽기 자간 — 순한글 모델 확신으로 고름(`page.읽기자간고르기`)
-                _살핌일[파일]["진행"] = "읽기 자간 고르는 중"
                 단쪽그림 = [길[p] for p in 단쪽 if p in 길]
                 표준 = 짜["자간"] if 짜 and page.SCAN_PITCH else None
                 고를쪽 = page.읽기자간쪽(단쪽그림, float(잰), 판형, 짜) or 단쪽그림[:page.READ_PICK_PAGES]
-                고른, _ = page.읽기자간고르기(고를쪽, float(잰), 판형, 모델, 표준)
+                셈["한"], 셈["모두"] = len(모두), len(모두) + page.읽기자간횟수(len(고를쪽))
+                진행()
+                고른, _ = page.읽기자간고르기(고를쪽, float(잰), 판형, 모델, 표준, 알림=lambda: 진행(1))
                 if 고른 != float(잰):
                     값["읽기자간비"] = float(고른)
         with _살핌잠금:
