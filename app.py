@@ -40,6 +40,7 @@ import time
 import traceback
 import urllib.parse
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 
 여기 = os.path.dirname(os.path.abspath(__file__))
 os.chdir(여기)
@@ -285,25 +286,31 @@ def _살피기(파일):
             def 진행(더=0):
                 셈["한"] += 더
                 _살핌일[파일]["진행"] = f"{min(셈['한'], 셈['모두'])}/{셈['모두']}쪽"
-            for i, p in enumerate(모두):
-                셈["한"] = i
-                진행(1)
-                try:
-                    ip = 스캔(파일, p)
-                    if p in 가름쪽:
-                        가름[p] = scan.가름줄측정(ip)
-                    if p in 단쪽:
-                        단[p] = scan.tier_measure(ip)
-                        길[p] = ip
-                    g = np.array(Image.open(ip).convert("L"))
-                    xp, cols = scan.find_columns(g)
-                    짜임.append((xp, len(cols)) if xp and cols else None)
-                except 손님오류:
-                    raise
-                except Exception:
-                    traceback.print_exc()
-                    가름[p] = None
-                    단[p] = None
+            # 스캔은 `step1_collect.WORKERS` 장씩 함께 받고(위키미디어 권장 상한), 재기는 쪽 차례대로
+            받기 = ThreadPoolExecutor(max_workers=step1_collect.WORKERS)
+            받을것 = [받기.submit(스캔, 파일, p) for p in 모두]
+            try:
+                for i, p in enumerate(모두):
+                    셈["한"] = i
+                    진행(1)
+                    try:
+                        ip = 받을것[i].result()
+                        if p in 가름쪽:
+                            가름[p] = scan.가름줄측정(ip)
+                        if p in 단쪽:
+                            단[p] = scan.tier_measure(ip)
+                            길[p] = ip
+                        g = np.array(Image.open(ip).convert("L"))
+                        xp, cols = scan.find_columns(g)
+                        짜임.append((xp, len(cols)) if xp and cols else None)
+                    except 손님오류:
+                        raise
+                    except Exception:
+                        traceback.print_exc()
+                        가름[p] = None
+                        단[p] = None
+            finally:
+                받기.shutdown(wait=False, cancel_futures=True)
             판형, _ = page.판형정하기([가름.get(p) for p in 가름쪽], [단.get(p) for p in 단쪽])
             잰 = scan.estimate_ratio([길[p] for p in 단쪽 if p in 길], 판형)   # 너무 크면 다시 잼(scan.RATIO_RECHECK)
             값 = {"단": list(판형) if isinstance(판형, (list, tuple)) else 판형}
