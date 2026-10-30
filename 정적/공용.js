@@ -346,6 +346,11 @@ document.addEventListener("keydown", function (e) {
     var 답 = await 일.기다림(fetch(서버 + "api/inspect?file=" + encodeURIComponent(파일)).then(function (r) { return r.json(); }));
     if (답.상태 === "끝") return 답.값;
     if (답.상태 === "오류" || 답.오류) throw new Error(답.오류 || "서버가 판형을 못 살폈습니다");
+    if (답.상태 === "바쁨") {                                       // 다른 파일들을 살피는 중 — 자리가 날 때까지
+      일.진행("서버가 다른 파일을 살피는 중이라 차례를 기다립니다…", "");
+      await 일.쉼(5000);
+      continue;
+    }
     var 쪽셈 = /^\d+\/\d+쪽$/.test(답.진행 || "") ? 답.진행 : "";     // "n/N쪽" 만(옛 서버의 단계 이름은 안 보임)
     일.진행("이 파일의 판형을 서버에서 살피는 중…", 쪽셈);
     await 일.쉼(2000);

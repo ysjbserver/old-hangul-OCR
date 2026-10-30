@@ -73,6 +73,19 @@ os.makedirs(캐시, exist_ok=True)
 너비 = 모델.설정.get("스캔너비", 1920)
 계산 = threading.Lock()            # CPU 가 적어 모델 셈은 한 번에 하나씩
 
+# 요청 · 일의 한도(넘으면 400 · 503)
+요청최대바이트 = 1_000_000
+본문최대글자 = 50_000                # /api/compare 의 text
+자간비범위 = (0.3, 2.0)             # /api/area-read 의 ratio
+그림최대바이트 = 30 * 1024 * 1024    # 받는 스캔 한 장
+그림최대세로배 = 4                   # 너비를 맞춘 뒤 높이 ≤ 너비 × 이 값
+원본최대화소 = 40_000_000            # 줄이기 전 원본
+살피기동시 = 3                       # 판형 살피기를 함께 돌리는 수
+살피기대기 = 8                       # 그 밖에 기다리게 둘 수 — 넘으면 503
+기억최대 = 2000                      # 파일 정보 · 살핀 값을 기억하는 파일 수
+그림호스트 = {"upload.wikimedia.org", "thumb.wikimedia.org"}   # 스캔을 받을 수 있는 곳
+_받기제한 = threading.BoundedSemaphore(step1_collect.WORKERS)   # 위키미디어에서 함께 받는 수(살피기 · 요청 모두)
+
 # 글자 모델 — "hangul"(기본) · "hanmun"(있을 때만 · 처음 쓸 때 불러옴)
 모델이름들 = {"hangul": "근대 순한글", "hanmun": "근대 국한문"}
 국한문폴더 = os.path.join(여기, "모델", "근대 국한문")      # `모델/<모델이름들 값>/`
@@ -137,8 +150,13 @@ def 파일정보(파일):
         r2 = step1_collect.api(action="query", prop="imageinfo", titles="File:" + 파일, iiprop="url", iiurlwidth=너비)
         ii2 = r2["query"]["pages"][0]["imageinfo"][0]
         v = dict(여러쪽=False, 쪽수=1, 주소=(ii2.get("thumburl") or ii2["url"]).split("?")[0])
+    주소 = v.get("틀") or v.get("주소")
+    if urllib.parse.urlsplit(주소).hostname not in 그림호스트:
+        raise 손님오류("위키미디어 공용의 그림 주소가 아닙니다")
     with _파일잠금:
         _파일정보[파일] = v
+        while len(_파일정보) > 기억최대:
+            del _파일정보[next(iter(_파일정보))]
     return v
 
 
@@ -169,26 +187,47 @@ def 쪽검사(정보, 쪽):
         raise 손님오류(f"이 파일은 {정보['쪽수']}쪽까지입니다")
 
 
+def _크기검사(w, h):
+    """원본 크기 (w, h) — 너비를 맞춘 뒤 너무 길거나 원본이 너무 크면 400."""
+    if w < 1 or h < 1 or w * h > 원본최대화소 or h > 그림최대세로배 * w:
+        raise 손님오류(f"스캔 그림의 크기({w}×{h})가 처리 한도를 넘습니다")
+
+
 def 스캔(파일, 쪽):
     """그 쪽 스캔의 로컬 경로(받아 둠). 1920px."""
     정보 = 파일정보(파일)
     쪽검사(정보, 쪽)                       # 캐시 폴더를 만들기 전에
     d = os.path.join(캐시, hashlib.sha1(파일.encode("utf-8")).hexdigest()[:16])
     os.makedirs(d, exist_ok=True)
-    if 정보["여러쪽"]:
-        p = os.path.join(d, f"{쪽:04d}.jpg")
-        r = step1_collect.fetch_one(정보["틀"], 쪽, p)
-        if r not in ("ok", "skip"):
-            raise 손님오류(f"스캔을 받지 못했습니다({r}) — {파일} {쪽}쪽")
-    else:
-        p = os.path.join(d, "0001.png")
-        with _한장잠금:                    # 같은 그림을 동시에 받지 않게 · 다 쓴 뒤 옮김(반쯤 쓴 그림을 읽지 않게)
-            if not os.path.exists(p):
-                im = Image.open(__import__("io").BytesIO(step1_collect._open(정보["주소"]))).convert("L")
-                if im.size[0] != 너비:
-                    im = im.resize((너비, round(im.size[1] * 너비 / im.size[0])), Image.BICUBIC)
-                im.save(p + ".part", "PNG")
-                os.replace(p + ".part", p)
+    try:
+        if 정보["여러쪽"]:
+            p = os.path.join(d, f"{쪽:04d}.jpg")
+            with _받기제한:
+                r = step1_collect.fetch_one(정보["틀"], 쪽, p, 최대=그림최대바이트)
+            if r not in ("ok", "skip"):
+                raise 손님오류(f"스캔을 받지 못했습니다({r}) — {파일} {쪽}쪽")
+            with Image.open(p) as im:
+                크기 = im.size
+            try:
+                _크기검사(*크기)
+            except 손님오류:
+                os.remove(p)
+                raise
+        else:
+            p = os.path.join(d, "0001.png")
+            with _한장잠금:                    # 같은 그림을 동시에 받지 않게 · 다 쓴 뒤 옮김(반쯤 쓴 그림을 읽지 않게)
+                if not os.path.exists(p):
+                    with _받기제한:
+                        b = step1_collect._open(정보["주소"], 최대=그림최대바이트)
+                    with Image.open(__import__("io").BytesIO(b)) as 원:
+                        _크기검사(*원.size)          # 픽셀을 풀기 전에
+                        im = 원.convert("L")
+                    if im.size[0] != 너비:
+                        im = im.resize((너비, round(im.size[1] * 너비 / im.size[0])), Image.BICUBIC)
+                    im.save(p + ".part", "PNG")
+                    os.replace(p + ".part", p)
+    except step1_collect.너무큼:
+        raise 손님오류(f"스캔 파일이 처리 한도({그림최대바이트 // 2**20}MB)보다 큽니다")
     os.utime(p)
     if r_정리.acquire(blocking=False):
         try:
@@ -325,11 +364,13 @@ def _살피기(파일):
                 고를쪽 = page.읽기자간쪽(단쪽그림, float(잰), 판형, 짜) or 단쪽그림[:page.READ_PICK_PAGES]
                 셈["한"], 셈["모두"] = len(모두), len(모두) + page.읽기자간횟수(len(고를쪽))
                 진행()
-                고른, _ = page.읽기자간고르기(고를쪽, float(잰), 판형, 모델, 표준, 알림=lambda: 진행(1))
+                고른, _ = page.읽기자간고르기(고를쪽, float(잰), 판형, _잠근모델(모델), 표준, 알림=lambda: 진행(1))
                 if 고른 != float(잰):
                     값["읽기자간비"] = float(고른)
         with _살핌잠금:
             _살핀[파일] = 값
+            while len(_살핀) > 기억최대:
+                del _살핀[next(iter(_살핀))]
             _살핌일.pop(파일, None)
             with open(설정파일 + ".새", "w", encoding="utf-8") as f:
                 json.dump({"판": 판형판, "값": _살핀}, f, ensure_ascii=False)
@@ -337,11 +378,40 @@ def _살피기(파일):
     except Exception as e:
         traceback.print_exc()
         with _살핌잠금:
-            _살핌일[파일] = {"진행": "", "오류": str(e)}
+            _살핌일[파일] = {"진행": "", "오류": str(e) if isinstance(e, 손님오류) else "판형을 살피다 서버에서 오류가 났습니다"}
+            오류들 = [k for k, v in _살핌일.items() if v.get("오류")]
+            for k in 오류들[:-64]:               # 아무도 되묻지 않은 오류는 64개까지만
+                del _살핌일[k]
+
+
+class _잠근모델:
+    """모델 부름마다 `계산` 잠금을 쥠 — 뒤에서 도는 살피기가 요청의 모델 셈과 겹치지 않게."""
+    def __init__(self, m):
+        self._m = m
+
+    def __getattr__(self, 이름):
+        v = getattr(self._m, 이름)
+        if not callable(v):
+            return v
+        def 잠가부름(*a, **k):
+            with 계산:
+                return v(*a, **k)
+        return 잠가부름
+
+
+_살핌자리 = threading.BoundedSemaphore(살피기동시)
+
+
+def _살피기차례(파일):
+    with _살핌자리:
+        with _살핌잠금:
+            if 파일 in _살핌일:
+                _살핌일[파일]["진행"] = "시작"
+        _살피기(파일)
 
 
 def 살핌상태(파일):
-    """{상태: 끝, 값} · {상태: 진행, 진행} · {상태: 오류, 오류}. 처음 부르면 뒤에서 살피기를 시작."""
+    """{상태: 끝, 값} · {상태: 진행, 진행} · {상태: 오류, 오류} · {상태: 바쁨}. 처음 부르면 뒤에서 살피기를 시작."""
     with _살핌잠금:
         if 파일 in _살핀:
             return {"상태": "끝", "값": _살핀[파일]}
@@ -350,13 +420,17 @@ def 살핌상태(파일):
             _살핌일.pop(파일, None)             # 다음에 다시 해 봄
             return {"상태": "오류", "오류": 일["오류"]}
         if 일 is None:
-            _살핌일[파일] = {"진행": "시작"}
-            threading.Thread(target=_살피기, args=(파일,), daemon=True).start()
+            if sum(1 for v in _살핌일.values() if not v.get("오류")) >= 살피기동시 + 살피기대기:
+                return {"상태": "바쁨", "진행": ""}
+            _살핌일[파일] = {"진행": "차례 기다림"}
+            threading.Thread(target=_살피기차례, args=(파일,), daemon=True).start()
         return {"상태": "진행", "진행": _살핌일[파일]["진행"]}
 
 
 def 살핀값(파일):
     s = 살핌상태(파일)
+    if s["상태"] == "바쁨":
+        raise 손님오류("서버가 다른 파일의 판형을 살피느라 바쁩니다 — 잠시 뒤에 다시", 503, s)
     if s["상태"] != "끝":
         raise 손님오류("이 파일의 판형을 아직 살피는 중입니다 — /api/inspect 로 끝난 뒤에 다시", 409, s)
     return s["값"]
@@ -490,8 +564,8 @@ def 영역자동읽기(파일, 쪽, 자간비=None, 모델이름=None, 너비확
         r = float(자간비) if 자간비 is not None else scan.YX_RATIO
     except (TypeError, ValueError):
         raise 손님오류("ratio(자간비)는 양수여야 합니다")
-    if not np.isfinite(r) or r <= 0:
-        raise 손님오류("ratio(자간비)는 양수여야 합니다")
+    if not np.isfinite(r) or not 자간비범위[0] <= r <= 자간비범위[1]:
+        raise 손님오류(f"ratio(자간비)는 {자간비범위[0]}~{자간비범위[1]} 사이여야 합니다")
     단계 = {"준비": time.perf_counter() - 시작}
     t = time.perf_counter()
     ip = 스캔(파일, 쪽)
@@ -527,6 +601,7 @@ def 영역자동읽기(파일, 쪽, 자간비=None, 모델이름=None, 너비확
 
 
 # 영역 지정 요청의 크기 한도
+상자최대개수 = 5000
 상자최대화소 = 1_048_576
 상자합계최대화소 = 16_777_216
 경계최대확대 = 4
@@ -542,8 +617,8 @@ def _좌표(v, 이름):
 def _상자목록(상자들):
     if not isinstance(상자들, list):
         raise 손님오류("boxes는 상자 목록이어야 합니다")
-    if len(상자들) > 20000:
-        raise 손님오류("상자가 너무 많습니다")
+    if len(상자들) > 상자최대개수:
+        raise 손님오류(f"상자가 너무 많습니다(최대 {상자최대개수}개)")
     결과, 합계 = [], 0
     for i, b in enumerate(상자들):
         이름 = f"boxes[{i}]"
@@ -706,7 +781,8 @@ def _정적(start, 이름, 앞=b""):
 
 def _응답(start, obj, 코드=200):
     b = json.dumps(obj, ensure_ascii=False, default=_json기본).encode("utf-8")
-    글 = {200: "200 OK", 400: "400 Bad Request", 404: "404 Not Found", 409: "409 Conflict", 500: "500 Internal Server Error"}
+    글 = {200: "200 OK", 400: "400 Bad Request", 404: "404 Not Found", 409: "409 Conflict", 500: "500 Internal Server Error",
+         503: "503 Service Unavailable"}
     start(글.get(코드, f"{코드} Error"), 공통머리 + [("Content-Type", "application/json; charset=utf-8"),
                                                 ("Content-Length", str(len(b))), ("Cache-Control", "no-store")])
     return [b]
@@ -719,7 +795,7 @@ def _몸(env):
         raise 손님오류("요청 길이가 올바르지 않습니다")
     if n < 0:
         raise 손님오류("요청 길이가 올바르지 않습니다")
-    if n > 5_000_000:
+    if n > 요청최대바이트:
         raise 손님오류("요청이 너무 큽니다")
     try:
         몸 = json.loads(env["wsgi.input"].read(n).decode("utf-8") or "{}") if n else {}
@@ -783,13 +859,14 @@ def app(env, start):
                     return [b]
                 return _정적(start, os.path.join("영역지정", 이름))
         if 경로 == "/api/health":
-            return _응답(start, dict(모델=판정보, 스레드=스레드, 캐시=캐시, 살핀파일=len(_살핀),
+            return _응답(start, dict(모델=판정보, 스레드=스레드, 살핀파일=len(_살핀),
                                   모델들={k: v for k, v in 모델이름들.items()
                                           if k == "hangul" or os.path.exists(os.path.join(국한문폴더, "국한문모델.onnx"))}))
         q = {k: v[0] for k, v in urllib.parse.parse_qs(env.get("QUERY_STRING", "")).items()}
         if 경로 == "/api/inspect":
             파일, _ = _파일쪽(q)
-            return _응답(start, 살핌상태(파일))
+            s = 살핌상태(파일)
+            return _응답(start, s, 503 if s["상태"] == "바쁨" else 200)
         if 경로 == "/api/tables":
             m = 모델얻기(q.get("model"))
             return _응답(start, dict(초성=m.Ls, 중성=m.Vs, 종성=m.Ts, 표=글자표지문(m)))
@@ -812,6 +889,8 @@ def app(env, start):
             본문 = 몸.get("text") if 몸.get("text") is not None else 몸.get("본문")
             if not isinstance(본문, str):
                 raise 손님오류("text(본문)가 없습니다")
+            if len(본문) > 본문최대글자:
+                raise 손님오류(f"text(본문)가 너무 깁니다(최대 {본문최대글자:,}자)")
             return _응답(start, 맞대기(파일, 쪽, 본문, 몸.get("model"), 몸.get("tiers")))
         if 경로 == "/api/boxes":
             상자 = 몸.get("boxes", [])
@@ -823,9 +902,9 @@ def app(env, start):
         return _응답(start, {"오류": "없는 주소"}, 404)
     except 손님오류 as e:
         return _응답(start, dict({"오류": str(e)}, **e.덧), e.코드)
-    except Exception as e:
-        traceback.print_exc()
-        return _응답(start, {"오류": f"서버에서 오류: {e}"}, 500)
+    except Exception:
+        traceback.print_exc()                  # 자세한 것은 서버 기록에만
+        return _응답(start, {"오류": "서버에서 오류가 났습니다"}, 500)
 
 
 if __name__ == "__main__":                     # 내 컴퓨터에서 시험 — python old-hangul-ocr-toolforge/app.py [포트]

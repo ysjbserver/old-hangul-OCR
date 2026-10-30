@@ -97,7 +97,7 @@ kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font-si
     <option value="영역">여러 열</option>
   </select></label>
   <label title="비우면 모델이 칸수를 고릅니다">글자 수 <input id="nIn" type="number" min="1" style="width:56px" placeholder="자동"></label>
-  <label title="세로 글자 간격 ÷ 열 간격 — 불러올 때 쪽에서 잼">자간비 <input id="ratioIn" type="number" step="0.001" style="width:72px"></label>
+  <label title="세로 글자 간격 ÷ 열 간격 — 불러올 때 쪽에서 잼">자간비 <input id="ratioIn" type="number" step="0.001" min="0.3" max="2" style="width:72px"></label>
   <button id="autoBtn" disabled>쪽 전체 자동 읽기</button>
   <button id="zoomOut" title="축소 (스캔 위에서 휠을 아래로)">－</button><button id="zoomFit" title="쪽 전체가 보이게">맞춤</button><button id="zoomIn" title="확대 (스캔 위에서 휠을 위로)">＋</button>
   <label><input id="showText" type="checkbox" checked> 글자 보기</label>
@@ -129,7 +129,6 @@ kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font-si
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-const ORT_CDN = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
 const st = {
   host: "ko.wikisource.org", file: "", page: null,
   g: null, 열간격: null, 자간비: null,
@@ -243,7 +242,7 @@ function 스크립트(url) {
 
 // ── 모델 ─────────────────────────────────────────────────────────────
 // 서버 모드(`서버.js` 가 window.옛한글OCR서버 를 채움)면 모델 셈만 서버에, 열 찾기 · 칸 나누기는 `읽기.js`
-// 아니면 ORT 를 이 폴더의 ort/ 에서, 없으면 jsDelivr 에서
+// 아니면 ORT 를 이 폴더의 ort/ 에서(`만들기.py --ort`)
 const 서버 = window.옛한글OCR서버 || null;
 // 읽는 모델(서버 모드만) — `?model=` > 지난번에 고른 것 > 근대 순한글. 목록은 `/api/health`
 const 저장 = (k, v) => { try { if (v === undefined) return localStorage.getItem("옛한글OCR:" + k); localStorage.setItem("옛한글OCR:" + k, v); } catch (e) {} return null; };
@@ -340,9 +339,9 @@ function 준비() {
       모델 = m; 글자표지문 = m.표지문;                 // 모델 · 글자 · 지문을 한꺼번에
       return m;
     }
-    let ortBase = "ort/";
+    const ortBase = "ort/";
     try { await 스크립트(ortBase + "ort.webgpu.min.js"); }
-    catch (e) { ortBase = ORT_CDN; await 스크립트(ortBase + "ort.webgpu.min.js"); }
+    catch (e) { throw new Error("ort/ 폴더가 없습니다 — 서버 모드로 열거나 `만들기.py --ort` 로 받으세요"); }
     ort.env.wasm.wasmPaths = new URL(ortBase, location.href).href;
     ort.env.wasm.numThreads = 1;
     알림("모델을 불러오는 중… (2.8MB, 처음 한 번만)");
@@ -706,7 +705,7 @@ function 누른자리고르기(pt) {
 function 방식() { return document.querySelector("#modeSel").value; }
 function 옵션() {
   const r = +$("ratioIn").value;
-  return { 자간비: r > 0.2 ? r : st.자간비, 열간격: st.열간격, 열들: st.열들, 글자수: +$("nIn").value || null };
+  return { 자간비: r >= 0.3 && r <= 2 ? r : st.자간비, 열간격: st.열간격, 열들: st.열들, 글자수: +$("nIn").value || null };
 }
 
 let 바쁨 = false;

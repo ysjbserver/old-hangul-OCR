@@ -37,12 +37,24 @@ def slugify(pdf):
     s = re.sub(r'[\\/:*?"<>|]', "", s)
     return re.sub(r"\s+", "_", s.strip()) or "문헌"
 
-def _open(url, method="GET", timeout=90):
-    """429/503 을 만나면 Retry-After 만큼 기다렸다 다시 시도한다."""
+class 너무큼(Exception):
+    """받은 것이 `_open(최대=)` 를 넘음 — 다시 시도하지 않음."""
+
+
+def _open(url, method="GET", timeout=90, 최대=None):
+    """429/503 을 만나면 Retry-After 만큼 기다렸다 다시 시도한다. `최대` 바이트를 넘으면 `너무큼`."""
     req = urllib.request.Request(url, headers={"User-Agent": UA}, method=method)
     for attempt in range(6):
         try:
-            return urllib.request.urlopen(req, timeout=timeout).read()
+            with urllib.request.urlopen(req, timeout=timeout) as res:
+                if 최대 is None:
+                    return res.read()
+                data = res.read(최대 + 1)
+            if len(data) > 최대:
+                raise 너무큼(url)
+            return data
+        except 너무큼:
+            raise
         except urllib.error.HTTPError as e:
             if e.code in (429, 503):
                 wait = int(e.headers.get("Retry-After") or 5) + attempt * 5
@@ -100,19 +112,19 @@ def _width_of(path):
 _받는쪽 = {}                    # 파일 경로 → 잠금 — 같은 쪽은 한 번에 한 스레드만 받음
 _받는쪽잠금 = threading.Lock()
 
-def fetch_one(pat, n, path):
+def fetch_one(pat, n, path, 최대=None):
     with _받는쪽잠금:
         잠금 = _받는쪽.setdefault(os.path.abspath(path), threading.Lock())
     with 잠금:
-        return _fetch_one(pat, n, path)
+        return _fetch_one(pat, n, path, 최대)
 
-def _fetch_one(pat, n, path):
+def _fetch_one(pat, n, path, 최대=None):
     # 이미 있어도 너비가 WIDTH 가 아니면 다시 받는다.
     if os.path.exists(path):
         if _width_of(path) == WIDTH:
             return "skip"
         os.remove(path)
-    data = _open(pat.replace("{N}", str(n)))
+    data = _open(pat.replace("{N}", str(n)), 최대=최대)
     if not data.startswith(b"\xff\xd8"):          # JPEG인지 확인
         return "fail"
     # 임시 파일에 다 쓴 뒤 옮김 — 다른 프로세스가 반쯤 쓴 그림을 읽지 않게
