@@ -50,8 +50,10 @@ function 지금쪽() {
   var cfg = mw.config.get(["wgCanonicalNamespace", "wgTitle", "wgAction"]);
   if (cfg.wgCanonicalNamespace !== "Page") return null;
   if (cfg.wgAction !== "edit" && cfg.wgAction !== "submit") return null;
-  var m = /^(.*)\/(\d+)$/.exec(순서편집제목() || cfg.wgTitle);
-  return m ? { 파일: m[1], 쪽: parseInt(m[2], 10) } : null;
+  var 제목 = 순서편집제목() || cfg.wgTitle;
+  var m = /^(.*)\/(\d+)$/.exec(제목);
+  if (m) return { 파일: m[1], 쪽: parseInt(m[2], 10) };
+  return /\.(jpe?g|png|gif|tiff?|webp)$/i.test(제목) ? { 파일: 제목, 쪽: 1 } : null;   // 한 장짜리 그림 쪽("페이지:그림.jpg")
 }
 
 /** 편집 상자 (2017 편집기·CodeMirror 아래에서도 원본은 이것) */
