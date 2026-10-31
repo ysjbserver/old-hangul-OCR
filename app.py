@@ -176,6 +176,19 @@ def _캐시정리():
                 pass
 
 
+try:                                    # 리눅스(glibc)만 — 다 쓴 메모리를 운영체제에 돌려줌
+    import ctypes
+    _malloc_trim = ctypes.CDLL("libc.so.6").malloc_trim
+except (OSError, AttributeError):
+    _malloc_trim = None
+
+
+def 메모리돌려주기():
+    """살피기 · 읽기를 마칠 때 — ⚠ 안 하면 스레드마다 놓은 메모리가 쌓여 다음 문헌에서 512MB 를 넘음(2026-11-01 OOMKilled)."""
+    if _malloc_trim:
+        _malloc_trim(0)
+
+
 def 메모리정보():
     """MB 단위 — 프로세스(지금 · 최고 · 스레드) · 컨테이너 cgroup(anon · file · shmem) · 스캔 캐시. 리눅스에서만 차고 나머지는 빈 값."""
     def mb(v):
@@ -454,7 +467,10 @@ def _살피기차례(파일):
         with _살핌잠금:
             if 파일 in _살핌일:
                 _살핌일[파일]["진행"] = "시작"
-        _살피기(파일)
+        try:
+            _살피기(파일)
+        finally:
+            메모리돌려주기()
 
 
 def 살핌상태(파일):
@@ -518,7 +534,10 @@ def _작업실행(이름, ip, 조건, 작업, 단계, 시작):
             _완료들.move_to_end(열쇠)
             답 = json.loads(저장[1])  # 매번 새 객체
         else:
-            답 = 작업()
+            try:
+                답 = 작업()
+            finally:
+                메모리돌려주기()
             if 사용 and not 답.get("사유"):
                 b = json.dumps(답, ensure_ascii=False, default=_json기본).encode("utf-8")
                 if len(b) <= 결과최대바이트:
