@@ -2427,6 +2427,8 @@ async function 분주읽기(모델, geo, 열들) {
 
 let EDGE_DROP = 0.3, EDGE_MAX = 3, EDGE_OVERLAP = 0.6, EDGE_DROP_IN = 0.7;   // align.py 와 같은 값
 let EDGE_BAR_RUN = 5;  // align.EDGE_BAR_RUN — 끝 열에 `ㅣ` 가 이만큼 넘게 연달아면 뗌 (null = 끔)
+let EDGE_BAR_LIKE = ["\u110b\u1175"];  // align.EDGE_BAR_LIKE — 그 셈에서 `ㅣ` 와 함께 셀 글자(첫가끝 꼴) · 설정 `가장자리막대줄섞음`
+let EDGE_SHORT = 2;   // align.EDGE_SHORT — 짧은 끝 열(쪽 번호 조각)은 안쪽 열이 뗄 열이면 함께 뗌 · 설정 `끝열짧음` (null = 끔)
 let EDGE_BAR = 0.5;   // align.EDGE_BAR — 끝 열이 이 몫 넘게 `ㅣ` 면 광곽 세로줄로 보고 뗌 (null = 끔)
 let EDGE_GUIDE = 0.3;  // align.EDGE_GUIDE — 세로줄 너머 떼일 열들이 본문 같으면(확신 · 간격 자간 ±이 몫) 안 뗌 — 계선 판 (null = 끔)
 let CUT_COST_W = 1.0;        // align.CUT_COST_W — 열의 칸수를 고르는 점수 = 평균 로그 확신 − 이 무게 × 자르기 비용 ÷ 칸수 (0 = 확신만)
@@ -2561,17 +2563,23 @@ function 가장자리다듬기(geo, 열들, δ, 최대, 겹침, 안δ) {
   const 막대줄 = function (i) {   // align.py 의 `막대줄`
     if (EDGE_BAR_RUN === null || 열들[i] === null) return false;
     let n = 0;
-    for (const 자 of 열들[i].글자) { n = 자 === "ㅣ" ? n + 1 : 0; if (n > EDGE_BAR_RUN) return true; }
+    for (const 자 of 열들[i].글자) { n = (자 === "ㅣ" || EDGE_BAR_LIKE.indexOf(자) >= 0) ? n + 1 : 0; if (n > EDGE_BAR_RUN) return true; }
     return false;
   };
   const 나쁨 = function (i, d, j) { return 열들[i] === null || (점(i) < 기준 - d && !보호(i, j)) || 막대(i) || 막대줄(i); };
   const 넉넉 = EDGE_FEW === null ? function () { return 남.length > 4; }
     : function (i) { return 열들[i] === null || 남.filter(function (q) { return 열들[q] !== null; }).length > EDGE_FEW; };
+  const 짧음 = function (i) { return EDGE_SHORT !== null && 열들[i] !== null && 열들[i].글자.length <= EDGE_SHORT; };   // align.py 의 `짧음`
   for (let t = 0; t < 최대; t++) {
-    if (남.length && 넉넉(남[0]) && 나쁨(남[0], d앞, 남[0] - 1)) 남.shift(); else break;
+    if (남.length && 넉넉(남[0]) && 나쁨(남[0], d앞, 남[0] - 1)) 남.shift();
+    else if (남.length > 1 && 짧음(남[0]) && 넉넉(남[1]) && 나쁨(남[1], d앞, 남[1] - 1)) 남.splice(0, 2);
+    else break;
   }
   for (let t = 0; t < 최대; t++) {
-    if (남.length && 넉넉(남[남.length - 1]) && 나쁨(남[남.length - 1], d뒤, 남[남.length - 1] + 1)) 남.pop(); else break;
+    const k = 남.length - 1;
+    if (남.length && 넉넉(남[k]) && 나쁨(남[k], d뒤, 남[k] + 1)) 남.pop();
+    else if (남.length > 1 && 짧음(남[k]) && 넉넉(남[k - 1]) && 나쁨(남[k - 1], d뒤, 남[k - 1] + 1)) 남.splice(k - 1, 2);
+    else break;
   }
   return 남;
 }
@@ -2952,6 +2960,8 @@ const API = {
     if (s.광곽고랑줄 !== undefined) FRAME_GUTTER_LINE = s.광곽고랑줄;
     if (s.끝열보호 !== undefined) { EDGE_MEDIAN = s.끝열보호 ? s.끝열보호[0] : null; if (s.끝열보호) EDGE_MEDIAN_LOW = s.끝열보호[1]; }
     if (s.끝열적음 !== undefined) EDGE_FEW = s.끝열적음;
+    if (s.가장자리막대줄섞음 !== undefined) EDGE_BAR_LIKE = s.가장자리막대줄섞음 || [];
+    if (s.끝열짧음 !== undefined) EDGE_SHORT = s.끝열짧음;
     if (s.상자맞춤 !== undefined) { CROP_FIT = s.상자맞춤[0]; CROP_FIT_RATIO = s.상자맞춤[1]; CROP_FIT_TO = s.상자맞춤[2]; }
     if (s.자간글자폭 !== undefined) { RATIO_FIT = s.자간글자폭 ? s.자간글자폭.slice(0, 2) : null; if (s.자간글자폭) RATIO_FIT_OVER = s.자간글자폭[2]; }
     if (s.잉크끝 !== undefined) { INK_EDGE = s.잉크끝; EDGE_ZONE = s.끝띠몫; STRIP_FILL = s.끝띠채움; }

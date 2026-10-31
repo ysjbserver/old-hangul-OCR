@@ -29,6 +29,8 @@ EDGE_OVERLAP = 0.6    # 이웃 열과 가운데가 자간의 이 배보다 가�
 EDGE_DROP_IN = 0.7    # 광곽 세로줄을 찾은 쪽은 줄 안쪽 열을 이만큼까지 봐준다
 EDGE_BAR     = 0.5    # 끝 열의 글자가 이 몫 넘게 `ㅣ` 면 광곽 세로줄로 보고 뗀다 (None = 끔)
 EDGE_BAR_RUN = 5      # 끝 열에 `ㅣ` 가 이만큼 넘게 연달아 나오면 광곽 줄 · 판심 열로 보고 뗀다 (None = 끔)
+EDGE_BAR_LIKE = ("\u110b\u1175",)   # `EDGE_BAR_RUN` 을 셀 때 `ㅣ` 와 함께 셀 글자(모델이 내는 첫가끝 꼴 「이」) — 판심 줄을 「ㅣㅣ이이ㅣ」 로 섞어 읽음 (() = 끔)
+EDGE_SHORT = 2        # 끝 열 글자가 이만큼 이하(쪽 번호 조각)이고 바로 안쪽 열이 뗄 열이면 둘 다 뗀다 (None = 끔)
                       #   — 본문의 주격 조사 `ㅣ` 는 두 번 넘게 잇따르지 않음
 EDGE_GUIDE   = 0.3    # 세로줄 너머 떼일 열(둘 이상)이 본문처럼 보이면(확신 · 간격이 자간 ±이 몫) 떼지 않음 — 계선 판 (None = 끔)
 EDGE_GUIDE_ONE_MIN = 12  # `EDGE_GUIDE_ONE` 은 안쪽 열 글자 수 중앙값이 이 이상인 본문 쪽에서만(목차 쪽의 광곽 밖 제목 열은 안 살림)
@@ -1013,7 +1015,7 @@ def 가장자리다듬기(geo, 열들, δ=EDGE_DROP, 최대=EDGE_MAX, 겹침=EDG
             return False
         n = 0
         for 자 in 열들[i][1]:
-            n = n + 1 if 자 == "ㅣ" else 0
+            n = n + 1 if 자 == "ㅣ" or 자 in EDGE_BAR_LIKE else 0
             if n > EDGE_BAR_RUN:
                 return True
         return False
@@ -1022,10 +1024,14 @@ def 가장자리다듬기(geo, 열들, δ=EDGE_DROP, 최대=EDGE_MAX, 겹침=EDG
         넉넉 = lambda i: len(남) > 4
     else:                                   # 빈 후보 열은 늘 뗄 수 있고, 읽은 열은 `EDGE_FEW` 넘게 남을 때만
         넉넉 = lambda i: 열들[i] is None or sum(열들[q] is not None for q in 남) > EDGE_FEW
+    # 쪽 번호 조각 같은 짧은 끝 열이 확신만으로 안 떼여 안쪽의 판심 열을 가리면 함께 뗌(`EDGE_SHORT`)
+    짧음 = lambda i: EDGE_SHORT is not None and 열들[i] is not None and len(열들[i][1]) <= EDGE_SHORT
     for _ in range(최대):
         if 남 and 넉넉(남[0]) and 나쁨(남[0], d앞, 남[0] - 1): 남.pop(0)
+        elif len(남) > 1 and 짧음(남[0]) and 넉넉(남[1]) and 나쁨(남[1], d앞, 남[1] - 1): del 남[:2]
         else: break
     for _ in range(최대):
         if 남 and 넉넉(남[-1]) and 나쁨(남[-1], d뒤, 남[-1] + 1): 남.pop()
+        elif len(남) > 1 and 짧음(남[-1]) and 넉넉(남[-2]) and 나쁨(남[-2], d뒤, 남[-2] + 1): del 남[-2:]
         else: break
     return 남
