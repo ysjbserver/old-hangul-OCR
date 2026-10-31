@@ -54,7 +54,7 @@ class 모델:
         self.세션 = _세션(os.path.join(폴더, "옛한글모델.onnx"), 스레드)
         self.폴더 = 폴더
         self.dev = "onnx"
-        self._기억 = (None, {})               # (그림 열쇠, {상자: (초, 중, 종 확률)}) — 마지막 그림 하나만
+        self._기억 = []                       # [(그림 열쇠, {상자: (초, 중, 종 확률)})] — 최근 그림 `기억그림수` 장
 
     def crops(self, im, boxes):
         """`ocr.Model.crops` 와 같은 셈 — numpy (n, 1, size, size) float32"""
@@ -63,6 +63,15 @@ class 모델:
             X[k, 0] = np.asarray(im.crop((b[0]-4, b[1]-4, b[2]+4, b[3]+4))
                                  .resize((self.size, self.size)), dtype=np.float32)
         return (X / 255 - 0.5) / 0.5
+
+    기억그림수 = 12       # 읽기 자간 고르기가 쪽 넷을 배율마다 되읽음 — 살피기 셋이 함께 돌아도 안 밀리게
+
+    def _그림기억(self, im):
+        """이 그림의 {상자: 확률}(최근에 쓴 그림부터 `기억그림수` 장까지 둠)."""
+        열쇠 = self._그림열쇠(im)
+        d = next((d for k, d in self._기억 if k == 열쇠), {})
+        self._기억 = [(열쇠, d)] + [x for x in self._기억 if x[0] != 열쇠][:self.기억그림수 - 1]
+        return d
 
     def _그림열쇠(self, im):
         고정 = getattr(self, "_고정그림", None)
@@ -83,11 +92,8 @@ class 모델:
     def _머리들(self, im, boxes, batch):
         # ⚠ 뭉치는 self.뭉치 를 넘지 않게 — 크면 ORT 메모리가 커짐
         batch = min(batch, self.뭉치)
-        # 같은 상자는 한 번만 읽음 — 마지막 그림 하나의 결과를 부름 사이에도 기억
-        열쇠그림 = self._그림열쇠(im)
-        if self._기억[0] != 열쇠그림:
-            self._기억 = (열쇠그림, {})
-        기억 = self._기억[1]
+        # 같은 상자는 한 번만 읽음 — 최근 그림들의 결과를 부름 사이에도 기억
+        기억 = self._그림기억(im)
         열쇠들 = [tuple(int(v) for v in b) for b in boxes]
         새것 = list(dict.fromkeys(k for k in 열쇠들 if k not in 기억))
         for i in range(0, len(새것), batch):
@@ -159,17 +165,15 @@ class 혼용모델(모델):
         self.세션 = _세션(os.path.join(폴더, "국한문모델.onnx"), 스레드)
         self.폴더 = 폴더
         self.dev = "onnx"
-        self._기억 = (None, {})
+        self._기억 = []
 
     상위 = 64             # ⚠ 한자 확률은 상자마다 위 64개만 기억(나머지는 0) — 다 들면 메모리 한도를 넘음
+    기억그림수 = 1        # 판형 살피기는 순한글 모델만 씀 — 상자가 무거워 마지막 그림 하나만
 
     def _머리들(self, im, boxes, batch):
-        # 마지막 그림의 (갈래 · 초 · 중 · 종 · 한자 위 64개 번호 · 확률)을 상자별로 기억
+        # 최근 그림들의 (갈래 · 초 · 중 · 종 · 한자 위 64개 번호 · 확률)을 상자별로 기억
         batch = min(batch, self.뭉치)
-        열쇠그림 = self._그림열쇠(im)
-        if self._기억[0] != 열쇠그림:
-            self._기억 = (열쇠그림, {})
-        기억 = self._기억[1]
+        기억 = self._그림기억(im)
         열쇠들 = [tuple(int(v) for v in b) for b in boxes]
         새것 = list(dict.fromkeys(k for k in 열쇠들 if k not in 기억))
         K = self.상위

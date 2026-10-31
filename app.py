@@ -320,18 +320,23 @@ def _살피기(파일):
             가름쪽, 단쪽 = 고르게쪽(n, 12), 고르게쪽(n, 8)
             모두 = 가름쪽 + [p for p in 단쪽 if p not in 가름쪽]
             가름, 단, 길, 짜임 = {}, {}, {}, []
-            # 진행 "n/N쪽" — 받아 재는 쪽 + 읽기 자간을 고르며 읽는 쪽을 한 줄로 셈(N 은 읽을 쪽이 정해지면 줄어듦)
-            셈 = {"한": 0, "모두": len(모두) + page.읽기자간횟수(page.READ_PICK_PAGES)}
-            def 진행(더=0):
-                셈["한"] += 더
-                _살핌일[파일]["진행"] = f"{min(셈['한'], 셈['모두'])}/{셈['모두']}쪽"
+            # 진행 — 받는 동안 "다운로드 n/N쪽"(받은 장 수), 다 받은 뒤 "계산 k%"(읽기 자간을 고르며 읽은 횟수의 몫)
+            일 = _살핌일[파일]
+            읽음 = {"한": 0, "모두": 0}
+            def 진행(*_):
+                받은 = sum(1 for f in 받을것 if f.done())
+                if 받은 < len(모두):
+                    일["진행"] = f"다운로드 {받은}/{len(모두)}쪽"
+                else:
+                    일["진행"] = f"계산 {min(99, 100 * 읽음['한'] // max(1, 읽음['모두']))}%"
             # 스캔은 `step1_collect.WORKERS` 장씩 함께 받고(위키미디어 권장 상한), 재기는 쪽 차례대로
             받기 = ThreadPoolExecutor(max_workers=step1_collect.WORKERS)
             받을것 = [받기.submit(스캔, 파일, p) for p in 모두]
+            진행()
+            for f in 받을것:
+                f.add_done_callback(진행)
             try:
                 for i, p in enumerate(모두):
-                    셈["한"] = i
-                    진행(1)
                     try:
                         ip = 받을것[i].result()
                         if p in 가름쪽:
@@ -362,9 +367,11 @@ def _살피기(파일):
                 단쪽그림 = [길[p] for p in 단쪽 if p in 길]
                 표준 = 짜["자간"] if 짜 and page.SCAN_PITCH else None
                 고를쪽 = page.읽기자간쪽(단쪽그림, float(잰), 판형, 짜) or 단쪽그림[:page.READ_PICK_PAGES]
-                셈["한"], 셈["모두"] = len(모두), len(모두) + page.읽기자간횟수(len(고를쪽))
-                진행()
-                고른, _ = page.읽기자간고르기(고를쪽, float(잰), 판형, _잠근모델(모델), 표준, 알림=lambda: 진행(1))
+                읽음["모두"] = page.읽기자간횟수(len(고를쪽))
+                def 읽었음():
+                    읽음["한"] += 1
+                    진행()
+                고른, _ = page.읽기자간고르기(고를쪽, float(잰), 판형, _잠근모델(모델), 표준, 알림=읽었음)
                 if 고른 != float(잰):
                     값["읽기자간비"] = float(고른)
         with _살핌잠금:
