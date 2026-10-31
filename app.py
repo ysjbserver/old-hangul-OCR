@@ -176,6 +176,46 @@ def _캐시정리():
                 pass
 
 
+def 메모리정보():
+    """MB 단위 — 프로세스(지금 · 최고 · 스레드) · 컨테이너 cgroup(anon · file · shmem) · 스캔 캐시. 리눅스에서만 차고 나머지는 빈 값."""
+    def mb(v):
+        return round(int(v) / 2**20, 1)
+    out = {}
+    try:
+        with open("/proc/self/status") as f:
+            for l in f:
+                k, _, v = l.partition(":")
+                if k in ("VmRSS", "VmHWM"):
+                    out[k] = round(int(v.split()[0]) / 1024, 1)
+                elif k == "Threads":
+                    out[k] = int(v)
+    except OSError:
+        pass
+    for 이름, 키 in (("memory.current", "cgroup"), ("memory.peak", "cgroup최고"),
+                    ("memory/memory.usage_in_bytes", "cgroup"), ("memory/memory.max_usage_in_bytes", "cgroup최고")):
+        try:
+            with open("/sys/fs/cgroup/" + 이름) as f:
+                out.setdefault(키, mb(f.read().strip()))
+        except (OSError, ValueError):
+            pass
+    for 이름 in ("memory.stat", "memory/memory.stat"):
+        try:
+            with open("/sys/fs/cgroup/" + 이름) as f:
+                for l in f:
+                    k, v = l.split()
+                    if k in ("anon", "file", "shmem", "file_dirty", "kernel", "total_rss", "total_cache", "total_shmem"):
+                        out[k] = mb(v)
+            break
+        except (OSError, ValueError):
+            pass
+    try:
+        크기 = [os.path.getsize(os.path.join(a, n)) for a, _, ns in os.walk(캐시) for n in ns]
+        out["스캔캐시"] = {"파일": len(크기), "MB": mb(sum(크기))}
+    except OSError:
+        pass
+    return out
+
+
 def 쪽검사(정보, 쪽):
     """쪽 번호가 그 파일에 있는지 — 없으면 400. 한 장짜리는 1쪽뿐, 여러 쪽은 1~쪽수."""
     if isinstance(쪽, bool) or not isinstance(쪽, int) or 쪽 < 1:
@@ -866,7 +906,7 @@ def app(env, start):
                     return [b]
                 return _정적(start, os.path.join("영역지정", 이름))
         if 경로 == "/api/health":
-            return _응답(start, dict(모델=판정보, 스레드=스레드, 살핀파일=len(_살핀),
+            return _응답(start, dict(모델=판정보, 스레드=스레드, 살핀파일=len(_살핀), 메모리=메모리정보(),
                                   모델들={k: v for k, v in 모델이름들.items()
                                           if k == "hangul" or os.path.exists(os.path.join(국한문폴더, "국한문모델.onnx"))}))
         q = {k: v[0] for k, v in urllib.parse.parse_qs(env.get("QUERY_STRING", "")).items()}
