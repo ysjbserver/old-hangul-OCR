@@ -351,15 +351,29 @@ def 잉크골라(geo, 읽기, 확신들=None):
     """
     흐린 쪽 문턱으로 잡은 기하(`geo["기본기하"]` 가 있음)면 기본 문턱 기하로도 읽어 확신 ≥ `FAINT_PICK` 글자가
     더 많은 쪽 → (geo, 읽기(geo)). 확신들(결과) → 확신 목록 — 없으면 결과를 (글자, 확신, …) 줄 목록으로 봄.
+    격자 후보(`geo["격자"]` — `scan.격자기하`)가 있으면 그것으로도 읽어 (확신 ≥ `FAINT_PICK` 글자 − 나머지 글자)가 더 클 때만 씀.
     """
-    r = 읽기(geo) if geo is not None else None
-    if geo is None or not geo.get("기본기하"):
+    확 = lambda x: 확신들(x) if 확신들 else [c for z in x for c in z[1]]
+    셈 = lambda x: sum(1 for c in 확(x) if c >= FAINT_PICK)
+    격자셈 = lambda x: 2 * 셈(x) - len(확(x))      # 늘린 열이 헛읽기면 낮은 글자가 늘어 깎임
+
+    def 격자골라(g):
+        r = 읽기(g)
+        k = g.get("격자")
+        if k is None:
+            return g, r
+        rk = 읽기(k)
+        return (k, rk) if 격자셈(rk) > 격자셈(r) else (g, r)
+
+    if geo is None:
+        return geo, None
+    geo, r = 격자골라(geo)
+    if not geo.get("기본기하"):
         return geo, r
     geo0 = geo["기본기하"]()
     if geo0 is None:
         return geo, r
-    r0 = 읽기(geo0)
-    셈 = lambda x: sum(1 for c in (확신들(x) if 확신들 else [c for z in x for c in z[1]]) if c >= FAINT_PICK)
+    geo0, r0 = 격자골라(geo0)
     return (geo0, r0) if 셈(r0) > 셈(r) else (geo, r)
 
 

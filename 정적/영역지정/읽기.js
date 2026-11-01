@@ -90,6 +90,7 @@ let INK = 120;          // 이보다 어두우면 잉크로 본다
 let GLYPH = 0.35;       // 글자가 있는 줄은 열 폭의 이만큼 이상이 잉크다
 let SPAN_EXTEND = true, SPAN_LOW = 0.15, SPAN_REACH = 1.5, SPAN_GAP = 0.4;   // scan._이어잡기
 let SPAN_ALIGN = [0.3, 1.5], SPAN_ALIGN_Q = 75;   // scan._끝맞추기 — (읽을 때만) 꽉 찬 열의 끝을 맞춘 구간을 후보로(null = 끔)
+let GRID = [1.15, 1.5, 0.01];   // scan.GRID — (읽을 때만) 판짜임 열 간격으로 열을 다시 짠 격자 후보(`격자기하`) [넓음, 틈, 잉크몫] (null = 끔)
 let SPAN_FAINT = 160;   // scan._연한머리잇기 — 흐린 열 머리를 이 밝기 미만으로 다시 찾음(0 = 끔)
 let INK_FAINT = [70, 45];   // scan.INK_FAINT — (읽을 때만) 흐린 잉크 쪽의 잉크 문턱(`연한잉크문턱`). null = 끔
 let FAINT_PICK = 0.93;     // align.FAINT_PICK — 흐린 쪽 두 기하 중 이 확신 넘는 글자가 많은 쪽(`잉크골라`)
@@ -915,6 +916,122 @@ function 끝맞추기(spans, Ts, Bs, pitch) {
   });
 }
 
+/**
+ * `scan.격자기하` — 판짜임 열 간격(표준)으로 묶인 열을 가르고 빠진 열(사이 · 광곽 안 바깥쪽)을 끼운 기하(한 단만). 바뀐 것이 없으면 null.
+ * 잰 열 간격이 PITCH_OFF 넘게 틀렸으면 글자 간격 · 그림자 · 짐작 칸수도 표준대로.
+ */
+function 격자기하(geo, 표준) {
+  if (!geo || !표준 || !GRID || geo.단 !== 1 || geo.cols.length < 2) return null;
+  const 넓음 = GRID[0], 틈 = GRID[1], 잉크몫 = GRID[2];
+  const g = 잉크판(geo), h = g.높이, w = g.너비, v = g.값;
+  const 좁은 = geo.cols.map(function (c) { return c[1] - c[0]; }).filter(function (x) { return x <= 표준; });
+  const 한폭 = 좁은.length ? 중앙값(좁은) : 표준 * 0.6;
+  const r0 = 자름(h * 0.1), r1 = 자름(h * 0.9), 줄수 = r1 - r0;
+  const 잉크 = new Float64Array(w);
+  for (let y = r0; y < r1; y++) { const o = y * w; for (let x = 0; x < w; x++) if (v[o + x] < INK) 잉크[x]++; }
+  const 잉크합 = function (x0, x1) { let s = 0; for (let x = Math.max(0, x0); x < Math.min(w, x1); x++) s += 잉크[x]; return s; };
+  const 다듬기 = function (c) {                 // 짐작한 가운데를 그 근처 잉크 무게 중심으로
+    const a = 자름(Math.max(0, c - 표준 * 0.35)), b = 자름(Math.min(w, c + 표준 * 0.35));
+    let s = 0, m = 0;
+    for (let x = a; x < b; x++) { s += 잉크[x]; m += 잉크[x] * (x - a); }
+    return s > 0 ? a + m / s : c;
+  };
+  const 새 = [];                                // [x0, x1, 옛 번호 | null] — 오른쪽부터
+  geo.cols.forEach(function (ab, i) {
+    const a = ab[0], b = ab[1], k = 반올림((b - a - 한폭) / 표준) + 1;
+    if (b - a <= 표준 * 넓음 || k < 2) { 새.push([a, b, i]); return; }
+    for (let j = 0; j < k; j++) {               // 묶인 열 — 오른쪽 끝 열부터 간격대로
+      const c = 다듬기(b - 한폭 / 2 - j * 표준);
+      새.push([자름(c - 한폭 / 2), 자름(c + 한폭 / 2), null]);
+    }
+  });
+  let 채운 = [];
+  for (let n = 0; n + 1 < 새.length; n++) {
+    const p = 새[n], q = 새[n + 1];
+    채운.push(p);
+    const 사이 = (p[0] + p[1]) / 2 - (q[0] + q[1]) / 2, m = 반올림(사이 / 표준) - 1;
+    if (사이 <= 표준 * 틈 || m < 1) continue;
+    for (let j = 1; j <= m; j++) {
+      const c = 다듬기((p[0] + p[1]) / 2 - 사이 * j / (m + 1));
+      const x0 = 자름(c - 한폭 / 2), x1 = 자름(c + 한폭 / 2);
+      if (잉크합(x0, x1) > (x1 - x0) * 줄수 * 잉크몫) 채운.push([x0, x1, null]);
+    }
+  }
+  채운.push(새[새.length - 1]);
+  // 광곽 안이면 잡힌 열 바깥으로도 간격대로 — 끝 쪽 짧은 열을 열 찾기가 놓친 쪽
+  const s0 = 자름(h * 0.2), s1 = 자름(h * 0.8), 덩 = [];
+  let 덩시작 = -1;
+  for (let x = 0; x <= w; x++) {
+    let 선 = false;
+    if (x < w) { let n = 0; for (let y = s0; y < s1; y++) if (v[y * w + x] < 160) n++; 선 = n / (s1 - s0) >= 0.4; }
+    if (선 && 덩시작 < 0) 덩시작 = x;
+    if (!선 && 덩시작 >= 0) { if (x - 덩시작 >= 3) 덩.push([덩시작, x - 1]); 덩시작 = -1; }
+  }
+  const 가 = 채운.map(function (c) { return (c[0] + c[1]) / 2; });
+  const 가작 = Math.min.apply(null, 가), 가큰 = Math.max.apply(null, 가);
+  const 왼 = 덩.filter(function (z) { return z[1] < 가작 - 표준 * 0.4; });
+  const 오 = 덩.filter(function (z) { return z[0] > 가큰 + 표준 * 0.4; });
+  [[채운.length - 1, -1, 왼.length ? 왼[왼.length - 1][1] : null], [0, 1, 오.length ? 오[0][0] : null]].forEach(function (t) {
+    const 끝 = t[0], 쪽 = t[1], 벽 = t[2];
+    if (벽 === null) return;
+    let c = (채운[끝][0] + 채운[끝][1]) / 2 + 쪽 * 표준;
+    const 덧 = [];
+    while ((c - 벽) * -쪽 > 표준 * 0.4) {
+      const c2 = 다듬기(c), x0 = 자름(c2 - 한폭 / 2), x1 = 자름(c2 + 한폭 / 2);
+      if (잉크합(x0, x1) > (x1 - x0) * 줄수 * 잉크몫) 덧.push([x0, x1, null]);   // 빈 띠는 건너뛰고 광곽까지
+      c += 쪽 * 표준;
+    }
+    채운 = 쪽 < 0 ? 채운.concat(덧) : 덧.reverse().concat(채운);
+  });
+  if (채운.every(function (c) { return c[2] !== null; })) return null;
+  const cols = 채운.map(function (c) { return [Math.max(0, c[0]), Math.min(w, c[1])]; });
+  const TB = 광곽(g, cols, true), T = TB[0], B = TB[1];
+  if (!(0 <= T && T < B && B <= h)) return null;
+  const 고칠간격 = Math.abs(geo.xpitch - 표준) > 표준 * PITCH_OFF;
+  const pitch = 고칠간격 ? geo.pitch * 표준 / geo.xpitch : geo.pitch;
+  const 열TB = 열광곽(g, cols, T, B, 표준, pitch), Ts = 열TB[0], Bs = 열TB[1];
+  const out = Object.assign({}, geo);
+  const 끝 = Array.isArray(geo.끝맞춤) ? geo.끝맞춤 : null;
+  out.끝맞춤 = 끝 ? [] : null;
+  ["cols", "crop_cols", "spans", "sm", "est"].forEach(function (k) { out[k] = []; });
+  cols.forEach(function (x, n) {
+    const i = 채운[n][2];
+    if (i !== null) {
+      ["cols", "crop_cols", "spans", "sm", "est"].forEach(function (k) { out[k].push(geo[k][i]); });
+      if (끝) out.끝맞춤.push(끝[i]);
+      return;
+    }
+    const x0 = x[0], x1 = x[1], p = 열잉크(g, x0, x1);
+    let a = -1, b = -1;
+    for (let y = Ts[n]; y < Bs[n]; y++) if (p[y] > (x1 - x0) * GLYPH) { if (a < 0) a = y; b = y; }
+    if (a < 0) return;                         // 글자 줄이 없는 띠 — 버림
+    const span = 이어잡기(p, a, b + 1, x1 - x0, Ts[n], Bs[n], pitch), c = (x0 + x1) / 2;
+    out.cols.push([x0, x1]);
+    out.crop_cols.push([Math.max(0, 자름(c - 표준 * 0.45)), Math.min(w, 자름(c + 표준 * 0.45))]);
+    out.spans.push(span);
+    out.sm.push(고르기(p, Math.max(2, pitch / 9)));
+    out.est.push(Math.max(1, 반올림((span[1] - span[0]) / pitch)));
+    if (끝) out.끝맞춤.push(null);
+  });
+  if (고칠간격) {                                // 잘못 잰 열 간격에서 나온 글자 간격 · 그림자 · 짐작 칸수도 판짜임대로
+    out.xpitch = 표준; out.pitch = pitch;
+    out.sm = 잉크무늬(g, out.cols).map(function (p) { return 고르기(p, Math.max(2.0, pitch / 9)); });
+    out.est = out.spans.map(function (sp) { return sp === null ? 0 : Math.max(1, 반올림((sp[1] - sp[0]) / pitch)); });
+    out.끝맞춤 = null;
+  }
+  delete out.격자;
+  return out.cols.length > geo.cols.length ? out : null;
+}
+
+/** 읽는 기하(가장자리 후보가 붙은 한 단)에 격자 후보를 `geo.격자` 로 — `scan._격자붙이기` */
+function 격자붙이기(geo, 표준자간) {
+  if (GRID && 표준자간 && geo && geo.가장자리) {
+    const k = 격자기하(geo, 표준자간);
+    if (k) geo.격자 = k;
+  }
+  return geo;
+}
+
 /** `scan._연한머리잇기` — 이웃 열보다 늦게 시작한 열을 옅은 잉크 무늬로 위로 다시 잇는다(흐린 열 머리). */
 function 연한머리잇기(faint, cols, spans, Ts, pitch) {
   const starts = spans.filter(function (s) { return s; }).map(function (s) { return s[0]; }).sort(function (a, b) { return a - b; });
@@ -1429,15 +1546,15 @@ function 연한잉크문턱(g) {
  */
 function 쪽기하(g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, 판심, 빈단, 잉크) {
   const 문턱 = 읽기 ? (잉크 === undefined || 잉크 === null ? 연한잉크문턱(g) : 자름(잉크)) : INK;
-  if (문턱 <= INK) return 쪽기하속(g, g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, 판심, 빈단);
+  if (문턱 <= INK) return 격자붙이기(쪽기하속(g, g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, 판심, 빈단), 표준자간);
   const d = 문턱 - INK, 값 = new Uint8Array(g.값.length);
   for (let i = 0; i < 값.length; i++) { const v = g.값[i] - d; 값[i] = v > 0 ? v : 0; }
   const gi = { 너비: g.너비, 높이: g.높이, 값: 값 };
   const out = 쪽기하속(gi, g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, 판심, 빈단);
-  if (!out) return 쪽기하속(g, g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, 판심, 빈단);
+  if (!out) return 격자붙이기(쪽기하속(g, g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, 판심, 빈단), 표준자간);
   out.그림 = g; out.잉크 = 문턱; out.잉크그림 = gi;
   out.기본기하 = function () { return 쪽기하(g, ratio, 단, 읽기, 표준자간, 가장자리, 끝띠, 판심, 빈단, INK); };
-  return out;
+  return 격자붙이기(out, 표준자간);
 }
 
 /** `scan._쪽기하` — g: 잉크를 셀 그림 · 원본: 쪽 그림(옅은 잉크 문턱 `SPAN_FAINT` · `FRAME_CURVE` 는 이것으로) */
@@ -1839,16 +1956,26 @@ function 잉크판(geo) { return geo.잉크그림 || geo.그림; }
 
 /**
  * `align.잉크골라` — 흐린 쪽 기하(`기본기하` 가 있음)면 기본 문턱 기하로도 읽어 확신 ≥ FAINT_PICK 글자가 더 많은 쪽.
+ * 격자 후보(`geo.격자`)가 있으면 그것으로도 읽어 (확신 ≥ FAINT_PICK 글자 − 나머지 글자)가 더 클 때만 씀.
  * 읽기(geo) → 결과(Promise), 확신들(결과) → 확신 목록(없으면 결과.확신). 반환 {geo, 결과}
  */
 async function 잉크골라(geo, 읽기, 확신들) {
-  const r = geo ? await 읽기(geo) : null;
-  if (!geo || !geo.기본기하) return { geo: geo, 결과: r };
-  const geo0 = geo.기본기하();
-  if (!geo0) return { geo: geo, 결과: r };
-  const r0 = await 읽기(geo0);
-  const 셈 = function (x) { let n = 0; for (const c of (확신들 ? 확신들(x) : x.확신)) if (c >= FAINT_PICK) n++; return n; };
-  return 셈(r0) > 셈(r) ? { geo: geo0, 결과: r0 } : { geo: geo, 결과: r };
+  const 확 = function (x) { return 확신들 ? 확신들(x) : x.확신; };
+  const 셈 = function (x) { let n = 0; for (const c of 확(x)) if (c >= FAINT_PICK) n++; return n; };
+  const 격자셈 = function (x) { return 2 * 셈(x) - 확(x).length; };   // 늘린 열이 헛읽기면 낮은 글자가 늘어 깎임
+  const 격자골라 = async function (g) {
+    const r = await 읽기(g);
+    if (!g.격자) return { geo: g, 결과: r };
+    const rk = await 읽기(g.격자);
+    return 격자셈(rk) > 격자셈(r) ? { geo: g.격자, 결과: rk } : { geo: g, 결과: r };
+  };
+  if (!geo) return { geo: geo, 결과: null };
+  const a = await 격자골라(geo);
+  if (!a.geo.기본기하) return a;
+  const geo0 = a.geo.기본기하();
+  if (!geo0) return a;
+  const b = await 격자골라(geo0);
+  return 셈(b.결과) > 셈(a.결과) ? b : a;
 }
 
 async function 쪽읽기(모델, geo, span) {
@@ -2992,6 +3119,7 @@ const API = {
     }
     if (s.연한머리 !== undefined) SPAN_FAINT = s.연한머리;
     if (s.끝맞춤) { SPAN_ALIGN = s.끝맞춤.slice(0, 2); SPAN_ALIGN_Q = s.끝맞춤[2]; } else SPAN_ALIGN = null;
+    GRID = s.격자 ? s.격자.slice() : null;
     if (s.연한잉크 !== undefined) { INK_FAINT = s.연한잉크 ? s.연한잉크.slice(0, 2) : null; FAINT_PICK = s.연한잉크 ? s.연한잉크[2] : FAINT_PICK; } else INK_FAINT = null;
     if (s.휜광곽 !== undefined) {
       FRAME_CURVE = s.휜광곽; FRAME_CURVE_BAND = s.휜광곽띠; FRAME_CURVE_FILL = s.휜광곽채움; FRAME_CURVE_REACH = s.휜광곽거리; FRAME_CURVE_JUMP = s.휜광곽튐; FRAME_CURVE_BG = s.휜광곽바탕;

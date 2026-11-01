@@ -50,6 +50,9 @@ SPAN_GAP = 0.4      # 빈 줄이 이 자간 넘게 이어지면 멈춤
 # (읽을 때만) 끝맞춤 — 꽉 찬 열의 위 · 아래 끝이 열 중앙값보다 세로 자간의 이 범위만큼 짧으면 중앙값까지 늘림(`_끝맞추기`). 0 = 끔
 SPAN_ALIGN = (0.3, 1.5)
 SPAN_ALIGN_Q = 75       # 맞출 끝: 아래는 열 끝들의 이 백분위, 위는 (100 − 이것) 백분위
+# (읽을 때만) 격자 후보 — 판짜임 열 간격으로 묶인 열 가르기 · 빠진 열 끼우기(`격자기하`) (넓음, 틈, 잉크몫). None = 끔.
+#   `geo["격자"]` 로 붙이고 `align.잉크골라` 가 확신으로 고름. JS 짝 `격자기하` · 설정 `격자`
+GRID = (1.15, 1.5, 0.01)
 # (읽을 때만) 흐린 열 머리 — 이웃 열보다 늦게 시작한 열을 이 밝기 미만(옅은 잉크)으로 위로 다시 찾음(`_연한머리잇기`).
 #   0 = 끔. JS 짝 `연한머리잇기` · 설정 `연한머리`
 SPAN_FAINT = 160
@@ -901,6 +904,114 @@ def _끝맞추기(spans, Ts, Bs, pitch):
     return out
 
 
+def 격자기하(geo, 표준, 넓음=None, 틈=None, 잉크몫=None):
+    """
+    판짜임 열 간격(`표준`)으로 열 찾기를 바로잡은 기하(한 단만) — 바뀐 것이 없으면 None.
+    ① 간격의 `넓음` 배를 넘는 열(이웃 열과 묶인 것)을 간격대로 가르고 ② 이웃 열 사이가 간격의 `틈` 배를 넘으면 그 사이에,
+    ③ 광곽 안이면 잡힌 열 바깥으로도 간격대로 열을 끼움(띠의 잉크 몫이 `잉크몫` 넘을 때만)
+    ④ 잰 열 간격이 표준에서 `PITCH_OFF` 넘게 벗어났으면 글자 간격 · 그림자 · 짐작 칸수도 표준대로.
+    값을 안 주면 `GRID`. 전사대조 `대조.격자기하` · 읽는 경로 `page_geometry`(`geo["격자"]`). JS 짝 `격자기하`.
+    """
+    넓음, 틈, 잉크몫 = (GRID[0] if 넓음 is None else 넓음, GRID[1] if 틈 is None else 틈,
+                      GRID[2] if 잉크몫 is None else 잉크몫)
+    if geo is None or not 표준 or geo["단"] != 1 or len(geo["cols"]) < 2:
+        return None
+    g = geo.get("잉크그림")
+    g = np.asarray(geo["image"]) if g is None else g
+    h, w = g.shape
+    폭들 = [b - a for a, b in geo["cols"]]
+    한폭 = float(np.median([x for x in 폭들 if x <= 표준] or [표준 * 0.6]))
+    rows = (g[int(h * 0.1):int(h * 0.9)] < INK)
+    잉크 = rows.sum(0)
+
+    def 다듬기(c):                                # 짐작한 가운데를 그 근처 잉크 무게 중심으로
+        a, b = int(max(0, c - 표준 * 0.35)), int(min(w, c + 표준 * 0.35))
+        s = 잉크[a:b]
+        return (a + float((s * np.arange(len(s))).sum() / s.sum())) if s.sum() > 0 else c
+
+    새 = []                                       # (x0, x1, 옛 번호 | None) — 오른쪽부터
+    for i, (a, b) in enumerate(geo["cols"]):
+        k = int(round((b - a - 한폭) / 표준)) + 1
+        if b - a <= 표준 * 넓음 or k < 2:
+            새.append((a, b, i)); continue
+        for j in range(k):                         # 묶인 열 — 오른쪽 끝 열부터 간격대로
+            c = 다듬기(b - 한폭 / 2 - j * 표준)
+            새.append((int(c - 한폭 / 2), int(c + 한폭 / 2), None))
+    채운 = []
+    for (a0, b0, i0), (a1, b1, _) in zip(새, 새[1:]):
+        채운.append((a0, b0, i0))
+        사이 = (a0 + b0) / 2 - (a1 + b1) / 2
+        m = int(round(사이 / 표준)) - 1
+        if 사이 <= 표준 * 틈 or m < 1:
+            continue
+        for j in range(1, m + 1):
+            c = 다듬기((a0 + b0) / 2 - 사이 * j / (m + 1))
+            x0, x1 = int(c - 한폭 / 2), int(c + 한폭 / 2)
+            if 잉크[max(0, x0):x1].sum() > (x1 - x0) * rows.shape[0] * 잉크몫:
+                채운.append((x0, x1, None))
+    채운.append(새[-1])
+    # 광곽 안이면 잡힌 열 바깥으로도 간격대로 — 끝 쪽 짧은 열을 열 찾기가 놓친 쪽
+    줄 = (g[int(h * 0.2):int(h * 0.8)] < 160).mean(0)
+    선 = np.flatnonzero(줄 >= 0.4)
+    덩 = [z for z in np.split(선, np.flatnonzero(np.diff(선) > 1) + 1) if len(z) >= 3] if len(선) else []
+    가 = [(a + b) / 2 for a, b, _ in 채운]
+    왼 = [z for z in 덩 if z[-1] < min(가) - 표준 * 0.4]
+    오 = [z for z in 덩 if z[0] > max(가) + 표준 * 0.4]
+    for 끝, 쪽, 벽 in ((len(채운) - 1, -1, int(왼[-1][-1]) if 왼 else None), (0, 1, int(오[0][0]) if 오 else None)):
+        if 벽 is None:
+            continue
+        c = (채운[끝][0] + 채운[끝][1]) / 2 + 쪽 * 표준
+        덧 = []
+        while (c - 벽) * -쪽 > 표준 * 0.4:
+            c2 = 다듬기(c)
+            x0, x1 = int(c2 - 한폭 / 2), int(c2 + 한폭 / 2)
+            if 잉크[max(0, x0):x1].sum() > (x1 - x0) * rows.shape[0] * 잉크몫:
+                덧.append((x0, x1, None))           # 빈 띠는 건너뛰고 광곽까지
+            c += 쪽 * 표준
+        채운 = 채운 + 덧 if 쪽 < 0 else 덧[::-1] + 채운
+    if all(i is not None for *_, i in 채운):
+        return None
+    cols = [(max(0, a), min(w, b)) for a, b, _ in 채운]
+    T, B = page_frame(g, cols, True)
+    if not (0 <= T < B <= h):
+        return None
+    고칠간격 = abs(geo["xpitch"] - 표준) > 표준 * PITCH_OFF
+    pitch = geo["pitch"] * 표준 / geo["xpitch"] if 고칠간격 else geo["pitch"]
+    Ts, Bs = _열광곽(g, cols, T, B, 표준, pitch)
+    out = geo.copy()
+    끝 = geo.get("끝맞춤") if isinstance(geo.get("끝맞춤"), list) else None
+    out["끝맞춤"] = [] if 끝 is not None else None
+    for key in ("cols", "crop_cols", "spans", "sm", "est"):
+        out[key] = []
+    for n, ((x0, x1), (_, _, i)) in enumerate(zip(cols, 채운)):
+        if i is not None:
+            for key in ("cols", "crop_cols", "spans", "sm", "est"):
+                out[key].append(geo[key][i])
+            if 끝 is not None:
+                out["끝맞춤"].append(끝[i])
+            continue
+        p = ink_profile(g, [(x0, x1)])[0]
+        hit = np.flatnonzero(p[Ts[n]:Bs[n]] > (x1 - x0) * GLYPH)
+        if not len(hit):
+            continue                               # 글자 줄이 없는 띠 — 버림
+        span = _이어잡기(p, Ts[n] + int(hit[0]), Ts[n] + int(hit[-1]) + 1, x1 - x0, Ts[n], Bs[n], pitch)
+        c = (x0 + x1) / 2
+        out["cols"].append((x0, x1))
+        out["crop_cols"].append((max(0, int(c - 표준 * 0.45)), min(w, int(c + 표준 * 0.45))))
+        out["spans"].append(span)
+        out["sm"].append(smooth(p, max(2, pitch / 9)))
+        out["est"].append(max(1, int(round((span[1] - span[0]) / pitch))))
+        if 끝 is not None:
+            out["끝맞춤"].append(None)
+    if 고칠간격:                                   # 잘못 잰 열 간격에서 나온 글자 간격 · 그림자 · 짐작 칸수도 판짜임대로
+        out["xpitch"], out["pitch"] = 표준, pitch
+        out["sm"] = [smooth(p, max(2.0, pitch / 9)) for p in ink_profile(g, out["cols"])]
+        out["est"] = [0 if sp is None else max(1, int(round((sp[1] - sp[0]) / pitch))) for sp in out["spans"]]
+        out["끝맞춤"] = None
+    out.pop("격자", None)
+    return out if len(out["cols"]) > len(geo["cols"]) else None
+
+
 def text_spans(g, cols, pitch):
     prof = ink_profile(g, cols)
     T, B = page_frame(g, cols)
@@ -1531,7 +1642,7 @@ def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 
         문턱 = int(잉크) if 읽기 else INK
     인자 = (ratio, 단, 읽기, 가장자리, 표준자간, 이어, 끝띠, 판심, 빈단, 조각)
     if 문턱 <= INK:
-        return _쪽기하(path, 원본, 원본, *인자)
+        return _격자붙이기(_쪽기하(path, 원본, 원본, *인자), 표준자간)
     열쇠 = ("잉크그림", 문턱, INK)                 # 같은 쪽 · 같은 문턱이면 같은 배열(읽기 전용) — 잉크 적분을 다시 쓰게
     g = 항목.get(열쇠)
     if g is None:
@@ -1540,9 +1651,18 @@ def page_geometry(path, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 
         항목[열쇠] = g
     out = _쪽기하(path, g, 원본, *인자)
     if out is None:
-        return _쪽기하(path, 원본, 원본, *인자)
+        return _격자붙이기(_쪽기하(path, 원본, 원본, *인자), 표준자간)
     out.update(잉크=문턱, 잉크그림=g, 기본기하=lambda: page_geometry(path, *인자, 잉크=INK))
-    return out
+    return _격자붙이기(out, 표준자간)
+
+
+def _격자붙이기(geo, 표준자간):
+    """읽는 기하(가장자리 후보가 붙은 한 단)에 격자 후보(`격자기하`)를 `geo["격자"]` 로 — 없으면 그대로."""
+    if GRID and 표준자간 and geo is not None and geo.get("가장자리"):
+        k = 격자기하(geo, 표준자간)
+        if k is not None:
+            geo["격자"] = k
+    return geo
 
 
 def _쪽기하(path, g, 원본, ratio=YX_RATIO, 단=1, 읽기=False, 가장자리=True, 표준자간=None, 이어=None, 끝띠=None, 판심=None, 빈단=True, 조각=None):
