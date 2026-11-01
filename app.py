@@ -15,6 +15,7 @@
   /compare.js /전사대조.js  전사대조 소도구
   /area/ /영역지정/          영역 지정 화면 (/region/ → /area/)
   GET  /api/inspect?file=     파일의 판형 · 자간비 · 판짜임 (처음 한 번 뒤에서 잼 — 끝날 때까지 되물음)
+  POST /api/reinspect       {file}                  → 기억한 판형을 버리고 다시 잼(끝까지는 /api/inspect 로)
   POST /api/read            {file, page}            → OCR 결과
   POST /api/compare         {file, page, text}      → 전사대조 결과
   POST /api/boxes           {file, page, boxes}     → 상자마다 글자(영역 지정 화면)
@@ -63,6 +64,7 @@ import step1_collect
 from 표시 import 줄글월, 표시문턱
 import 대조
 
+켠때 = time.time()
 정적 = os.path.join(여기, "정적")
 스레드 = int(os.environ.get("OCR_THREADS", "1"))
 캐시 = os.environ.get("OCR_CACHE") or os.path.join(tempfile.gettempdir(), "oldhangul-ocr")
@@ -83,7 +85,11 @@ os.makedirs(캐시, exist_ok=True)
 살피기동시 = 1                       # 판형 살피기를 함께 돌리는 수
 오류유지 = 30                        # 살피기 오류를 이 초 동안 그대로 알림(그 뒤 부르면 다시 살핌)
 살피기대기 = 8                       # 그 밖에 기다리게 둘 수 — 넘으면 503
-기억최대 = 2000                      # 파일 정보 · 살핀 값을 기억하는 파일 수
+기억최대 = 2000                      # 파일 정보를 기억하는 파일 수
+파일정보유지 = 600                   # 파일 정보(쪽수 · 해시)를 다시 묻는 간격(초) — 같은 이름으로 새로 올린 파일을 알아챔
+판형기억최대 = 10_000               # 판형 기억 파일 수(넘으면 오래 안 쓴 것부터 지움)
+판형기억날수 = 365                  # 이 날수 동안 안 쓴 판형 기억은 지움
+판형기억쓰기간격 = 600              # 쓴 날만 바뀌었을 때 파일에 다시 쓰는 간격(초)
 그림호스트 = {"upload.wikimedia.org", "thumb.wikimedia.org"}   # 스캔을 받을 수 있는 곳
 _받기제한 = threading.BoundedSemaphore(step1_collect.WORKERS)   # 위키미디어에서 함께 받는 수(살피기 · 요청 모두)
 
@@ -130,16 +136,23 @@ except Exception:
 # ── 스캔 받기 ────────────────────────────────────────────────────────
 # ⚠ 여러 쪽 파일은 API 가 요청한 너비를 무시함 → 주소를 한 번 받아 `/page{쪽}-1920px-` 만 갈아 끼움
 _파일정보 = {}
+_파일정보때 = {}                          # 파일 → 물은 때(없으면 늘 새것으로 봄)
 _파일잠금 = threading.Lock()
 
 
 def 파일정보(파일):
-    """{여러쪽, 쪽수, 틀(여러 쪽 파일) | 주소(한 장짜리)}"""
+    """{여러쪽, 쪽수, 해시, 틀(여러 쪽 파일) | 주소(한 장짜리)}. `파일정보유지` 초마다 다시 물음(못 물으면 옛 정보)."""
     with _파일잠금:
-        if 파일 in _파일정보:
-            return _파일정보[파일]
-    r = step1_collect.api(action="query", prop="imageinfo", titles="File:" + 파일,
-                          iiprop="url|size|mime", iiurlwidth=500, iiurlparam="page1-500px")
+        옛 = _파일정보.get(파일)
+        if 옛 is not None and time.time() - _파일정보때.get(파일, time.time()) < 파일정보유지:
+            return 옛
+    try:
+        r = step1_collect.api(action="query", prop="imageinfo", titles="File:" + 파일,
+                              iiprop="url|size|mime|sha1", iiurlwidth=500, iiurlparam="page1-500px")
+    except Exception:
+        if 옛 is None:
+            raise
+        return 옛
     ii = (r.get("query", {}).get("pages") or [{}])[0].get("imageinfo")
     if not ii:
         raise 손님오류(f"위키미디어 공용에서 파일을 찾지 못했습니다: {파일}")
@@ -154,12 +167,16 @@ def 파일정보(파일):
         r2 = step1_collect.api(action="query", prop="imageinfo", titles="File:" + 파일, iiprop="url", iiurlwidth=너비)
         ii2 = r2["query"]["pages"][0]["imageinfo"][0]
         v = dict(여러쪽=False, 쪽수=1, 주소=(ii2.get("thumburl") or ii2["url"]).split("?")[0])
+    v["해시"] = ii.get("sha1") or ""
     주소 = v.get("틀") or v.get("주소")
     if urllib.parse.urlsplit(주소).hostname not in 그림호스트:
         raise 손님오류("위키미디어 공용의 그림 주소가 아닙니다")
     with _파일잠금:
+        _파일정보.pop(파일, None)              # 새로 물은 것을 맨 뒤로
         _파일정보[파일] = v
+        _파일정보때[파일] = time.time()
         while len(_파일정보) > 기억최대:
+            _파일정보때.pop(next(iter(_파일정보)), None)
             del _파일정보[next(iter(_파일정보))]
     return v
 
@@ -227,7 +244,8 @@ def 스캔(파일, 쪽):
     """그 쪽 스캔의 로컬 경로(받아 둠). 1920px."""
     정보 = 파일정보(파일)
     쪽검사(정보, 쪽)                       # 캐시 폴더를 만들기 전에
-    d = os.path.join(캐시, hashlib.sha1(파일.encode("utf-8")).hexdigest()[:16])
+    열쇠 = 파일 + ("\n" + 정보["해시"] if 정보.get("해시") else "")    # 새로 올린 파일은 다른 폴더
+    d = os.path.join(캐시, hashlib.sha1(열쇠.encode("utf-8")).hexdigest()[:16])
     os.makedirs(d, exist_ok=True)
     try:
         if 정보["여러쪽"]:
@@ -319,18 +337,70 @@ def 그림(파일, 쪽):
 
 
 # ── 파일마다 처음 한 번 — 판형 · 자간비 · 판짜임 (`읽기.js` `판형살피기` 와 같은 셈) ─────
-설정파일 = os.path.join(캐시, "_파일설정.json")
 판형판 = 5                               # 판정 규칙을 바꾸면 올림(기억한 값을 버림) — `읽기.js` `판형판` 과 같은 뜻
-_살핀 = {}
+판형기억꼴 = 2                            # 기억 파일의 꼴
+모델지문 = "|".join(str(판정보.get(k, "")) for k in ("글자모델", "경계검출", "설정"))   # 모델이 바뀌면 기억을 버림
+
+
+def _판형기억자리():
+    """오래 둘 자리(`OCR_DATA` · Toolforge tool 홈 `TOOL_DATA_DIR`)가 쓸 수 있으면 거기, 아니면 임시 캐시."""
+    for d in (os.environ.get("OCR_DATA"), os.environ.get("TOOL_DATA_DIR")):
+        if d and os.path.isdir(d) and os.access(d, os.W_OK):
+            return d, True
+    return 캐시, False
+
+
+판형기억폴더, 판형기억오래 = _판형기억자리()
+판형기억파일 = os.path.join(판형기억폴더, "판형기억.json")
+_살핀 = {}                               # 파일 → {값, 해시, 쓴날}
 _살핌일 = {}                              # 파일 → {진행, 오류}
 _살핌잠금 = threading.Lock()
-try:
-    with open(설정파일, encoding="utf-8") as f:
-        v = json.load(f)
-    if v.get("판") == 판형판:
-        _살핀.update(v.get("값", {}))
-except Exception:
-    pass
+_판형기억 = {"쓴때": 0.0, "바뀜": False}
+
+
+def _날(더할날=0):
+    return time.strftime("%Y-%m-%d", time.gmtime(time.time() + 더할날 * 86400))
+
+
+def _판형기억쓰기():
+    """`_살핌잠금` 안에서 부름. 오래 안 쓴 것 · 상한을 넘는 것을 지우고 파일에 씀(못 쓰면 메모리로만 계속)."""
+    끝날 = _날(-판형기억날수)
+    for k in [k for k, v in _살핀.items() if v.get("쓴날", "") < 끝날]:
+        del _살핀[k]
+    if len(_살핀) > 판형기억최대:
+        for k in sorted(_살핀, key=lambda k: _살핀[k].get("쓴날", ""))[:len(_살핀) - 판형기억최대]:
+            del _살핀[k]
+    _판형기억.update(쓴때=time.time(), 바뀜=False)
+    새 = f"{판형기억파일}.{os.urandom(4).hex()}.새"          # 다시 켤 때 두 서버가 겹쳐도 안 섞이게
+    try:
+        with open(새, "w", encoding="utf-8") as f:
+            json.dump({"판": 판형판, "꼴": 판형기억꼴, "모델": 모델지문, "값": _살핀}, f, ensure_ascii=False)
+        os.replace(새, 판형기억파일)
+    except OSError:
+        traceback.print_exc()
+        try:
+            os.remove(새)
+        except OSError:
+            pass
+
+
+def _판형기억읽기():
+    try:
+        with open(판형기억파일, encoding="utf-8") as f:
+            v = json.load(f)
+    except FileNotFoundError:
+        return
+    except Exception:
+        traceback.print_exc()
+        return
+    if (v.get("판"), v.get("꼴"), v.get("모델")) != (판형판, 판형기억꼴, 모델지문):
+        return
+    끝날 = _날(-판형기억날수)
+    _살핀.update({k: e for k, e in (v.get("값") or {}).items()
+                if isinstance(e, dict) and isinstance(e.get("값"), dict) and e.get("쓴날", "") >= 끝날})
+
+
+_판형기억읽기()
 
 
 def 고르게쪽(n, k):
@@ -405,13 +475,10 @@ def _살피기(파일):
                 if 고른 != float(잰):
                     값["읽기자간비"] = float(고른)
         with _살핌잠금:
-            _살핀[파일] = 값
-            while len(_살핀) > 기억최대:
-                del _살핀[next(iter(_살핀))]
+            _살핀.pop(파일, None)                 # 새로 잰 것을 맨 뒤로
+            _살핀[파일] = {"값": 값, "해시": 정보.get("해시") or "", "쓴날": _날()}
             _살핌일.pop(파일, None)
-            with open(설정파일 + ".새", "w", encoding="utf-8") as f:
-                json.dump({"판": 판형판, "값": _살핀}, f, ensure_ascii=False)
-            os.replace(설정파일 + ".새", 설정파일)
+            _판형기억쓰기()
     except Exception as e:
         traceback.print_exc()
         with _살핌잠금:
@@ -453,23 +520,41 @@ def _살피기차례(파일):
             메모리돌려주기()
 
 
-def 살핌상태(파일):
-    """{상태: 끝, 값} · {상태: 진행, 진행} · {상태: 오류, 오류} · {상태: 바쁨}. 처음 부르면 뒤에서 살피기를 시작."""
+def 살핌상태(파일, 다시=False):
+    """{상태: 끝, 값} · {상태: 진행, 진행} · {상태: 오류, 오류} · {상태: 바쁨}. 기억이 없거나 파일 해시가 바뀌었으면
+    뒤에서 살피기를 시작. 다시=True 면 기억이 있어도 새로 잼(재는 동안은 진행 · 실패하면 옛 기억 그대로)."""
+    해시 = None
+    if 다시:
+        with _파일잠금:
+            if 파일 in _파일정보:
+                _파일정보때[파일] = 0           # 다시 잴 때는 파일 정보 · 해시도 새로 물음
+    elif 파일 in _살핀:
+        try:
+            해시 = 파일정보(파일).get("해시")
+        except Exception:
+            pass                               # 못 물으면 기억한 값 그대로
     with _살핌잠금:
-        if 파일 in _살핀:
-            return {"상태": "끝", "값": _살핀[파일]}
         일 = _살핌일.get(파일)
-        if 일 and 일.get("오류"):
-            if time.time() - 일.get("때", 0) < 오류유지:
-                return {"상태": "오류", "오류": 일["오류"]}
+        if 일 and 일.get("오류") and (다시 or time.time() - 일.get("때", 0) >= 오류유지):
             _살핌일.pop(파일, None)             # 오래된 오류 — 다시 해 봄
             일 = None
-        if 일 is None:
-            if sum(1 for v in _살핌일.values() if not v.get("오류")) >= 살피기동시 + 살피기대기:
-                return {"상태": "바쁨", "진행": ""}
-            _살핌일[파일] = {"진행": "차례 기다림"}
-            threading.Thread(target=_살피기차례, args=(파일,), daemon=True).start()
-        return {"상태": "진행", "진행": _살핌일[파일]["진행"]}
+        if 일:
+            if 일.get("오류"):
+                return {"상태": "오류", "오류": 일["오류"]}
+            return {"상태": "진행", "진행": 일["진행"]}
+        기억 = _살핀.get(파일)
+        if 기억 and not 다시 and not (해시 and 기억.get("해시") and 해시 != 기억["해시"]):
+            if 기억.get("쓴날") != _날():
+                기억["쓴날"] = _날()
+                _판형기억["바뀜"] = True
+            if _판형기억["바뀜"] and time.time() - _판형기억["쓴때"] >= 판형기억쓰기간격:
+                _판형기억쓰기()
+            return {"상태": "끝", "값": 기억["값"]}
+        if sum(1 for v in _살핌일.values() if not v.get("오류")) >= 살피기동시 + 살피기대기:
+            return {"상태": "바쁨", "진행": ""}
+        _살핌일[파일] = {"진행": "차례 기다림"}
+        threading.Thread(target=_살피기차례, args=(파일,), daemon=True).start()
+        return {"상태": "진행", "진행": "차례 기다림"}
 
 
 def 살핀값(파일):
@@ -909,7 +994,8 @@ def app(env, start):
                     return [b]
                 return _정적(start, os.path.join("영역지정", 이름))
         if 경로 == "/api/health":
-            return _응답(start, dict(모델=판정보, 스레드=스레드, 살핀파일=len(_살핀),
+            return _응답(start, dict(모델=판정보, 스레드=스레드, 살핀파일=len(_살핀), 판형기억오래둠=판형기억오래,
+                                  켠지초=round(time.time() - 켠때),
                                   모델들={k: v for k, v in 모델이름들.items()
                                           if k == "hangul" or os.path.exists(os.path.join(국한문폴더, "국한문모델.onnx"))}))
         q = {k: v[0] for k, v in urllib.parse.parse_qs(env.get("QUERY_STRING", "")).items()}
@@ -924,6 +1010,9 @@ def app(env, start):
             return _응답(start, {"오류": "없는 주소"}, 404)
         몸 = _몸(env)
         파일, 쪽 = _파일쪽(몸)
+        if 경로 == "/api/reinspect":
+            s = 살핌상태(파일, 다시=True)
+            return _응답(start, s, 503 if s["상태"] == "바쁨" else 200)
         if 경로 == "/api/read":
             문턱 = 몸.get("threshold", 표시문턱)
             try:

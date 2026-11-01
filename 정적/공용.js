@@ -366,6 +366,45 @@ document.addEventListener("keydown", function (e) {
   }
 };
 
+/** 판형 재측정 — 서버가 기억한 이 파일의 판형 · 자간을 버리고 다시 잼(끝나면 띠에 잰 값) */
+공.판형재측정 = async function () {
+  var 쪽 = 지금쪽();
+  if (!쪽) { 공.알림("편집 창을 못 찾았습니다.", "error"); return; }
+  if (!서버) { 공.알림("서버 주소가 없습니다 — Toolforge 도구가 내주는 주소(…/ocr.js)로 불러와 주세요.", "error"); return; }
+  if (바쁨) { 공.알림("하던 일이 끝난 뒤에 다시 눌러 주세요.", "warn"); return; }
+  if (!(await 확인("'" + 쪽.파일 + "' 의 판형과 글자 간격을 서버에서 다시 잽니다. 1~3분 걸리고, "
+                 + "그동안 이 파일의 인식 · 교정은 기다립니다. 다시 잴까요?"))) return;
+  var 일 = 공.일("재측정");
+  if (!일) return;
+  try {
+    var 답;
+    for (;;) {
+      일.진행("이 파일의 판형을 서버에서 다시 재는 중…");
+      var res = await 일.기다림(fetch(서버 + "api/reinspect", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ file: 쪽.파일 }),
+        signal: 일.신호,
+      }));
+      답 = await 일.기다림(res.json());
+      if (답.상태 !== "바쁨") break;
+      일.진행("서버가 다른 파일을 살피는 중이라 차례를 기다립니다…", "");
+      await 일.쉼(5000);
+    }
+    if (답.상태 === "오류" || 답.오류) throw new Error(답.오류 || "서버가 판형을 못 쟀습니다");
+    var 값 = 답.상태 === "끝" ? 답.값 : await 공.서버살피기(쪽.파일, 일);
+    공.띠결과({
+      말: "판형을 다시 쟀습니다 — " + 판형글(값.단)
+        + (값.자간비 ? " · 자간비 " + 값.자간비.toFixed(3) : " · 자간은 기본값")
+        + (값.읽기자간비 ? "(읽기 " + 값.읽기자간비.toFixed(3) + ")" : ""),
+      닫기: 공.띠걷기,
+    });
+  } catch (e) {
+    if (e && e.취소) 공.알림("기다리기를 그만두었습니다. 서버는 다시 재는 일을 끝까지 합니다.");
+    else { 공.알림("판형을 다시 재지 못했습니다: " + ((e && e.message) || e), "error"); console.error(e); }
+  } finally {
+    일.끝();
+  }
+};
+
 공.서버로 = async function (경로, 몸, 일) {
   var res = await 일.기다림(fetch(서버 + 경로, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(몸),
@@ -585,7 +624,7 @@ function 묶음채우기() {
   단추맞추기();
 }
 
-/** ▾ 아래 펼침 메뉴 — 설정 · 영역 지정 · 로그 */
+/** ▾ 아래 펼침 메뉴 — 설정 · 영역 지정 · 판형 재측정 · 로그 */
 function 펼침만들기(펼) {
   var 판 = 만들기("div", "옛한글OCR-펼침");
   판.id = "옛한글OCR-펼침";
@@ -672,6 +711,16 @@ function 펼침만들기(펼) {
     영역고리.addEventListener("click", function () { 영역주소(); setTimeout(닫기, 0); });
     영역주소();
     판.appendChild(영역고리);
+  }
+
+  if (서버) {
+    판.appendChild(만들기("hr"));
+    var 재측정 = 단추("판형 재측정", { 설명: "서버가 기억한 이 파일의 판형 · 글자 간격을 버리고 다시 잽니다(1~3분)" });
+    재측정.a.dataset.ohocr = "재측정";
+    재측정.할일 = function () { 닫기(); 공.판형재측정(); };
+    var 재측정줄 = 만들기("div", "가운데");
+    재측정줄.appendChild(재측정.겉);
+    판.appendChild(재측정줄);
   }
 
   판.appendChild(만들기("hr"));
