@@ -156,7 +156,9 @@ function 꼴넣기() {
     ".옛한글OCR-펼침 input{accent-color:var(--color-progressive,#36c);margin:0}",
     ".옛한글OCR-펼침 .고리{color:var(--color-progressive,#36c);text-decoration:none;cursor:pointer}",
     ".옛한글OCR-펼침 .고리:hover{text-decoration:underline}",
-    ".옛한글OCR-펼침 .로그들{display:flex;gap:16px;font-size:12px}",
+    ".옛한글OCR-펼침 .로그들{display:flex;gap:16px;align-items:center;font-size:12px}",
+    ".옛한글OCR-펼침 .작은단추{margin:0 0 0 auto}",
+    ".옛한글OCR-펼침 .작은단추.oo-ui-buttonElement-framed>.oo-ui-buttonElement-button{min-height:0;min-width:0;padding:1px 8px;font-size:12px;line-height:18px}",
     ".옛한글OCR-펼침 .로그들 .고리{color:var(--color-subtle,#72777d)}",
     ".옛한글OCR-띠{background:var(--background-color-interactive,#eaecf0);border:solid var(--border-color-subtle,#c8ccd1);"
       + "border-width:1px 0;color:var(--color-base,#202122)}",
@@ -713,16 +715,6 @@ function 펼침만들기(펼) {
     판.appendChild(영역고리);
   }
 
-  if (서버) {
-    판.appendChild(만들기("hr"));
-    var 재측정 = 단추("판형 재측정", { 설명: "서버가 기억한 이 파일의 판형 · 글자 간격을 버리고 다시 잽니다(1~3분)" });
-    재측정.a.dataset.ohocr = "재측정";
-    재측정.할일 = function () { 닫기(); 공.판형재측정(); };
-    var 재측정줄 = 만들기("div", "가운데");
-    재측정줄.appendChild(재측정.겉);
-    판.appendChild(재측정줄);
-  }
-
   판.appendChild(만들기("hr"));
   var 로그들 = 만들기("div", "로그들");
   ["인식", "교정"].forEach(function (종류) {
@@ -735,6 +727,13 @@ function 펼침만들기(펼) {
     g.addEventListener("click", function (e) { e.preventDefault(); 닫기(); 공.로그창(종류); });
     로그들.appendChild(g);
   });
+  if (서버) {                            // 로그 줄 오른쪽 끝의 작은 단추
+    var 재측정 = 단추("판형 재측정", { 설명: "서버가 기억한 이 파일의 판형 · 글자 간격을 버리고 다시 잽니다(1~3분)" });
+    재측정.겉.classList.add("작은단추");
+    재측정.a.dataset.ohocr = "재측정";
+    재측정.할일 = function () { 닫기(); 공.판형재측정(); };
+    로그들.appendChild(재측정.겉);
+  }
   판.appendChild(로그들);
 
   function 자리잡기() {
