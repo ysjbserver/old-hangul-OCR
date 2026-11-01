@@ -10,10 +10,11 @@ if (typeof document === "undefined") return;
 var 공 = 전역.옛한글OCR;
 if (!공 || !공.들임("교정", "전사대조", "지금 편집 상자의 전사문을 이 쪽 스캔과 맞대어 틀렸을 만한 글자를 짚습니다", 시작, { 아이콘: true })) return;
 
-var 편집상자 = 공.편집상자, 지금쪽 = 공.지금쪽, 보이나 = 공.보이나;
+var 편집상자 = 공.편집상자, 지금쪽 = 공.지금쪽, 보이나 = 공.보이나, 편집글 = 공.편집글;
 
 var 판, 깔개 = null, 후보들 = [], 어긋남보기 = false, 끝난것보기 = false, 목록보임 = true, 띠쪽 = null;
 var 고친차례 = [];                   // 바꾸기 · 넣기 한 차례(마지막 것부터 되돌림)
+var 감시 = null;                     // 칠 판(깔개)이 없을 때(문법 강조) 고친 자리를 따라가는 시계
 // 합의 = 다르게 한 번 더 잘라도 남은 것. 안 남은 것은 대개 자르기 실수라 접어 둠
 function 확실(c) { return c.합의 !== false && c.갈래 !== "빠짐" && c.갈래 !== "더들어감"; }
 function 보일것(c) { return 어긋남보기 || 확실(c); }
@@ -167,6 +168,7 @@ function 결과걷기() {
   끝난것보기 = false;
   목록보임 = true;
   띠쪽 = null;
+  if (감시) { clearInterval(감시); 감시 = null; }
   걷기();
   if (판) {
     판.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
@@ -182,7 +184,7 @@ var 아는고침 = null;
 function 따라가기() {
   var 상자 = 편집상자();
   if (!상자 || 기준글 === null) return;
-  var 새 = 상자.value, 옛 = 기준글;
+  var 새 = 편집글(상자), 옛 = 기준글;
   if (새 === 옛) return;
   var a, 옛끝, 차 = 새.length - 옛.length, k = 아는고침;
   var 앎 = !!k && 새 === 옛.slice(0, k.시작) + k.글 + 옛.slice(k.끝);
@@ -236,15 +238,20 @@ function 위치재기(상자, i) {                      // 글자 i 의 세로 �
 
 var 고른것 = null;
 function 자리보기(c) {
-  var 상자 = 편집상자();
+  var 상자 = 편집상자(), 강 = 공.강조편집기(상자);
   고른것 = c;
+  따라가기();
+  var 시작 = c.고친 ? c.고친.시작 : c.시작;
+  var 끝 = c.고친 ? c.고친.시작 + c.고친.길이 : c.갈래 === "누락" ? c.시작 : Math.max(c.끝, c.시작 + 1);
   if (보이나(상자)) {
     var y = 위치재기(상자, c.시작);
     상자.scrollTop = Math.max(0, y - 상자.clientHeight / 3);
     상자.focus({ preventScroll: true });
-    var 끝 = c.고친 ? c.고친.시작 + c.고친.길이 : c.갈래 === "누락" ? c.시작 : Math.max(c.끝, c.시작 + 1);
-    상자.setSelectionRange(c.고친 ? c.고친.시작 : c.시작, 끝);
+    상자.setSelectionRange(시작, 끝);
     상자.scrollTop = Math.max(0, y - 상자.clientHeight / 3);
+  } else if (강) {                                  // 문법 강조 — 보이는 편집기에서 고르고 그 자리로
+    강.textSelection("setSelection", { start: 시작, end: 끝 });
+    강.textSelection("scrollToCaretPosition");
   }
   if (깔개) 깔개.그리기();
   목록그리기();
@@ -252,7 +259,8 @@ function 자리보기(c) {
 
 function 바꾸기(c) {
   var 상자 = 편집상자();
-  if (상자.value.slice(c.시작, c.끝) !== c.원문) {
+  따라가기();                                       // 문법 강조 중 사람이 고친 것도 자리에 반영
+  if (c.끝남 || 편집글(상자).slice(c.시작, c.끝) !== c.원문) {
     공.알림("그 자리 글이 그사이 바뀌어 바꾸지 않았습니다 — 직접 고쳐 주세요.", "warn");
     return;
   }
@@ -269,8 +277,10 @@ function 바꾸기(c) {
 // 누락 의심 자리(다음 글자 앞)에 스캔 글자를 끼워 넣는다 — 앞뒤 원문이 맞댈 때와 같을 때만
 function 넣기(c) {
   var 상자 = 편집상자();
-  if (상자.value.slice(c.시작 - c.앞원문.length, c.시작) !== c.앞원문
-      || 상자.value.slice(c.시작, c.시작 + c.뒤원문.length) !== c.뒤원문) {
+  따라가기();
+  var 글 = 편집글(상자);
+  if (c.끝남 || 글.slice(c.시작 - c.앞원문.length, c.시작) !== c.앞원문
+      || 글.slice(c.시작, c.시작 + c.뒤원문.length) !== c.뒤원문) {
     공.알림("그 자리 글이 그사이 바뀌어 넣지 않았습니다 — 직접 고쳐 주세요.", "warn");
     return;
   }
@@ -288,8 +298,10 @@ function 고침끝(c, 끝남) {
 
 /** 바꾸기 · 넣기 되돌리기 — 넣은 글자가 그 자리에 그대로 있을 때만 원래 글로 */
 function 되돌리기(c) {
-  var 상자 = 편집상자(), g = c.고친;
-  if (!상자 || !g || 상자.value.slice(g.시작, g.시작 + g.길이) !== c.스캔) {
+  var 상자 = 편집상자();
+  if (상자) 따라가기();
+  var g = c.고친;
+  if (!상자 || !g || 편집글(상자).slice(g.시작, g.시작 + g.길이) !== c.스캔) {
     c.고친 = null;
     공.알림("그 자리 글이 그사이 바뀌어 되돌리지 않았습니다 — 직접 고쳐 주세요.", "warn");
     목록그리기();
@@ -303,8 +315,9 @@ function 되돌리기(c) {
   c.끝남 = null;
   c.고친 = null;
   if (c.갈래 === "누락") {
-    c.앞원문 = 상자.value.slice(Math.max(0, c.시작 - 6), c.시작);
-    c.뒤원문 = 상자.value.slice(c.시작, c.시작 + 6);
+    var 글 = 편집글(상자);
+    c.앞원문 = 글.slice(Math.max(0, c.시작 - 6), c.시작);
+    c.뒤원문 = 글.slice(c.시작, c.시작 + 6);
   }
   var i = 고친차례.indexOf(c);
   if (i >= 0) 고친차례.splice(i, 1);
@@ -318,17 +331,24 @@ function 마지막되돌리기() {
   }
 }
 
-/** [시작, 끝) 을 글로 — execCommand 로 넣어야 Ctrl+Z 가 됨(안 되면 setRangeText) · 고친 자리는 `따라가기` 에 알려 둠 */
+/** [시작, 끝) 을 글로 — execCommand 로 넣어야 Ctrl+Z 가 됨(안 되면 setRangeText) · 고친 자리는 `따라가기` 에 알려 둠.
+ *  문법 강조(CodeMirror)면 textSelection 으로 보이는 편집기에(숨은 textarea 를 고치면 저장 때 덮임) */
 function 글넣기(상자, 시작, 끝, 글) {
-  상자.focus({ preventScroll: true });
-  상자.setSelectionRange(시작, 끝);
+  var 강 = 공.강조편집기(상자);
   아는고침 = { 시작: 시작, 끝: 끝, 글: 글 };
   try {
-    var 됨 = false;
-    try { 됨 = 글 ? document.execCommand("insertText", false, 글) : document.execCommand("delete", false); } catch (e) { 됨 = false; }
-    if (!됨) {
-      상자.setRangeText(글, 시작, 끝, "end");
-      상자.dispatchEvent(new Event("input", { bubbles: true }));
+    if (강) {
+      강.textSelection("setSelection", { start: 시작, end: 끝 });
+      강.textSelection("replaceSelection", 글);
+    } else {
+      상자.focus({ preventScroll: true });
+      상자.setSelectionRange(시작, 끝);
+      var 됨 = false;
+      try { 됨 = 글 ? document.execCommand("insertText", false, 글) : document.execCommand("delete", false); } catch (e) { 됨 = false; }
+      if (!됨) {
+        상자.setRangeText(글, 시작, 끝, "end");
+        상자.dispatchEvent(new Event("input", { bubbles: true }));
+      }
     }
     따라가기();
   } finally {
@@ -544,7 +564,7 @@ async function 시작() {
   var 언제 = new Date(), 때 = {}, 결과 = [], 살핀 = null, 답 = null, t;
   var 재기 = function (이름, t) { 때[이름] = performance.now() - t; };
   try {
-    var 본문 = 상자.value;
+    var 본문 = 편집글(상자);                 // 문법 강조면 보이는 편집기의 글
     결과.push(["편집 상자", 본문.length + "글자(UTF-16)"]);
     일.진행("전사문을 스캔과 맞대는 중…");
     t = performance.now();
@@ -559,7 +579,7 @@ async function 시작() {
     if (답.사유) throw new Error(답.사유);
     var 뒤쪽 = 지금쪽();
     if (!뒤쪽 || 뒤쪽.파일 !== 쪽.파일 || 뒤쪽.쪽 !== 쪽.쪽) throw 알릴오류("맞대는 사이에 쪽이 바뀌었습니다 — 다시 눌러 주세요.");
-    if (상자.value !== 본문) throw 알릴오류("맞대는 사이에 편집 상자가 바뀌었습니다 — 다시 눌러 주세요.");
+    if (편집글(상자) !== 본문) throw 알릴오류("맞대는 사이에 편집 상자가 바뀌었습니다 — 다시 눌러 주세요.");
     답.초 = ((performance.now() - t0) / 1000).toFixed(1);
     공.결과놓기(결과걷기);
     후보들 = 답.후보.map(function (c) {
@@ -576,6 +596,7 @@ async function 시작() {
     띠세우기(답, 칠함);                  // 띠 · 목록을 먼저 놓아야 칠이 상자 자리에 맞음
     if (후보들.length) 판세우기();
     깔기(상자);
+    감시 = setInterval(function () { if (!깔개) 따라가기(); }, 500);   // 깔개가 있으면 깔개 시계가 따라감
     결과.push(["볼 곳", 후보들.filter(확실).length + "곳" + (칠함 ? "" : " · 구문 강조라 칠 못함")]);
   } catch (e) {
     결과걷기();                         // 결과 구성 도중 실패한 경우도 남기지 않음

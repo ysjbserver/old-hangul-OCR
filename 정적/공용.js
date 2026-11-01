@@ -65,12 +65,19 @@ function 보이나(상자) {
   return 상자.isConnected && 상자.offsetParent !== null && getComputedStyle(상자).visibility !== "hidden";
 }
 
+function 글고름있나() {
+  return !!(window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.textSelection === "function");
+}
+
 /** CodeMirror 글이 숨은 textarea 에 아직 안 옮겨졌어도 읽음 */
 function 편집글(상자) {
-  if (window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.textSelection === "function") {
-    return window.jQuery(상자).textSelection("getContents");
-  }
-  return 상자.value;
+  return 글고름있나() ? window.jQuery(상자).textSelection("getContents") : 상자.value;
+}
+
+/** 문법 강조(CodeMirror)로 textarea 가 숨었으면 textSelection 손잡이, 아니면 null.
+ *  ⚠ 그때 textarea 와 보이는 편집기는 따로 놂 — 쓰기도 이것으로 해야 보이는(저장될) 글에 들어감 */
+function 강조편집기(상자) {
+  return 상자 && !보이나(상자) && 글고름있나() ? window.jQuery(상자) : null;
 }
 
 function 초글(ms) { return (ms / 1000).toFixed(1) + "초"; }
@@ -223,7 +230,7 @@ function 단추(글, 갈래) {
 // ── 공용 ─────────────────────────────────────────────────────────────
 var 공 = {
   서버: 서버, 영역: 영역,
-  만들기: 만들기, 저장: 저장, 지금쪽: 지금쪽, 편집상자: 편집상자, 보이나: 보이나, 편집글: 편집글,
+  만들기: 만들기, 저장: 저장, 지금쪽: 지금쪽, 편집상자: 편집상자, 보이나: 보이나, 편집글: 편집글, 강조편집기: 강조편집기,
   초글: 초글, 판형글: 판형글, 단바꾸기: 단바꾸기, 선택글: 선택글, 확인: 확인, 단추: 단추,
   모델: function () { return 고름.모델 === "hanmun" && 고름.국한문있음 ? "hanmun" : "hangul"; },
   단: function () { return 고름.단; },

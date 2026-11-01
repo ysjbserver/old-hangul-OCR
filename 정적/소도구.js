@@ -25,12 +25,11 @@ async function 읽기시작() {
   if (!공.서버) { 공.알림("서버 주소가 없습니다 — Toolforge 도구가 내주는 주소(…/ocr.js)로 불러와 주세요.", "error"); return; }
   var 일 = 공.일("인식");
   if (!일) return;
-  var 시작글 = 상자.value;
+  var 시작글 = 편집글(상자), 시작값 = 상자.value;   // 보이는 글(문법 강조면 CodeMirror) · 숨은 textarea
   var 고른모델 = 공.모델(), 고른단 = 공.단();
   var 언제 = new Date(), 처음 = performance.now(), 때 = {}, 결과 = [], 살핀, r;
   var 재기 = function (이름, t) { 때[이름] = performance.now() - t; };
   try {
-    var 시작편집글 = 편집글(상자);
     var t;
     일.진행("옛한글 OCR 로 읽는 중…");
     t = performance.now();
@@ -55,7 +54,7 @@ async function 읽기시작() {
       return;
     }
     // 기다리는 사이의 입력 · 초안 복원 · 편집기 교체도 덮지 않음
-    if (편집상자() !== 상자 || 상자.value !== 시작글 || 편집글(상자) !== 시작편집글) {
+    if (편집상자() !== 상자 || 상자.value !== 시작값 || 편집글(상자) !== 시작글) {
       공.알림("읽는 사이에 편집 내용이 바뀌어 OCR 결과를 넣지 않았습니다. 현재 글을 유지했습니다. 다시 눌러 주세요.", "warn");
       결과.push(["넣음", "아니오 — 읽는 사이에 편집 내용이 바뀜"]);
       return;
@@ -124,6 +123,8 @@ function 로그본문(살핀, r, 때, 처음) {
 }
 
 function 넣기(상자, 글) {
+  var 강 = 공.강조편집기(상자);
+  if (강) { 강.textSelection("setContents", 글); return; }   // 문법 강조 — 보이는 편집기에
   상자.value = 글;
   // CodeMirror·2017 편집기가 바뀐 것을 알아채게
   상자.dispatchEvent(new Event("input", { bubbles: true }));
@@ -172,7 +173,7 @@ function 되돌리기(판) {
     공.결과걷기();
     공.알림("OCR 전 글로 되돌렸습니다.");
   };
-  if (상자.value === 판.넣음) { 할일(); return; }
+  if (편집글(상자) === 판.넣음) { 할일(); return; }
   공.확인("OCR 결과를 넣은 뒤에 고친 내용도 함께 사라집니다. 되돌릴까요?").then(function (예) { if (예) 할일(); });
 }
 
@@ -264,7 +265,7 @@ function 표시깔기(상자, 교정용) {
   }
   // 고친 만큼 칠 옮기기 — 고친 구간과 겹친 칠은 지우고, 뒤의 칠은 밈
   function 따라가기() {
-    var 새 = 상자.value, 옛 = 깔개.기준;
+    var 새 = 편집글(상자), 옛 = 깔개.기준;
     if (새 === 옛) return;
     var n = Math.min(옛.length, 새.length), a = 0, b = 0;
     while (a < n && 옛.charCodeAt(a) === 새.charCodeAt(a)) a++;
@@ -336,7 +337,7 @@ function 보이기(판, 못씀) {
       var 상자 = 편집상자();
       if (!상자) return;
       판.상자 = 상자;
-      판.옛글 = 상자.value;
+      판.옛글 = 편집글(상자);
       넣기(상자, r.글월);
       판.넣음 = r.글월;
       var 칠함 = 표시깔기(상자, r.교정용);
