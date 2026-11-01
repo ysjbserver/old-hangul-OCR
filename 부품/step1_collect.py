@@ -109,14 +109,22 @@ def _width_of(path):
     except Exception:
         return 0
 
-_받는쪽 = {}                    # 파일 경로 → 잠금 — 같은 쪽은 한 번에 한 스레드만 받음
+_받는쪽 = {}                    # 파일 경로 → [잠금, 쓰는 스레드 수] — 같은 쪽은 한 번에 한 스레드만 받음
 _받는쪽잠금 = threading.Lock()
 
 def fetch_one(pat, n, path, 최대=None):
+    열쇠 = os.path.abspath(path)
     with _받는쪽잠금:
-        잠금 = _받는쪽.setdefault(os.path.abspath(path), threading.Lock())
-    with 잠금:
-        return _fetch_one(pat, n, path, 최대)
+        칸 = _받는쪽.setdefault(열쇠, [threading.Lock(), 0])
+        칸[1] += 1
+    try:
+        with 칸[0]:
+            return _fetch_one(pat, n, path, 최대)
+    finally:
+        with _받는쪽잠금:                       # 기다리는 스레드가 없으면 잠금을 버림(쌓이지 않게)
+            칸[1] -= 1
+            if not 칸[1]:
+                del _받는쪽[열쇠]
 
 def _fetch_one(pat, n, path, 최대=None):
     # 이미 있어도 너비가 WIDTH 가 아니면 다시 받는다.

@@ -114,11 +114,11 @@ def printed_text(t, keep_headings=False):
 
 
 def letters(s):
-    """첫가끝 자모열(ᄆ+ᆞ+ᆷ)을 한 글자로 묶어 목록으로."""
+    """첫가끝 자모열(ᄆ+ᆞ+ᆷ)을 한 글자로 묶어 목록으로. 확장 초성(U+A960~)은 새 글자를 엶 · 확장 중 · 종성(U+D7B0~)은 붙음."""
     out, cur = [], ''
     for ch in s:
         o = ord(ch)
-        tail = (0x1160 <= o <= 0x11FF) or (0xA960 <= o <= 0xA97F) or (0xD7B0 <= o <= 0xD7FF)
+        tail = (0x1160 <= o <= 0x11FF) or (0xD7B0 <= o <= 0xD7FF)
         if tail and cur:
             cur += ch
         else:
@@ -169,9 +169,9 @@ def decompose(cl):
     L = V = T = ''                                          # 첫가끝은 범위로 갈라낸다
     for ch in cl:
         o = ord(ch)
-        if   0x1100 <= o <= 0x115F: L += ch
-        elif 0x1160 <= o <= 0x11A7: V += ch
-        elif 0x11A8 <= o <= 0x11FF: T += ch
+        if   0x1100 <= o <= 0x115F or 0xA960 <= o <= 0xA97F: L += ch      # 확장 초성
+        elif 0x1160 <= o <= 0x11A7 or 0xD7B0 <= o <= 0xD7CA: V += ch      # 확장 중성
+        elif 0x11A8 <= o <= 0x11FF or 0xD7CB <= o <= 0xD7FF: T += ch      # 확장 종성
     return L, V, T
 
 

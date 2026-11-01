@@ -322,7 +322,7 @@ function 준비() {
   if (준비중) return 준비중;
   const 세대 = 준비세대, 이름 = 모델이름;
   const 이번 = (async () => {
-    설정 = 옛한글읽기.설정넣기(await (await fetch("설정.json")).json());
+    await 설정준비();
     if (서버) {
       const m = 원격모델(이름);
       // 번호 → 글자는 늘 서버 모델의 글자표로
@@ -500,7 +500,18 @@ async function 불러오기() {
     로그남기기(세대, "불러오기", 언제, 오류줄(e), 때, 처음);
   }
 }
-async function 설정준비() { while (!설정) await new Promise(r => setTimeout(r, 30)); }
+/** 설정.json 을 한 번 받아 `설정` 에 — 모두가 같은 약속을 기다림 · 실패하면 그 오류로 끝나고 다음에 다시 받음 */
+let 설정받기 = null;
+function 설정준비() {
+  if (설정) return Promise.resolve(설정);
+  if (!설정받기) {
+    설정받기 = fetch("설정.json")
+      .then(r => { if (!r.ok) throw new Error("설정.json 을 못 받았습니다(" + r.status + ")"); return r.json(); })
+      .then(v => (설정 = 옛한글읽기.설정넣기(v)))
+      .catch(e => { 설정받기 = null; throw e; });
+  }
+  return 설정받기;
+}
 
 // ── 확대 ─────────────────────────────────────────────────────────────
 // 배율 1(맞춤) = 쪽 전체가 보기 창에 들어감. 보기 창 폭은 쪽 비율에 맞춰 줄이고 남는 폭은 오른쪽 칸으로

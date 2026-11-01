@@ -351,7 +351,7 @@ def prepare(slug, page, ip, tp, mdl=None, span=3, use_fix=True, 경계=False, �
     if r.get("사유"):
         return r
 
-    fix = corpus.load_fix(slug, page, len(letters)) if use_fix else None
+    fix = corpus.load_fix(slug, page, len(letters), letters) if use_fix else None
     # 교정 파일은 있는데 못 쓰는 경우 = 전사문이 그 뒤로 바뀌었다는 뜻
     r["fix_stale"] = bool(use_fix and fix is None and
                           os.path.exists(corpus.fix_path(slug, page)))

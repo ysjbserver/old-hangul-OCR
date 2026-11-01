@@ -182,7 +182,7 @@ def 인쇄글자(raw, keep_headings=False, 큰빼기=False):
     out, cur = [], None                          # `wikitext.letters` 와 같은 묶기
     for ch, p in zip(t, pos):
         o = ord(ch)
-        꼬리 = (0x1160 <= o <= 0x11FF) or (0xA960 <= o <= 0xA97F) or (0xD7B0 <= o <= 0xD7FF)
+        꼬리 = (0x1160 <= o <= 0x11FF) or (0xD7B0 <= o <= 0xD7FF)     # 확장 초성은 새 글자
         if 꼬리 and cur:
             cur[0] += ch; cur[1].append(p)
         else:

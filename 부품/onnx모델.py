@@ -65,6 +65,7 @@ class 모델:
         return (X / 255 - 0.5) / 0.5
 
     기억그림수 = 6        # 읽기 자간 고르기가 쪽 넷을 배율마다 되읽음
+    기억상자수 = 40000    # 모든 그림을 합친 상자 한도(상자 하나 약 0.8KB)
 
     def _그림기억(self, im):
         """이 그림의 {상자: 확률}(최근에 쓴 그림부터 `기억그림수` 장까지 둠)."""
@@ -72,6 +73,16 @@ class 모델:
         d = next((d for k, d in self._기억 if k == 열쇠), {})
         self._기억 = [(열쇠, d)] + [x for x in self._기억 if x[0] != 열쇠][:self.기억그림수 - 1]
         return d
+
+    def _줄이기(self, 기억, 쓴):
+        """상자가 `기억상자수` 를 넘으면 오래된 그림부터, 그다음 이 그림에서 이번에 안 쓴 상자부터 버림."""
+        n = sum(len(d) for _, d in self._기억)
+        while n > self.기억상자수 and len(self._기억) > 1:
+            n -= len(self._기억.pop()[1])
+        if n > self.기억상자수:
+            버릴 = [k for k in 기억 if k not in 쓴][:n - self.기억상자수]
+            for k in 버릴:
+                del 기억[k]
 
     def _그림열쇠(self, im):
         고정 = getattr(self, "_고정그림", None)
@@ -102,7 +113,9 @@ class 모델:
             sL, sV, sT = (_펴기(z) for z in self.세션.run(None, {"x": x}))
             for j, k in enumerate(덩이):
                 기억[k] = (sL[j], sV[j], sT[j])
-        return [np.stack([기억[k][m] for k in 열쇠들]) for m in range(3)]
+        결과 = [np.stack([기억[k][m] for k in 열쇠들]) for m in range(3)]
+        self._줄이기(기억, set(열쇠들))
+        return 결과
 
     def read(self, im, boxes, batch=None):
         if not boxes:
@@ -169,6 +182,7 @@ class 혼용모델(모델):
 
     상위 = 64             # ⚠ 한자 확률은 상자마다 위 64개만 기억(나머지는 0) — 다 들면 메모리 한도를 넘음
     기억그림수 = 1        # 판형 살피기는 순한글 모델만 씀 — 상자가 무거워 마지막 그림 하나만
+    기억상자수 = 20000    # 상자 하나 약 1.7KB
 
     def _머리들(self, im, boxes, batch):
         # 최근 그림들의 (갈래 · 초 · 중 · 종 · 한자 위 64개 번호 · 확률)을 상자별로 기억
@@ -189,7 +203,9 @@ class 혼용모델(모델):
             값 = np.take_along_axis(값, 차례, axis=1)
             for j, 열 in enumerate(덩이):
                 기억[열] = (sK[j], sL[j], sV[j], sT[j], 번호[j], 값[j])
-        return [np.stack([기억[k][m] for k in 열쇠들]) for m in range(6)]
+        결과 = [np.stack([기억[k][m] for k in 열쇠들]) for m in range(6)]
+        self._줄이기(기억, set(열쇠들))
+        return 결과
 
     def read(self, im, boxes, batch=None):
         if not boxes:
