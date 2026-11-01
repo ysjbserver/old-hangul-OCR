@@ -725,6 +725,28 @@ def 맞대기(mdl, geo, 글자들, span=3, 경계=False):
             전사번호=kk, 전사=letters[kk], 스캔=스캔[i], 같음=bool(같음[i]),
             전사확률=float(전사확률[i]), 확신=float(확신[i]),
             읽음확률=float(읽음확률[i]), 높이비=높이비(i)))
+    # 흔들린 열의 전사문 구간(화면의 '뺀 열' 목록 · 빗금) — 읽는 차례로 단 · 열을 세고, 이웃한 흔들린 열은 한 덩이로
+    단번호, 열차례 = [0] * n, [1] * n
+    for j in range(1, n):
+        새단 = 열[j] > 열[j - 1]                  # 오른쪽으로 되돌아가면 다음 단
+        단번호[j] = 단번호[j - 1] + 새단
+        열차례[j] = 1 if 새단 else 열차례[j - 1] + (열[j] != 열[j - 1])
+    두단 = n > 0 and geo.get("단") == 2 and 단번호[-1] == 1
+    뺀열 = []
+    j = 0
+    while j < n:
+        if 열[j] not in 흔들린열:
+            j += 1; continue
+        e = j
+        while e + 1 < n and 열[e + 1] in 흔들린열 and 단번호[e + 1] == 단번호[j]:
+            e += 1
+        k0, k1 = min(assign[j:e + 1]), max(assign[j:e + 1])
+        글 = [g[0] for g in 글자들[k0:k1 + 1]]
+        뺀열.append(dict(시작=int(글자들[k0][1]), 끝=int(글자들[k1][2]), 차례=열차례[j], 끝차례=열차례[e],
+                         단=("윗단", "아랫단")[단번호[j]] if 두단 else None,
+                         앞="".join(글[:4] if len(글) > 8 else 글), 뒤="".join(글[-4:]) if len(글) > 8 else "",
+                         글자수=len(글)))
+        j = e + 1
     불일치구간 = []
     i = 0
     while i < n:
@@ -739,7 +761,7 @@ def 맞대기(mdl, geo, 글자들, span=3, 경계=False):
                               스캔="".join(스캔[i:e + 1]), 길이=e - i + 1))
         i = e + 1
     return dict(사유=None, 일치=일치, 상자=boxes, assign=list(assign), 후보=후보, 흔들림=bool(일치 is not None and 일치 < 일치문턱),
-                흔들린열=len(흔들린열), 열수=len(열일치),
+                흔들린열=len(흔들린열), 뺀열=뺀열, 열수=len(열일치),
                 글자수=len(letters), 스캔글자=스캔, 이미지=geo["image"],
                 진단=dict(전사글자=letters, 상자=상자진단, 열=열진단, 불일치구간=불일치구간,
                           기하=dict(열=geo.get("cols"), 상자열=geo.get("crop_cols"), 구간=geo.get("spans"),

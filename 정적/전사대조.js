@@ -14,6 +14,7 @@ var 편집상자 = 공.편집상자, 지금쪽 = 공.지금쪽, 보이나 = 공.
 
 var 판, 깔개 = null, 후보들 = [], 어긋남보기 = false, 끝난것보기 = false, 목록보임 = true, 띠쪽 = null;
 var 고친차례 = [];                   // 바꾸기 · 넣기 한 차례(마지막 것부터 되돌림)
+var 뺀열들 = [], 뺀열보기 = false, 고른뺀열 = null;   // 맞대기가 흔들려 뺀 열의 원문 구간 {시작, 끝, 차례, 끝차례, 단, 앞, 뒤, 글자수}
 var 감시 = null;                     // 칠 판(깔개)이 없을 때(문법 강조) 고친 자리를 따라가는 시계
 // 합의 = 다르게 한 번 더 잘라도 남은 것. 안 남은 것은 대개 자르기 실수라 접어 둠
 function 확실(c) { return c.합의 !== false && c.갈래 !== "빠짐" && c.갈래 !== "더들어감"; }
@@ -25,6 +26,15 @@ function 되돌릴수(c) { return (c.끝남 === "바꿈" || c.끝남 === "넣음
 var 이름 = { "바뀜": "글자가 다름", "모르는자모": "모르는 자모", "깨진글자": "깨진 글자", "누락": "전사문에 글자 누락 의심", "빠짐": "스캔에 글자가 더 있음", "더들어감": "전사문에 글자가 더 있음" };
 var 짧은이름 = { "바뀜": "글자 다름", "모르는자모": "모르는 자모", "깨진글자": "깨진 글자", "누락": "누락 · 글자 수 어긋남" };
 var 색 = { "바뀜": "rgba(255,80,80,.40)", "모르는자모": "rgba(255,160,0,.40)", "깨진글자": "rgba(170,80,255,.38)", "누락": "rgba(80,140,255,.35)", "빠짐": "rgba(80,140,255,.35)", "더들어감": "rgba(80,140,255,.35)" };
+var 빗금 = "repeating-linear-gradient(135deg,rgba(230,160,0,.38) 0 4px,transparent 4px 8px)";
+
+var 서수 = ["첫째", "둘째", "셋째", "넷째", "다섯째", "여섯째", "일곱째", "여덟째", "아홉째", "열째"];
+function 째(n) { return n <= 10 ? 서수[n - 1] : n < 20 ? "열" + (n === 11 ? "한째" : n === 12 ? "두째" : 서수[n - 11]) : n + "번째"; }
+/** '윗단 오른쪽 넷째~다섯째 열 「녀ᄅᆞᆷ의…ᄒᆞ니라」 19자' */
+function 뺀열이름(g) {
+  return (g.단 ? g.단 + " " : "") + "오른쪽 " + 째(g.차례) + (g.끝차례 > g.차례 ? "~" + 째(g.끝차례) : "") + " 열 "
+    + "「" + g.앞 + (g.뒤 ? "…" + g.뒤 : "") + "」 " + g.글자수 + "자";
+}
 
 /** 맞댄 결과 · 걸린 시간 */
 function 로그본문(살핀, 답, 때, 처음) {
@@ -43,6 +53,7 @@ function 로그본문(살핀, 답, 때, 처음) {
     줄.push(["맞대기", "고른 기하 " + (답.기하 || "?") + " · 편 제목 " + (답.제목 ? "본문에 찍힘" : "안 찍힘")
              + (답.큰빼기 ? " · 큰 활자 뺌" : "") + (답.합의본 && 답.합의본.length ? " · 다시 자른 판 " + 답.합의본.join(",") : "")]);
     줄.push(["글자 · 열", (답.글자수 || "?") + "자 · 열 " + (답.열수 || "?") + "개 · 흔들린 열 " + (답.흔들린열 || 0)]);
+    if (답.뺀열 && 답.뺀열.length) 줄.push(["뺀 열", 답.뺀열.map(function (g) { return 뺀열이름(g) + " (" + g.시작 + "~" + g.끝 + ")"; }).join(" · ")]);
     줄.push(["후보", Object.keys(셈).length ? Object.keys(셈).map(function (k) { return k + " " + 셈[k]; }).join(" · ") : "없음"]);
     줄.push(["문헌 설정", 답.아는문헌 === false ? "없음 — 이 쪽 그림으로 자간을 잼" : "파일마다 잰 값"]);
     if (답.debug) {
@@ -113,11 +124,25 @@ function 깔기(상자) {
   깔개.그리기 = function () {
     var t = 깔개.기준, p = 0;
     바닥.textContent = "";
+    function 글(a, b) {                             // [a, b) — 뺀 열 구간은 빗금(후보 칠은 그 위에)
+      뺀열들.forEach(function (g) {
+        var s = Math.max(a, g.시작), e = Math.min(b, g.끝);
+        if (g.지워짐 || s >= e) return;
+        if (s > a) 바닥.appendChild(document.createTextNode(t.slice(a, s)));
+        var 빗 = document.createElement("span");
+        빗.className = "전사대조-뺀열";
+        빗.style.cssText = "background:" + 빗금 + (g === 고른뺀열 ? ";outline:2px solid #36c" : "");
+        빗.textContent = t.slice(s, e);
+        바닥.appendChild(빗);
+        a = e;
+      });
+      if (b > a) 바닥.appendChild(document.createTextNode(t.slice(a, b)));
+    }
     후보들.filter(function (c) { return !c.끝남 && 보일것(c); })
       .sort(function (a, b) { return a.시작 - b.시작; })
       .forEach(function (c) {
         if (c.시작 < p) return;                     // 겹치면 앞의 것만
-        if (c.시작 > p) 바닥.appendChild(document.createTextNode(t.slice(p, c.시작)));
+        if (c.시작 > p) 글(p, c.시작);
         var m = document.createElement("mark");
         var 끝 = Math.max(c.끝, c.시작 + 1);
         m.style.cssText = "color:transparent;padding:0;margin:0;border-radius:2px;background:" + 색[c.갈래]
@@ -126,7 +151,8 @@ function 깔기(상자) {
         바닥.appendChild(m);
         p = 끝;
       });
-    바닥.appendChild(document.createTextNode(t.slice(p) + "\n​"));
+    글(p, t.length);
+    바닥.appendChild(document.createTextNode("\n​"));
     바닥.scrollTop = 상자.scrollTop; 바닥.scrollLeft = 상자.scrollLeft;
   };
   function 스크롤() { 바닥.scrollTop = 상자.scrollTop; 바닥.scrollLeft = 상자.scrollLeft; }
@@ -163,6 +189,7 @@ function 걷기() {
 function 결과걷기() {
   후보들 = [];
   고친차례 = [];
+  뺀열들 = []; 뺀열보기 = false; 고른뺀열 = null;
   기준글 = null;
   고른것 = null;
   끝난것보기 = false;
@@ -217,6 +244,16 @@ function 따라가기() {
       c.뒤원문 = 새.slice(c.시작, c.시작 + 6);
     }
   });
+  // 뺀 열은 사람이 읽으며 고칠 자리 — 안을 고치면 늘고 줄며, 통째로 지우면 걷음
+  뺀열들.forEach(function (g) {
+    if (g.지워짐) return;
+    if (옛끝 <= g.시작) { g.시작 += 차; g.끝 += 차; }
+    else if (a < g.끝) {
+      if (a < g.시작) g.시작 = a;
+      g.끝 = 옛끝 >= g.끝 ? 옛끝 + 차 : g.끝 + 차;
+    }
+    if (g.끝 <= g.시작) g.지워짐 = true;
+  });
   기준글 = 새;
   if (깔개) { 깔개.기준 = 새; 깔개.그리기(); }
   목록그리기();
@@ -238,13 +275,29 @@ function 위치재기(상자, i) {                      // 글자 i 의 세로 �
 
 var 고른것 = null;
 function 자리보기(c) {
-  var 상자 = 편집상자(), 강 = 공.강조편집기(상자);
-  고른것 = c;
+  고른것 = c; 고른뺀열 = null;
   따라가기();
   var 시작 = c.고친 ? c.고친.시작 : c.시작;
   var 끝 = c.고친 ? c.고친.시작 + c.고친.길이 : c.갈래 === "누락" ? c.시작 : Math.max(c.끝, c.시작 + 1);
+  고르기(시작, 끝, c.시작);
+  if (깔개) 깔개.그리기();
+  목록그리기();
+}
+
+/** 뺀 열 구간을 편집 상자에서 고름 */
+function 구간보기(g) {
+  고른뺀열 = g; 고른것 = null;
+  따라가기();
+  if (!g.지워짐) 고르기(g.시작, g.끝, g.시작);
+  if (깔개) 깔개.그리기();
+  목록그리기();
+}
+
+/** [시작, 끝) 을 고르고 '어디' 가 상자 위 1/3 에 오게 넘김 */
+function 고르기(시작, 끝, 어디) {
+  var 상자 = 편집상자(), 강 = 공.강조편집기(상자);
   if (보이나(상자)) {
-    var y = 위치재기(상자, c.시작);
+    var y = 위치재기(상자, 어디);
     상자.scrollTop = Math.max(0, y - 상자.clientHeight / 3);
     상자.focus({ preventScroll: true });
     상자.setSelectionRange(시작, 끝);
@@ -253,8 +306,6 @@ function 자리보기(c) {
     강.textSelection("setSelection", { start: 시작, end: 끝 });
     강.textSelection("scrollToCaretPosition");
   }
-  if (깔개) 깔개.그리기();
-  목록그리기();
 }
 
 function 바꾸기(c) {
@@ -487,13 +538,21 @@ function 띠세우기(답, 칠함) {
     색줄.appendChild(빛);
     색줄.appendChild(document.createTextNode(짧은이름[k]));
   });
+  if (칠함 && 뺀열들.length) {
+    var 빗 = 공.만들기("span", "빛");
+    빗.style.background = 빗금;
+    색줄.appendChild(빗);
+    색줄.appendChild(document.createTextNode("맞대지 못한 열"));
+  }
   if (색줄.childNodes.length) 색줄.appendChild(document.createTextNode(" — 칠은 저장되지 않습니다."));
-  var 둘째 = [색줄.childNodes.length ? 색줄 : null];
-  if (!칠함 && 후보들.length) 둘째.push("구문 강조가 켜져 있어 편집 상자에 칠하지 못했습니다(끄면 칠합니다) — 아래 목록에서 보세요.");
+  var 둘째 = [색줄.childNodes.length ? 색줄 : null], 뺀칸 = null;
+  if (!칠함 && (후보들.length || 뺀열들.length)) 둘째.push("구문 강조가 켜져 있어 편집 상자에 칠하지 못했습니다(끄면 칠합니다) — 아래 목록에서 보세요.");
   if (답.흔들림) {
     둘째.push(공.만들기("div", "경고", "⚠ 이 쪽은 스캔과 전사문이 잘 맞춰지지 않았습니다 — 목록에 헛경보가 많을 수 있습니다."));
   } else if (답.흔들린열) {
-    둘째.push("맞대기가 흔들린 열 " + 답.흔들린열 + "개는 뺐습니다.");
+    둘째.push("맞대기가 흔들린 열 " + 답.흔들린열 + "개는 뺐습니다 — " + (답.흔들린열 > 1 ? "이 열들은" : "이 열은")
+              + " 스캔과 직접 견주어 주세요.");
+    if (뺀열들.length) 둘째.push(뺀칸 = 공.만들기("div", "전사대조-뺀열목록"));
   }
   var 띠 = 공.띠결과({
     되돌리기: { 글: "되돌리기", 할일: 마지막되돌리기, 켬: false },
@@ -503,8 +562,40 @@ function 띠세우기(답, 칠함) {
     닫기: 공.결과걷기,
     닫기설명: "칠과 목록 닫기(고친 글은 그대로)",
   });
-  띠쪽 = { 말: 말, 접기: 접기, 되돌리기: 띠 && 띠.되돌리기, 일치: 답.일치 };
+  띠쪽 = { 말: 말, 접기: 접기, 되돌리기: 띠 && 띠.되돌리기, 일치: 답.일치, 뺀칸: 뺀칸 };
   띠맞추기();
+}
+
+// 띠 아래 펼치는 목록 — 누르면 편집 상자에서 그 구간을 고름
+function 뺀열그리기() {
+  var 칸 = 띠쪽 && 띠쪽.뺀칸;
+  if (!칸) return;
+  칸.textContent = "";
+  var 남은 = 뺀열들.filter(function (g) { return !g.지워짐; });
+  if (!남은.length) return;
+  var 접 = 공.만들기("a", "", 뺀열보기 ? "▾ 접기" : "▸ 어느 열인지 보기");
+  접.href = "#"; 접.setAttribute("role", "button"); 접.setAttribute("aria-expanded", String(뺀열보기));
+  접.addEventListener("click", function (e) {
+    e.preventDefault();
+    뺀열보기 = !뺀열보기;
+    뺀열그리기();
+    공.자리바뀜();
+  });
+  칸.appendChild(접);
+  if (!뺀열보기) return;
+  남은.forEach(function (g) {
+    var 줄 = 공.만들기("div");
+    줄.style.paddingLeft = "1.2em";
+    var a = 공.만들기("a", "", 뺀열이름(g));
+    a.href = "#"; a.title = "편집 상자에서 이 구간을 고릅니다";
+    if (g === 고른뺀열) a.style.fontWeight = "bold";
+    a.addEventListener("click", function (e) {
+      e.preventDefault();
+      if (뺀열들.indexOf(g) >= 0) 구간보기(g);   // 걷힌 결과의 고리는 실행하지 않음
+    });
+    줄.appendChild(a);
+    칸.appendChild(줄);
+  });
 }
 
 function 띠맞추기() {
@@ -519,6 +610,7 @@ function 띠맞추기() {
     띠쪽.되돌리기.켜기(있음);
     띠쪽.되돌리기.a.title = 있음 ? "마지막으로 바꾸거나 넣은 글자를 되돌립니다" : "되돌릴 고침이 없습니다";
   }
+  뺀열그리기();
 }
 
 function 판세우기() {
@@ -590,6 +682,7 @@ async function 시작() {
       }
       return c;
     });
+    뺀열들 = 답.흔들림 ? [] : (답.뺀열 || []).slice().sort(function (a, b) { return a.시작 - b.시작; });
     기준글 = 본문;
     고른것 = null;
     var 칠함 = 보이나(상자);
@@ -620,7 +713,7 @@ async function 시작() {
 
 function 알릴오류(글) { var e = new Error(글); e.알림만 = true; return e; }
 
-전역.전사대조 = { 시작: 시작, 후보: function () { return 후보들; }, 되돌리기: 마지막되돌리기 };   // 시험용
+전역.전사대조 = { 시작: 시작, 후보: function () { return 후보들; }, 뺀열: function () { return 뺀열들; }, 되돌리기: 마지막되돌리기 };   // 시험용
 
 공.세우기();
 })(typeof self !== "undefined" ? self : this);
