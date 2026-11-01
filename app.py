@@ -81,6 +81,7 @@ os.makedirs(캐시, exist_ok=True)
 그림최대세로배 = 4                   # 너비를 맞춘 뒤 높이 ≤ 너비 × 이 값
 원본최대화소 = 40_000_000            # 줄이기 전 원본
 살피기동시 = 1                       # 판형 살피기를 함께 돌리는 수
+오류유지 = 30                        # 살피기 오류를 이 초 동안 그대로 알림(그 뒤 부르면 다시 살핌)
 살피기대기 = 8                       # 그 밖에 기다리게 둘 수 — 넘으면 503
 기억최대 = 2000                      # 파일 정보 · 살핀 값을 기억하는 파일 수
 그림호스트 = {"upload.wikimedia.org", "thumb.wikimedia.org"}   # 스캔을 받을 수 있는 곳
@@ -138,11 +139,14 @@ def 파일정보(파일):
         if 파일 in _파일정보:
             return _파일정보[파일]
     r = step1_collect.api(action="query", prop="imageinfo", titles="File:" + 파일,
-                          iiprop="url|size", iiurlwidth=500, iiurlparam="page1-500px")
+                          iiprop="url|size|mime", iiurlwidth=500, iiurlparam="page1-500px")
     ii = (r.get("query", {}).get("pages") or [{}])[0].get("imageinfo")
     if not ii:
         raise 손님오류(f"위키미디어 공용에서 파일을 찾지 못했습니다: {파일}")
     ii = ii[0]
+    m = ii.get("mime") or ""
+    if m and not (m.startswith("image/") or m == "application/pdf"):
+        raise 손님오류(f"그림 · PDF · DjVu 파일이 아닙니다({m}): {파일}")
     u = (ii.get("thumburl") or ii.get("url") or "").split("?")[0]
     if "/page1-500px-" in u:
         v = dict(여러쪽=True, 쪽수=ii.get("pagecount") or 0, 틀=u.replace("/page1-500px-", f"/page{{N}}-{너비}px-", 1))
@@ -200,46 +204,6 @@ def 기억비우기():
     with _모델잠금:
         for m in [모델, *_모델들.values()]:
             m._기억 = []
-
-
-def 메모리정보():
-    """MB 단위 — 프로세스(지금 · 최고 · 스레드) · 컨테이너 cgroup(anon · file · shmem) · 스캔 캐시. 리눅스에서만 차고 나머지는 빈 값."""
-    def mb(v):
-        return round(int(v) / 2**20, 1)
-    out = {}
-    try:
-        with open("/proc/self/status") as f:
-            for l in f:
-                k, _, v = l.partition(":")
-                if k in ("VmRSS", "VmHWM"):
-                    out[k] = round(int(v.split()[0]) / 1024, 1)
-                elif k == "Threads":
-                    out[k] = int(v)
-    except OSError:
-        pass
-    for 이름, 키 in (("memory.current", "cgroup"), ("memory.peak", "cgroup최고"),
-                    ("memory/memory.usage_in_bytes", "cgroup"), ("memory/memory.max_usage_in_bytes", "cgroup최고")):
-        try:
-            with open("/sys/fs/cgroup/" + 이름) as f:
-                out.setdefault(키, mb(f.read().strip()))
-        except (OSError, ValueError):
-            pass
-    for 이름 in ("memory.stat", "memory/memory.stat"):
-        try:
-            with open("/sys/fs/cgroup/" + 이름) as f:
-                for l in f:
-                    k, v = l.split()
-                    if k in ("anon", "file", "shmem", "file_dirty", "kernel", "total_rss", "total_cache", "total_shmem"):
-                        out[k] = mb(v)
-            break
-        except (OSError, ValueError):
-            pass
-    try:
-        크기 = [os.path.getsize(os.path.join(a, n)) for a, _, ns in os.walk(캐시) for n in ns]
-        out["스캔캐시"] = {"파일": len(크기), "MB": mb(sum(크기))}
-    except OSError:
-        pass
-    return out
 
 
 def 쪽검사(정보, 쪽):
@@ -451,7 +415,8 @@ def _살피기(파일):
     except Exception as e:
         traceback.print_exc()
         with _살핌잠금:
-            _살핌일[파일] = {"진행": "", "오류": str(e) if isinstance(e, 손님오류) else "판형을 살피다 서버에서 오류가 났습니다"}
+            _살핌일[파일] = {"진행": "", "오류": str(e) if isinstance(e, 손님오류) else "판형을 살피다 서버에서 오류가 났습니다",
+                           "코드": e.코드 if isinstance(e, 손님오류) else 500, "때": time.time()}
             오류들 = [k for k, v in _살핌일.items() if v.get("오류")]
             for k in 오류들[:-64]:               # 아무도 되묻지 않은 오류는 64개까지만
                 del _살핌일[k]
@@ -495,8 +460,10 @@ def 살핌상태(파일):
             return {"상태": "끝", "값": _살핀[파일]}
         일 = _살핌일.get(파일)
         if 일 and 일.get("오류"):
-            _살핌일.pop(파일, None)             # 다음에 다시 해 봄
-            return {"상태": "오류", "오류": 일["오류"]}
+            if time.time() - 일.get("때", 0) < 오류유지:
+                return {"상태": "오류", "오류": 일["오류"]}
+            _살핌일.pop(파일, None)             # 오래된 오류 — 다시 해 봄
+            일 = None
         if 일 is None:
             if sum(1 for v in _살핌일.values() if not v.get("오류")) >= 살피기동시 + 살피기대기:
                 return {"상태": "바쁨", "진행": ""}
@@ -509,6 +476,8 @@ def 살핀값(파일):
     s = 살핌상태(파일)
     if s["상태"] == "바쁨":
         raise 손님오류("서버가 다른 파일의 판형을 살피느라 바쁩니다 — 잠시 뒤에 다시", 503, s)
+    if s["상태"] == "오류":
+        raise 손님오류(s["오류"], _살핌일.get(파일, {}).get("코드", 400))
     if s["상태"] != "끝":
         raise 손님오류("이 파일의 판형을 아직 살피는 중입니다 — /api/inspect 로 끝난 뒤에 다시", 409, s)
     return s["값"]
@@ -940,7 +909,7 @@ def app(env, start):
                     return [b]
                 return _정적(start, os.path.join("영역지정", 이름))
         if 경로 == "/api/health":
-            return _응답(start, dict(모델=판정보, 스레드=스레드, 살핀파일=len(_살핀), 메모리=메모리정보(),
+            return _응답(start, dict(모델=판정보, 스레드=스레드, 살핀파일=len(_살핀),
                                   모델들={k: v for k, v in 모델이름들.items()
                                           if k == "hangul" or os.path.exists(os.path.join(국한문폴더, "국한문모델.onnx"))}))
         q = {k: v[0] for k, v in urllib.parse.parse_qs(env.get("QUERY_STRING", "")).items()}
