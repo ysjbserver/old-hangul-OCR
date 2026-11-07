@@ -969,8 +969,10 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
             for 판 in 기하들:
                 if (판 in 정렬판들) != (단계 == 1):
                     continue
-                if best and (best[0].get("일치") or 0) >= 다시볼일치 and not (판 == "끝맞춤" and best[0].get("흔들린열")):
-                    continue                          # 잘 맞았으면 그만(흔들린 열이 남으면 끝맞춤만)
+                if best and (best[0].get("일치") or 0) >= 다시볼일치:
+                    남은열 = best[0].get("흔들린열") or best[0].get("뺀열")
+                    if not (남은열 and 판 in (True, "끝맞춤", *정렬판들)):
+                        continue                      # 제외 열이 남으면 읽기 · 끝맞춤 · 읽기정렬로 복구
                 if 판 in ("쪽자간", "본문", "연한본문", "본문열", "조각열", "가장자리", "연한구간", "책머리", "연한", "연한가장자리", "끝맞춤",
                          "읽기정렬", "읽기정렬가장자리", "격자"):
                     if 판 not in 본열:
