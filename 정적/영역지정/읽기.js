@@ -643,17 +643,88 @@ function 광곽(g, cols, 읽기) {
         for (let x = c[0]; x < c[1]; x++) if (g.값[y * W + x] < INK) p[y]++;
       }
       let above = 0, below = 0;
-      for (let y = Math.max(T, B - w); y < B; y++) if (p[y] > (c[1] - c[0]) * GLYPH) above++;
-      for (let y = B; y < Math.min(H, B + w); y++) if (p[y] > (c[1] - c[0]) * GLYPH) below++;
+      const 줄몫 = BOTTOM_OPEN_LINE === null ? GLYPH : BOTTOM_OPEN_LINE;
+      for (let y = Math.max(T, B - w); y < B; y++) if (p[y] > (c[1] - c[0]) * 줄몫) above++;
+      for (let y = B; y < Math.min(H, B + w); y++) if (p[y] > (c[1] - c[0]) * 줄몫) below++;
       if (above >= w * 0.15 && below >= w * 0.15) near++;
     }
-    if (near >= Math.max(3, cols.length * 0.3)) B = H;
+    if (near >= Math.max(3, cols.length * 0.3)) B = BOTTOM_STOP ? 아래멈춤(g, cols, B) : H;
   }
+  if (읽기 && T기본 && TOP_OPEN_GAP && T === 자름(H * 0.06)) T = 위풀기(g, cols, T, B);
   if (B - T < H * 0.4) { T = 자름(H * 0.06); B = 자름(H * 0.95); }
   return [T, B];
 }
 
 let FRAME_GUTTER_LINE = 0.6;   // scan.FRAME_GUTTER_LINE — 0 = 끔
+// scan.BOTTOM_OPEN_LINE · BOTTOM_STOP · BOTTOM_STOP_REACH — 설정 `아래끝풀기`. 없으면 옛 셈(GLYPH · 그림 끝까지)
+let BOTTOM_OPEN_LINE = null, BOTTOM_STOP = 0, BOTTOM_STOP_REACH = 12;
+
+/** `scan._아래멈춤` — B 밑에서 처음으로 열의 30% 넘게 고랑까지 가로지르는 줄(광곽) 바로 위, 없으면 그림 끝 */
+function 아래멈춤(g, cols, B) {
+  const H = g.높이, W = g.너비, 값 = g.값, n = H - B, r = BOTTOM_STOP_REACH;
+  const 순 = cols.slice().sort(function (p, q) { return p[0] - q[0] || p[1] - q[1]; });
+  const 찬 = function (y, a, b) {
+    let m = 0; const o = (B + y) * W;
+    for (let x = a; x < b; x++) if (값[o + x] < INK) m++;
+    return m / (b - a) >= BOTTOM_STOP;
+  };
+  const 표 = new Float64Array(n);
+  for (let k = 0; k < 순.length; k++) {
+    const x0 = 순[k][0], x1 = 순[k][1];
+    if (x1 - x0 < 3) continue;
+    const 고랑 = [];
+    for (const j of [k - 1, k + 1]) {
+      if (j < 0 || j >= 순.length) continue;
+      const a = j < k ? 순[j][1] : x1, b = j < k ? x0 : 순[j][0];
+      if (b - a >= 3) 고랑.push([a, b]);
+    }
+    const 줄 = new Uint8Array(n);
+    for (let y = 0; y < n; y++) {
+      let 고 = false;
+      for (const ab of 고랑) if (찬(y, ab[0], ab[1])) { 고 = true; break; }
+      if (고 && 찬(y, x0, x1)) 줄[y] = 1;
+    }
+    const 누 = new Int32Array(n + 1);
+    for (let y = 0; y < n; y++) 누[y + 1] = 누[y] + 줄[y];
+    for (let y = 0; y < n; y++) {
+      if (!r) { 표[y] += 줄[y]; continue; }
+      if (누[Math.min(y + r + 1, n)] - 누[Math.max(y - r, 0)] > 0) 표[y] += 1;
+    }
+  }
+  const need = Math.max(2, 순.length * 0.3);
+  for (let y = 0; y < n; y++) if (표[y] >= need) return B + y - 2;
+  return H;
+}
+
+let TOP_OPEN_GAP = 0;   // scan.TOP_OPEN_GAP — 설정 `위끝풀기`(없으면 끔)
+
+/** `scan._위풀기` — 기본 위끝 T 를 가로지르는 열마다 빈 틈 앞 마지막 글자 줄까지 올라가, 열의 30% 넘으면 그 중앙값 − 2 */
+function 위풀기(g, cols, T, B) {
+  const W = g.너비, 값 = g.값;
+  const w = Math.max(1, 자름(중앙값(cols.map(function (c) { return c[1] - c[0]; }))));
+  const 틈 = Math.max(3, 자름(w * TOP_OPEN_GAP));
+  const 꼭대기 = [];
+  for (const c of cols) {
+    const a = c[0], b = c[1];
+    const 줄 = function (y) {
+      let m = 0; const o = y * W;
+      for (let x = a; x < b; x++) if (값[o + x] < INK) m++;
+      return m > (b - a) * SPAN_LOW;
+    };
+    let 위 = 0, 아래 = 0;
+    for (let y = Math.max(0, T - w); y < T; y++) if (줄(y)) 위++;
+    for (let y = T; y < Math.min(B, T + w); y++) if (줄(y)) 아래++;
+    if (위 < w * 0.15 || 아래 < w * 0.15) continue;
+    let y = T - 1, 빈 = 0, top = T;
+    while (y >= 0 && 빈 <= 틈) {
+      if (줄(y)) { top = y; 빈 = 0; } else 빈++;
+      y--;
+    }
+    if (y >= 0 || 빈 > 틈) 꼭대기.push(top);
+  }
+  if (꼭대기.length >= Math.max(3, cols.length * 0.3)) return Math.max(0, 자름(중앙값(꼭대기)) - 2);
+  return T;
+}
 
 /** `scan._고랑줄` — 열 폭 · 옆 고랑을 함께 채운 가로줄이 열의 30% 넘게 같은 높이 — [위 안쪽, 아래 안쪽](없으면 null) */
 function 고랑줄(g, cols, fill, agree) {
@@ -856,7 +927,33 @@ function 이어잡기(p, a, b, w, T, B, pitch) {
  * `scan.spans_between` — T~B 안에서 열마다 글자가 시작하고 끝나는 y.
  * 뒷면 비침·계선 때문에 열 폭의 GLYPH 이상이 잉크인 줄만 글자 줄로 봄
  */
-function 글자구간(prof, cols, T, B, pitch, 이어, 첫글자, 꼬리선, 연한) {
+let TAIL_NUMBER = null;   // scan.TAIL_NUMBER [최대, 최소, 몫] — 설정 `꼬리번호`(없으면 끔)
+
+/** `scan.spans_between` 의 쪽 번호 꼬리 — 높이 [최소, 최대) 자간이고 그 높이(y0..y1)에 잉크가 있는 다른 열이 몫 이하 */
+function 꼬리번호인가(prof, cols, i, y0, y1, pitch) {
+  const h = y1 - y0;
+  if (!(h >= pitch * TAIL_NUMBER[1] && h < pitch * TAIL_NUMBER[0])) return false;
+  let n = 0;
+  for (let j = 0; j < cols.length; j++) {
+    if (j === i) continue;
+    const need = (cols[j][1] - cols[j][0]) * GLYPH, q = prof[j];
+    for (let y = y0; y <= y1; y++) if (q[y] > need) { n++; break; }
+  }
+  return n <= Math.max(1, cols.length * TAIL_NUMBER[2]);
+}
+
+let TAIL_LINE = null;   // scan.TAIL_LINE [높이, 빈 줄 수] — 설정 `꼬리선토막`(없으면 끔)
+
+/** `scan._넓은띠` — 열마다 [가운데 ± 0.45 가로 자간 띠의 줄마다 잉크 수, 띠 폭] */
+function 넓은띠(g, cols, xpitch) {
+  const h = xpitch * 0.45, W = g.너비;
+  return cols.map(function (c) {
+    const x0 = Math.max(0, 자름((c[0] + c[1]) / 2 - h)), x1 = Math.min(W, 자름((c[0] + c[1]) / 2 + h));
+    return [x1 > x0 ? 열잉크(g, x0, x1) : new Float64Array(g.높이), x1 - x0];
+  });
+}
+
+function 글자구간(prof, cols, T, B, pitch, 이어, 첫글자, 꼬리선, 연한, 넓은) {
   const Ts = Array.isArray(T) ? T : cols.map(function () { return T; });   // 열마다 목록이어도 됨(`열광곽`)
   const Bs = Array.isArray(B) ? B : cols.map(function () { return B; });
   const spans = cols.map(function (c, i) {
@@ -868,10 +965,22 @@ function 글자구간(prof, cols, T, B, pitch, 이어, 첫글자, 꼬리선, 연
     if (꼬리선 && hit.length > 1) {
       let k = -1;
       for (let j = 1; j < hit.length; j++) if (hit[j] - hit[j - 1] > pitch * 3) k = j;
-      if (k > 0 && hit[k] > p.length * 0.8 && hit[hit.length - 1] - hit[k] < pitch * 0.15) {
-        let sum = 0;
-        for (let j = k; j < hit.length; j++) sum += p[hit[j]];
-        if (sum / (hit.length - k) > (c[1] - c[0]) * 0.8) b = hit[k - 1];
+      if (k > 0 && hit[k] > p.length * 0.8) {
+        const h = hit[hit.length - 1] - hit[k];
+        let 뗌 = false;
+        if (h < pitch * 0.15) {
+          let sum = 0;
+          for (let j = k; j < hit.length; j++) sum += p[hit[j]];
+          뗌 = sum / (hit.length - k) > (c[1] - c[0]) * 0.8;
+        }
+        if (!뗌 && TAIL_NUMBER) 뗌 = 꼬리번호인가(prof, cols, i, hit[k], hit[hit.length - 1], pitch);
+        if (!뗌 && TAIL_LINE && 넓은 && h < pitch * TAIL_LINE[0]) {   // 끊긴 · 물결진 아래 광곽 토막 — 넓은 띠에서도 빈 틈 뒤
+          const q = 넓은[i][0], w2 = 넓은[i][1];
+          let n = 0;
+          if (w2 >= 3) for (let y = hit[k - 1] + 1; y < hit[k]; y++) if (q[y] > w2 * SPAN_LOW) n++;
+          뗌 = n <= TAIL_LINE[1];
+        }
+        if (뗌) b = hit[k - 1];
       }
     }
     if (a < 0) return null;
@@ -1608,7 +1717,8 @@ function 쪽기하속(g, 원본, ratio, 단, 읽기, 표준자간, 가장자리,
       const 쌍 = cols0.slice(0, -1).map((a, i) => 세로줄있나(g, (a[0] + a[1]) / 2, (cols0[i + 1][0] + cols0[i + 1][1]) / 2, T, B));
       꼬리선 = !(쌍.length && 쌍.filter(Boolean).length > 쌍.length * TAIL_RULED);
     }
-    spans = 글자구간(prof, cols0, TT, BB, pitch, !!읽기, !!읽기, 꼬리선, 읽기 && SPAN_FAINT ? 연한무늬(원본, cols0) : null);
+    spans = 글자구간(prof, cols0, TT, BB, pitch, !!읽기, !!읽기, 꼬리선, 읽기 && SPAN_FAINT ? 연한무늬(원본, cols0) : null,
+                     꼬리선 && TAIL_LINE ? 넓은띠(g, cols0, xpitch) : null);
     if (휜 && spans) {
       // 쪽 T ~ 휜 줄 아래에 글자 줄이 있던 열은 줄 바로 아래에서 시작(`scan.page_geometry`)
       cols0.forEach(function (c, i) {
@@ -1754,7 +1864,7 @@ function 판짜임정하기(잰것들) {
  * → {단, 자간비, 판짜임} — `한쪽` 이 받는 문헌 설정 그대로(못 잰 것은 빠짐 = 기본값)
  * ⚠ 판정 규칙을 바꾸면 `판형판` 을 올릴 것 — 안 올리면 기억한 옛 판정을 씀
  */
-const 판형판 = 4;
+const 판형판 = 5;
 const 판형기억 = {};               // 파일 → 값 또는 살피는 중인 Promise(두 소도구가 함께 눌러도 한 번만)
 
 function 고르게쪽(n, k) {          // 1…n 쪽에서 고르게 k 개
@@ -2572,7 +2682,7 @@ let NOTCHAR_CONF = 0.5, NOTCHAR_WIDTH = 0.5, NOTCHAR_ROW = 0.9, NOTCHAR_KEEP = [
  * ③ 끝에서부터, 가운데 열 중앙값보다 로그 확신이 문턱 넘게 낮은 열을 한쪽에 `최대` 개까지.
  *   읽은 열(빈 열 빼고)이 `EDGE_FEW` 이하면 확신으로는 안 뗌
  */
-let EDGE_MEDIAN = 0.6, EDGE_MEDIAN_LOW = 0.15;   // align.EDGE_MEDIAN · EDGE_MEDIAN_LOW — 설정 `끝열보호` [몫, 낮은칸]
+let EDGE_MEDIAN = 0.6, EDGE_MEDIAN_LOW = 0.15, EDGE_MEDIAN_OPEN = 0.05;   // align.EDGE_MEDIAN · EDGE_MEDIAN_LOW · EDGE_MEDIAN_OPEN — 설정 `끝열보호` [몫, 낮은칸, 열린쪽낮은칸]
 let EDGE_FEW = 4;   // align.EDGE_FEW — 설정 `끝열적음` (null = 빈 열까지 셈)
 
 function 가장자리다듬기(geo, 열들, δ, 최대, 겹침, 안δ) {
@@ -2581,8 +2691,8 @@ function 가장자리다듬기(geo, 열들, δ, 최대, 겹침, 안δ) {
   if (겹침 === undefined) 겹침 = EDGE_OVERLAP;
   if (안δ === undefined) 안δ = EDGE_DROP_IN;
   const 점 = function (i) { return 열들[i] === null ? -9.0 : 열들[i].점수; };
-  // EDGE_MEDIAN — 바로 바깥 이웃(j)이 광곽 세로줄 열('ㅣ' 막대)이고 본문만큼 길고(글자 수 ≥ 열 중앙값 × 몫) 남은 칸의
-  //   낮은 칸(확신 < 0.5)이 EDGE_MEDIAN_LOW 이하인 열은 확신으로 떼지 않음(판심 글씨 열은 안 걸리게)
+  // EDGE_MEDIAN — 본문만큼 길고(글자 수 ≥ 열 중앙값 × 몫) 낮은 칸(확신 < 0.5)이 적은 열은 확신으로 떼지 않음:
+  //   바로 바깥 이웃(j)이 'ㅣ' 막대 열이면 EDGE_MEDIAN_LOW, 없거나 빈 열이면 EDGE_MEDIAN_OPEN 까지(판심 글씨 열은 안 걸리게)
   let 보호 = function () { return false; };
   if (EDGE_MEDIAN) {
     const 길이 = 열들.filter(function (o) { return o !== null; }).map(function (o) { return o.글자.length; })
@@ -2591,10 +2701,13 @@ function 가장자리다듬기(geo, 열들, δ, 최대, 겹침, 안δ) {
     보호 = function (i, j) {
       const o = 열들[i];
       if (o === null || !o.확신.length || o.글자.length < 긴열) return false;
-      if (j < 0 || j >= 열들.length || !막대(j)) return false;
       let 낮 = 0;
       for (const c of o.확신) if (c < 0.5) 낮++;
-      return 낮 / o.확신.length <= EDGE_MEDIAN_LOW;
+      낮 /= o.확신.length;
+      const 안 = j >= 0 && j < 열들.length;
+      if (안 && 막대(j)) return 낮 <= EDGE_MEDIAN_LOW;
+      if (EDGE_MEDIAN_OPEN !== null && !(안 && 열들[j] !== null)) return 낮 <= EDGE_MEDIAN_OPEN;
+      return false;
     };
   }
   const 가 = function (i) { return (geo.cols[i][0] + geo.cols[i][1]) / 2; };
@@ -3085,7 +3198,15 @@ const API = {
     if (s.광곽고랑자르기 !== undefined) FRAME_GUTTER_CUT = s.광곽고랑자르기;
     if (s.광곽한쪽 !== undefined) FRAME_ONESIDE = s.광곽한쪽;
     if (s.광곽고랑줄 !== undefined) FRAME_GUTTER_LINE = s.광곽고랑줄;
-    if (s.끝열보호 !== undefined) { EDGE_MEDIAN = s.끝열보호 ? s.끝열보호[0] : null; if (s.끝열보호) EDGE_MEDIAN_LOW = s.끝열보호[1]; }
+    if (s.아래끝풀기) { BOTTOM_OPEN_LINE = s.아래끝풀기[0]; BOTTOM_STOP = s.아래끝풀기[1]; BOTTOM_STOP_REACH = s.아래끝풀기[2]; }
+    else { BOTTOM_OPEN_LINE = null; BOTTOM_STOP = 0; }
+    TOP_OPEN_GAP = s.위끝풀기 || 0;
+    TAIL_NUMBER = s.꼬리번호 || null;
+    TAIL_LINE = s.꼬리선토막 || null;
+    if (s.끝열보호 !== undefined) {
+      EDGE_MEDIAN = s.끝열보호 ? s.끝열보호[0] : null;
+      if (s.끝열보호) { EDGE_MEDIAN_LOW = s.끝열보호[1]; EDGE_MEDIAN_OPEN = s.끝열보호[2] === undefined ? null : s.끝열보호[2]; }
+    }
     if (s.끝열적음 !== undefined) EDGE_FEW = s.끝열적음;
     if (s.가장자리막대줄섞음 !== undefined) EDGE_BAR_LIKE = s.가장자리막대줄섞음 || [];
     if (s.끝열짧음 !== undefined) EDGE_SHORT = s.끝열짧음;

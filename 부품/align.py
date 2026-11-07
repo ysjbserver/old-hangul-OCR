@@ -931,6 +931,7 @@ def 모델자르기계획(mdl, geo, span=3):
 
 EDGE_MEDIAN = 0.6     # 끝 열 보호 — 글자 수가 열들 중앙값의 이 몫 넘고
 EDGE_MEDIAN_LOW = 0.15  #   확신 0.5 미만 칸이 이 몫 이하인 열은 확신으로 떼지 않음. None = 끔
+EDGE_MEDIAN_OPEN = 0.05  # 바깥 이웃이 없거나 빈 열이면 낮은 칸이 이 몫 이하일 때만 보호(판심 열은 0.12 넘음). None = 끔
 EDGE_FEW = 4          # 끝에서 뗄 때 읽은 열(빈 후보 열 빼고)이 이만큼 이하면 확신으로 떼지 않음. None = 옛 셈(빈 열까지 셈)
 
 
@@ -947,15 +948,20 @@ def 가장자리다듬기(geo, 열들, δ=EDGE_DROP, 최대=EDGE_MAX, 겹침=EDG
     점 = lambda i: -9.0 if 열들[i] is None else 열들[i][0]
     보호 = lambda i, j: False
     if EDGE_MEDIAN:
-        # 끝 열 보호 — 바로 바깥 이웃(j)이 광곽 세로줄 열('ㅣ' 막대)이고, 본문만큼 길고, 남은 칸이 거의 다 잘 읽힌
-        #   열은 확신으로 떼지 않음. ⚠ 바깥 이웃 조건이 없으면 판심 글씨 열이 남는다.
+        # 끝 열 보호 — 본문만큼 길고 남은 칸이 거의 다 잘 읽힌 열은 확신으로 떼지 않음. 바로 바깥 이웃(j)이
+        #   'ㅣ' 막대 열이면 `EDGE_MEDIAN_LOW`, 없거나 빈 열이면 `EDGE_MEDIAN_OPEN` 까지. ⚠ 문턱이 느슨하면 판심 글씨 열이 남는다.
         길이 = sorted(len(o[1]) for o in 열들 if o is not None)
         긴열 = (길이[len(길이) // 2] if 길이 else 0) * EDGE_MEDIAN
         def 보호(i, j):
             o = 열들[i]
-            if o is None or len(o[2]) == 0 or len(o[1]) < 긴열 or not (0 <= j < len(열들)) or not 막대(j):
+            if o is None or len(o[2]) == 0 or len(o[1]) < 긴열:
                 return False
-            return float(np.mean(np.asarray(o[2]) < 0.5)) <= EDGE_MEDIAN_LOW
+            낮 = float(np.mean(np.asarray(o[2]) < 0.5))
+            if 0 <= j < len(열들) and 막대(j):
+                return 낮 <= EDGE_MEDIAN_LOW
+            if EDGE_MEDIAN_OPEN is not None and not (0 <= j < len(열들) and 열들[j] is not None):
+                return 낮 <= EDGE_MEDIAN_OPEN
+            return False
     가운데 = lambda i: (geo["cols"][i][0] + geo["cols"][i][1]) / 2
     남 = list(range(len(열들)))
     k = 0

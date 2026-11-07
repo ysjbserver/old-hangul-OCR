@@ -59,6 +59,12 @@ SPAN_FAINT = 160
 # (읽을 때만) 아래쪽 꼬리선(쪽번호 줄 · 휜 아래 광곽선) 빼기를 끄는 '세로줄 판' — 이웃 열 사이 세로줄(`세로줄있나`)이
 #   열 쌍의 이 몫 넘게 있을 때만 끔. 0 = 한 쌍만 있어도 끔. JS 짝 `쪽기하` · 설정 `꼬리선판`
 TAIL_RULED = 0.5
+# (읽을 때 · 꼬리선을 볼 때) 본문과 3 자간 넘게 떨어진 쪽 아래 20% 안 덩이의 높이가 (최대, 최소, 몫)의 최소 이상 · 최대 미만 자간이고
+#   그 높이에 잉크가 있는 다른 열이 몫 이하면 쪽 번호로 보고 뺌. None = 끔. JS 짝 `글자구간` · 설정 `꼬리번호`
+TAIL_NUMBER = (1.0, 0.2, 0.2)
+# (같은 때) 꽉 차지 않은 가는 꼬리(높이 < 첫 값 × 자간 — 끊긴 · 물결진 아래 광곽)도 빼되, 본문과의 빈 틈이 열 가운데 ± 0.45 가로 자간
+#   띠에서 `SPAN_LOW` 넘는 줄이 둘째 값 이하일 때만(기운 쪽은 글자가 열 밖으로 비켜나 열 안만 보면 빈 틈). None = 끔. JS 짝 · 설정 `꼬리선토막`
+TAIL_LINE = (0.2, 2)
 # 읽을 때 광곽 높이를 열마다 따로 (_열광곽) — 기운·휜 광곽 대비
 FRAME_LOCAL = True
 FRAME_LOCAL_FILL = 0.6    # 열 + 안쪽 고랑 띠의 이만큼이 잉크인 줄을 광곽 가로줄로
@@ -630,9 +636,11 @@ def page_frame(g, cols, 읽기=False):
         near = 0
         for a, b in cols:
             p = (g[:, a:b] < INK).sum(axis=1)
-            near += int(np.count_nonzero(p[max(T, B - w):B] > (b - a) * GLYPH) >= w * 0.15 and np.count_nonzero(p[B:min(H, B + w)] > (b - a) * GLYPH) >= w * 0.15)
+            near += int(np.count_nonzero(p[max(T, B - w):B] > (b - a) * BOTTOM_OPEN_LINE) >= w * 0.15 and np.count_nonzero(p[B:min(H, B + w)] > (b - a) * BOTTOM_OPEN_LINE) >= w * 0.15)
         if near >= max(3, len(cols) * 0.3):
-            B = H
+            B = _아래멈춤(g, cols, B) if BOTTOM_STOP else H
+    if 읽기 and T기본 and TOP_OPEN_GAP and T == int(H * 0.06):
+        T = _위풀기(g, cols, T, B)
     if B - T < H * 0.4:
         T, B = int(H * 0.06), int(H * 0.95)
     return T, B
@@ -641,6 +649,65 @@ def page_frame(g, cols, 읽기=False):
 # (읽을 때만) 쌍줄 광곽의 가는 안쪽 줄 — `_frame`(90%)에 안 걸리는 줄. 열 폭의 이 몫 + 옆 고랑의 이 몫을 함께 채운 줄이
 #   열의 30% 넘게 같은 높이에 있으면 광곽 줄로 봄. 옛 경계보다 조금 안쪽(쪽 높이 10% 안)일 때만 옮김. 0 = 끔
 FRAME_GUTTER_LINE = 0.6
+
+# (읽을 때만) 기본 아래끝(H × 0.95)을 풀지 볼 때 세는 줄 — 열 폭의 이 몫 넘게 잉크인 줄(옛 값 GLYPH).
+BOTTOM_OPEN_LINE = SPAN_LOW
+# 풀 때 옛 아래끝 밑 첫 광곽 줄에서 멈춤 — 열과 옆 고랑을 함께 이 몫 넘게 채운 줄이 열의 30% 넘게. 0 = 그림 끝까지(옛 동작)
+BOTTOM_STOP = 0.5
+BOTTOM_STOP_REACH = 12   # 기운 · 휜 줄 — 열마다 찬 줄을 위아래 이 화소만큼 번지게 해 같은 높이로 셈
+
+
+# (읽을 때만) 기본 위끝(H × 0.06)을 여러 열의 글자가 가로지르면 글자 머리까지 올림 — 열 폭의 이 몫 넘는 빈 줄에서 멈춤. 0 = 끔
+TOP_OPEN_GAP = 0.5
+
+
+def _위풀기(g, cols, T, B):
+    """T 위아래로 글자 줄(`SPAN_LOW`)이 이어지는 열마다 위로 따라 올라가 빈 틈 앞 마지막 글자 줄 → 열의 30% 넘으면 그 중앙값. 읽기.js `위풀기` 짝."""
+    w = max(1, int(np.median([b - a for a, b in cols])))
+    틈 = max(3, int(w * TOP_OPEN_GAP))
+    꼭대기 = []
+    for a, b in cols:
+        p = (g[:, a:b] < INK).sum(axis=1) > (b - a) * SPAN_LOW
+        if np.count_nonzero(p[max(0, T - w):T]) < w * 0.15 or np.count_nonzero(p[T:min(B, T + w)]) < w * 0.15:
+            continue
+        y, 빈, top = T - 1, 0, T
+        while y >= 0 and 빈 <= 틈:
+            if p[y]:
+                top, 빈 = y, 0
+            else:
+                빈 += 1
+            y -= 1
+        if y >= 0 or 빈 > 틈:                  # 그림 끝까지 이어진 열(스캔 가장자리)은 안 믿음
+            꼭대기.append(top)
+    if len(꼭대기) >= max(3, len(cols) * 0.3):
+        return max(0, int(np.median(꼭대기)) - 2)
+    return T
+
+
+def _아래멈춤(g, cols, B, agree=0.3):
+    """B 밑에서 처음으로 여러 열이 고랑까지 가로지르는 줄(광곽) 바로 위 — 없으면 그림 끝. 읽기.js `아래멈춤` 짝."""
+    H = g.shape[0]
+    순 = sorted(cols)
+    ink = g[B:H] < INK
+    n, r = H - B, BOTTOM_STOP_REACH
+    표 = np.zeros(n)
+    for k, (x0, x1) in enumerate(순):
+        if x1 - x0 < 3:
+            continue
+        고랑찬 = np.zeros(n, dtype=bool)
+        for j in (k - 1, k + 1):
+            if 0 <= j < len(순):
+                a, b = (순[j][1], x0) if j < k else (x1, 순[j][0])
+                if b - a >= 3:
+                    고랑찬 |= ink[:, a:b].mean(axis=1) >= BOTTOM_STOP
+        찬 = (ink[:, x0:x1].mean(axis=1) >= BOTTOM_STOP) & 고랑찬
+        if r:
+            c = np.concatenate([[0], np.cumsum(찬)])
+            i = np.arange(n)
+            찬 = (c[np.minimum(i + r + 1, n)] - c[np.maximum(i - r, 0)]) > 0
+        표 += 찬
+    hit = np.flatnonzero(표 >= max(2, len(순) * agree))
+    return B + int(hit[0]) - 2 if len(hit) else H
 
 
 def _고랑줄(g, cols, fill, agree=0.3):
@@ -835,7 +902,16 @@ def _이어잡기(p, a, b, w, T, B, pitch):
     return a, 끝
 
 
-def spans_between(prof, cols, T, B, pitch, 이어=False, 첫글자=False, 꼬리선=False, 연한=None):
+def _넓은띠(g, cols, xpitch):
+    """열마다 (가운데 ± 0.45 가로 자간 띠의 줄마다 잉크 수, 띠 폭) — 자르는 상자 폭. 읽기.js `넓은띠` 짝."""
+    h, W, out = xpitch * 0.45, g.shape[1], []
+    for a, b in cols:
+        x0, x1 = max(0, int((a + b) / 2 - h)), min(W, int((a + b) / 2 + h))
+        out.append(((g[:, x0:x1] < INK).sum(axis=1) if x1 > x0 else np.zeros(g.shape[0], dtype=int), x1 - x0))
+    return out
+
+
+def spans_between(prof, cols, T, B, pitch, 이어=False, 첫글자=False, 꼬리선=False, 연한=None, 넓은=None):
     """
     T~B 안에서 열마다 글자가 실제로 시작하고 끝나는 y 범위.
 
@@ -844,6 +920,7 @@ def spans_between(prof, cols, T, B, pitch, 이어=False, 첫글자=False, 꼬리
     T · B 는 열마다의 목록이어도 된다(`_열광곽` — 읽을 때).
     연한: 열마다 옅은 잉크 무늬(읽을 때 · `SPAN_FAINT`) — 주면 흐린 열 머리를 `_연한머리잇기` 로 잇는다.
     꼬리선: 본문과 멀리 떨어진 아래쪽 가는 가로줄을 뺀다. 첫글자: `_첫글자잇기` 도 한다.
+    넓은: 열마다 (넓은 띠의 줄마다 잉크 수, 띠 폭) — 주면 `TAIL_LINE` 도 본다(`_넓은띠`).
     """
     Ts = list(T) if isinstance(T, (list, tuple)) else [T] * len(cols)
     Bs = list(B) if isinstance(B, (list, tuple)) else [B] * len(cols)
@@ -858,6 +935,13 @@ def spans_between(prof, cols, T, B, pitch, 이어=False, 첫글자=False, 꼬리
                 tail = hit[k:]
                 if t + tail[0] > len(p) * 0.8 and tail[-1] - tail[0] < pitch * 0.15 and np.mean(p[t + tail]) > (x1 - x0) * 0.8:
                     hit = hit[:k]
+                elif TAIL_NUMBER and t + tail[0] > len(p) * 0.8 and pitch * TAIL_NUMBER[1] <= tail[-1] - tail[0] < pitch * TAIL_NUMBER[0] \
+                        and sum(1 for j in range(len(cols)) if j != i and np.any(prof[j][t + tail[0]:t + tail[-1] + 1] > (cols[j][1] - cols[j][0]) * GLYPH)) \
+                        <= max(1, len(cols) * TAIL_NUMBER[2]):
+                    hit = hit[:k]                 # 쪽 번호 — 다른 열은 빈 높이의 짧은 외딴 덩이
+                elif TAIL_LINE and 넓은 is not None and t + tail[0] > len(p) * 0.8 and tail[-1] - tail[0] < pitch * TAIL_LINE[0] \
+                        and (넓은[i][1] < 3 or np.count_nonzero(넓은[i][0][t + hit[k - 1] + 1:t + hit[k]] > 넓은[i][1] * SPAN_LOW) <= TAIL_LINE[1]):
+                    hit = hit[:k]                 # 끊긴 · 물결진 아래 광곽 토막 — 넓은 띠에서도 빈 틈 뒤
         s = None if len(hit) == 0 else (t + int(hit[0]), t + int(hit[-1]) + 1)
         if s and 이어 and SPAN_EXTEND:
             s = _이어잡기(p, s[0], s[1], x1 - x0, t, b, pitch)
@@ -1737,7 +1821,8 @@ def _쪽기하(path, g, 원본, ratio=YX_RATIO, 단=1, 읽기=False, 가장자�
         if 꼬리선:
             줄쌍 = [세로줄있나(g, (a[0] + a[1]) / 2, (b[0] + b[1]) / 2, T, B) for a, b in zip(cols[:-1], cols[1:])]
             꼬리선 = not (줄쌍 and sum(줄쌍) > len(줄쌍) * TAIL_RULED)
-        spans = spans_between(prof, cols, TT, BB, pitch, 이어=이어, 첫글자=bool(읽기), 꼬리선=꼬리선, 연한=연한)
+        넓은 = _넓은띠(g, cols, xpitch) if 꼬리선 and TAIL_LINE else None
+        spans = spans_between(prof, cols, TT, BB, pitch, 이어=이어, 첫글자=bool(읽기), 꼬리선=꼬리선, 연한=연한, 넓은=넓은)
         if 휜 and spans:
             # 쪽 T 와 휜 줄 아래 사이에 글자 줄이 있던 열은 줄 바로 아래에서 시작(흐린 첫 글자를 놓치지 않게).
             for i, (x0, x1) in enumerate(cols):
