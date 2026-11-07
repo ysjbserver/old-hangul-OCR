@@ -630,7 +630,7 @@ def page_frame(g, cols, 읽기=False):
             T = 위
         if 아래 is not None and B - H * 0.1 < 아래 < B:
             B = 아래
-    if 읽기 and B기본:
+    if (읽기 or CUT_EDGE_OPEN) and B기본:
         # 기본 아래끝을 여러 본문 열이 가로지르면 마지막 글자를 함께 읽는다.
         w = max(1, int(np.median([b - a for a, b in cols])))
         near = 0
@@ -639,7 +639,7 @@ def page_frame(g, cols, 읽기=False):
             near += int(np.count_nonzero(p[max(T, B - w):B] > (b - a) * BOTTOM_OPEN_LINE) >= w * 0.15 and np.count_nonzero(p[B:min(H, B + w)] > (b - a) * BOTTOM_OPEN_LINE) >= w * 0.15)
         if near >= max(3, len(cols) * 0.3):
             B = _아래멈춤(g, cols, B) if BOTTOM_STOP else H
-    if 읽기 and T기본 and TOP_OPEN_GAP and T == int(H * 0.06):
+    if (읽기 or CUT_EDGE_OPEN) and T기본 and TOP_OPEN_GAP and T == int(H * 0.06):
         T = _위풀기(g, cols, T, B)
     if B - T < H * 0.4:
         T, B = int(H * 0.06), int(H * 0.95)
@@ -659,6 +659,9 @@ BOTTOM_STOP_REACH = 12   # 기운 · 휜 줄 — 열마다 찬 줄을 위아래 
 
 # (읽을 때만) 기본 위끝(H × 0.06)을 여러 열의 글자가 가로지르면 글자 머리까지 올림 — 열 폭의 이 몫 넘는 빈 줄에서 멈춤. 0 = 끔
 TOP_OPEN_GAP = 0.5
+
+# 자를 때도 위 두 풀기 + 풀린 쪽에 꼬리 규칙(`TAIL_NUMBER` · `TAIL_LINE`)을 씀. False = 옛 자르기(시험 중 — JS 짝 없음)
+CUT_EDGE_OPEN = False
 
 
 def _위풀기(g, cols, T, B):
@@ -1817,7 +1820,7 @@ def _쪽기하(path, g, 원본, ratio=YX_RATIO, 단=1, 읽기=False, 가장자�
             휜 = _휜광곽(원본, cols, T, pitch)
             TT = 휜 or T
         연한 = [(원본[:, a:b] < SPAN_FAINT).sum(axis=1) for a, b in cols] if 읽기 and SPAN_FAINT else None
-        꼬리선 = bool(읽기) and not 쪽광곽
+        꼬리선 = (bool(읽기) or (CUT_EDGE_OPEN and (B > int(g.shape[0] * 0.95) or T < int(g.shape[0] * 0.06)))) and not 쪽광곽
         if 꼬리선:
             줄쌍 = [세로줄있나(g, (a[0] + a[1]) / 2, (b[0] + b[1]) / 2, T, B) for a, b in zip(cols[:-1], cols[1:])]
             꼬리선 = not (줄쌍 and sum(줄쌍) > len(줄쌍) * TAIL_RULED)

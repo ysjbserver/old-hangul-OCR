@@ -327,8 +327,9 @@ def 책머리기하(geo):
                 heads.append((i, int(hit[0]), int(hit[j + 1])))
     if len(heads) < 2 or max(h[1] for h in heads) - min(h[1] for h in heads) > pitch * 0.5:
         return None
+    # 머리글을 뗀 구간 · 복원한 첫 열에 이전 끝맞춤을 다시 적용하지 않는다.
     out = dict(geo, cols=list(cols), crop_cols=list(geo["crop_cols"]),
-               spans=list(spans), sm=list(geo["sm"]))
+               spans=list(spans), sm=list(geo["sm"]), 끝맞춤=None)
     for i, _, start in heads:
         out["spans"][i] = (start, spans[i][1])
     # 긴 본문의 투영에서는 놓치는 짧은 첫 열을 기존 간격에 맞춰 한 열만 조사한다.
