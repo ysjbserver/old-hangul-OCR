@@ -85,10 +85,19 @@ class 모델:
                 del 기억[k]
 
     def _그림열쇠(self, im):
+        """그림 내용의 열쇠. 같은 그림 객체는 한 번만 해시함(최근 `기억그림수` 장 · 그림을 제자리에서 바꾸지 않을 때만 옳음)."""
         고정 = getattr(self, "_고정그림", None)
         if 고정 is not None and 고정[0] is im:
             return 고정[1]
-        return (im.size, im.mode, hashlib.blake2b(im.tobytes(), digest_size=16).digest())
+        본 = getattr(self, "_열쇠기억", [])
+        for i, (그림, 열쇠) in enumerate(본):
+            if 그림 is im:
+                if i:
+                    본.insert(0, 본.pop(i))
+                return 열쇠
+        열쇠 = (im.size, im.mode, hashlib.blake2b(im.tobytes(), digest_size=16).digest())
+        self._열쇠기억 = [(im, 열쇠)] + 본[:max(1, self.기억그림수) - 1]
+        return 열쇠
 
     @contextmanager
     def 그림고정(self, im):

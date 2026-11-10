@@ -408,13 +408,19 @@ document.addEventListener("keydown", function (e) {
 };
 
 공.서버로 = async function (경로, 몸, 일) {
-  var res = await 일.기다림(fetch(서버 + 경로, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(몸),
-    signal: 일.신호,
-  }));
-  var 답 = await 일.기다림(res.json());
-  if (!res.ok || 답.오류) throw new Error(답.오류 || ("서버 오류 " + res.status));
-  return 답;
+  for (var 번 = 0; ; 번++) {
+    var res = await 일.기다림(fetch(서버 + 경로, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(몸),
+      signal: 일.신호,
+    }));
+    var 답 = await 일.기다림(res.json());
+    if (res.status === 503 && 답.상태 === "붐빔" && 번 < 30) {   // 서버가 붐빔 — 잠깐 뒤 다시(1분까지)
+      await 일.쉼(2000);
+      continue;
+    }
+    if (!res.ok || 답.오류) throw new Error(답.오류 || ("서버 오류 " + res.status));
+    return 답;
+  }
 };
 
 // ── 상태 띠 — 편집 상자 바로 위(텍스트 변환의 진행 · 되돌리기 띠와 같은 자리) ──

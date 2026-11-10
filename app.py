@@ -42,6 +42,7 @@ import traceback
 import urllib.parse
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 
 여기 = os.path.dirname(os.path.abspath(__file__))
 os.chdir(여기)
@@ -69,15 +70,31 @@ import 대조
 스레드 = int(os.environ.get("OCR_THREADS", "1"))
 캐시 = os.environ.get("OCR_CACHE") or os.path.join(tempfile.gettempdir(), "oldhangul-ocr")
 캐시최대 = int(os.environ.get("OCR_CACHE_FILES", "1500"))     # 스캔 그림을 이만큼 넘게 두지 않음(오래된 것부터 지움)
+캐시최대바이트 = int(os.environ.get("OCR_CACHE_MB", "2048")) * 2**20   # 스캔 그림을 모두 합쳐 이만큼 넘게 두지 않음
+캐시정리간격 = 30                    # 캐시 폴더를 훑는 간격(초)
 os.makedirs(캐시, exist_ok=True)
 
 모델 = onnx모델.끼우기(os.path.join(여기, "모델"), 스레드)
 너비 = 모델.설정.get("스캔너비", 1920)
 계산 = threading.Lock()            # CPU 가 적어 모델 셈은 한 번에 하나씩
+계산동시 = int(os.environ.get("OCR_QUEUE", "3"))    # 모델 셈을 하거나 기다리는 요청 수 — 넘으면 503(가벼운 요청이 쓸 스레드를 남김 · gunicorn 스레드 수보다 작게)
+_계산자리 = threading.BoundedSemaphore(계산동시)
+
+
+@contextmanager
+def 계산차례():
+    """요청의 모델 셈 — 기다리는 요청이 `계산동시` 를 넘으면 기다리지 않고 503."""
+    if not _계산자리.acquire(blocking=False):
+        raise 손님오류("서버가 다른 요청들을 처리하느라 바쁩니다 — 잠시 뒤에 다시", 503, {"상태": "붐빔"})
+    try:
+        with 계산:
+            yield
+    finally:
+        _계산자리.release()
 
 # 요청 · 일의 한도(넘으면 400 · 503)
 요청최대바이트 = 1_000_000
-본문최대글자 = 50_000                # /api/compare 의 text
+본문최대글자 = 20_000                # /api/compare 의 text(한 쪽 원문 — 길수록 맞대는 셈이 가파르게 늚)
 자간비범위 = (0.3, 2.0)             # /api/area-read 의 ratio
 그림최대바이트 = 30 * 1024 * 1024    # 받는 스캔 한 장
 그림최대세로배 = 4                   # 너비를 맞춘 뒤 높이 ≤ 너비 × 이 값
@@ -101,9 +118,10 @@ _모델잠금 = threading.Lock()
 
 
 def 모델얻기(이름):
-    이름 = (이름 or "hangul")
-    if 이름 not in 모델이름들:
-        raise 손님오류("모르는 모델입니다: " + str(이름))
+    if 이름 is None or 이름 == "":
+        이름 = "hangul"
+    if not isinstance(이름, str) or 이름 not in 모델이름들:
+        raise 손님오류("모르는 모델입니다: " + str(이름)[:40])
     with _모델잠금:
         if 이름 not in _모델들:
             if not os.path.exists(os.path.join(국한문폴더, "국한문모델.onnx")):
@@ -114,11 +132,13 @@ def 모델얻기(이름):
 
 def 단바꾸기(s, 단):
     """설정 `s` 의 단만 고른 값으로(없거나 "auto" 면 그대로). 1단 = 1, N단 = 가름줄 높이 [1/N …]."""
-    if 단 in (None, "", "auto", "자동"):
+    if 단 is None or (isinstance(단, str) and 단 in ("", "auto", "자동")):
         return s
     try:
+        if isinstance(단, bool) or not isinstance(단, (str, int, float)):
+            raise ValueError
         n = int(단)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise 손님오류("tiers(몇 단)는 숫자나 auto 여야 합니다")
     if not 1 <= n <= 6:
         raise 손님오류("tiers(몇 단)는 1~6 사이여야 합니다")
@@ -182,19 +202,31 @@ def 파일정보(파일):
 
 
 def _캐시정리():
-    파일들 = []
+    """스캔 그림이 `캐시최대` 장이나 `캐시최대바이트` 를 넘으면 오래된 것부터 지움(조금 더 지워 자주 돌지 않게)."""
+    파일들, 합 = [], 0
     for 뿌리, _, 이름들 in os.walk(캐시):
         for n in 이름들:
             if n.endswith((".jpg", ".png")):
                 p = os.path.join(뿌리, n)
-                파일들.append((os.path.getmtime(p), p))
-    if len(파일들) > 캐시최대:
-        파일들.sort()
-        for _, p in 파일들[:len(파일들) - 캐시최대 + 100]:
-            try:
-                os.remove(p)
-            except OSError:
-                pass
+                try:
+                    st = os.stat(p)
+                except OSError:
+                    continue
+                파일들.append((st.st_mtime, st.st_size, p))
+                합 += st.st_size
+    if len(파일들) <= 캐시최대 and 합 <= 캐시최대바이트:
+        return
+    파일들.sort()
+    남길수, 남길바이트 = max(0, 캐시최대 - 100), 캐시최대바이트 * 9 // 10
+    수 = len(파일들)
+    for _, 크기, p in 파일들:
+        if 수 <= 남길수 and 합 <= 남길바이트:
+            break
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+        수, 합 = 수 - 1, 합 - 크기
 
 
 try:                                    # 리눅스(glibc)만 — 다 쓴 메모리를 운영체제에 돌려줌
@@ -216,11 +248,13 @@ def 기억비우기():
         _그림들.clear()
     with scan._그림잠금:
         scan._그림기억.clear()
+    scan._가름기억.clear()
     align._경계기억 = []
     align._잉크판기억 = []
     with _모델잠금:
         for m in [모델, *_모델들.values()]:
             m._기억 = []
+            m._열쇠기억 = []
 
 
 def 쪽검사(정보, 쪽):
@@ -277,8 +311,9 @@ def 스캔(파일, 쪽):
     except step1_collect.너무큼:
         raise 손님오류(f"스캔 파일이 처리 한도({그림최대바이트 // 2**20}MB)보다 큽니다")
     os.utime(p)
-    if r_정리.acquire(blocking=False):
+    if time.time() - _정리때[0] >= 캐시정리간격 and r_정리.acquire(blocking=False):
         try:
+            _정리때[0] = time.time()
             _캐시정리()
         finally:
             r_정리.release()
@@ -316,6 +351,7 @@ def 진단정보(파일, 쪽, 경로, 결과):
 
 
 r_정리 = threading.Lock()
+_정리때 = [0.0]                           # 캐시 폴더를 마지막으로 훑은 때
 _한장잠금 = threading.Lock()
 _그림들 = OrderedDict()                   # (파일, 쪽) → (PIL 회색 그림, numpy) — 최근 6쪽
 _그림잠금 = threading.Lock()
@@ -589,7 +625,7 @@ def _작업실행(이름, ip, 조건, 작업, 단계, 시작):
         조건, ensure_ascii=False, sort_keys=True, default=_json기본).encode("utf-8")).hexdigest())
     단계["입력확인"] = time.perf_counter() - t
     대기 = time.perf_counter()
-    with 계산:
+    with 계산차례():
         t = time.perf_counter()
         단계["대기"] = t - 대기
         for k in list(_완료들):
@@ -785,7 +821,7 @@ def 상자읽기(파일, 쪽, 상자들, 모델이름=None):
         if b[2] > im.width or b[3] > im.height:
             raise 손님오류(f"boxes[{i}]가 이미지 경계를 벗어납니다")
     모델 = 모델얻기(모델이름)
-    with 계산:
+    with 계산차례():
         kL, kV, kT, cf = 모델.read(im, 상자들)
     답 = dict(초=[int(v) for v in kL], 중=[int(v) for v in kV], 종=[int(v) for v in kT], 확신=[float(v) for v in cf])
     표 = 글자표지문(모델)
@@ -806,7 +842,7 @@ def 경계읽기(파일, 쪽, x0, x1):
         raise 손님오류("열 좌표가 이미지 경계를 벗어납니다")
     if max(8, int(round(g.shape[0] * 배율))) > 경계최대높이:
         raise 손님오류("경계 검출 이미지 높이가 처리 한도를 넘습니다")
-    with 계산:
+    with 계산차례():
         p = align._검출기.경계확률(g, x0, x1)
     return dict(확률=[float(v) for v in p], 높이=int(g.shape[0]))
 
@@ -824,7 +860,8 @@ def _json기본(o):
 
 공통머리 = [("Access-Control-Allow-Origin", "*"),
            ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
-           ("Access-Control-Allow-Headers", "Content-Type")]
+           ("Access-Control-Allow-Headers", "Content-Type"),
+           ("X-Content-Type-Options", "nosniff")]
 
 갈래 = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8",
         ".css": "text/css; charset=utf-8", ".png": "image/png", ".svg": "image/svg+xml", ".txt": "text/plain; charset=utf-8",
@@ -898,7 +935,7 @@ def _경로(env):
     return urllib.parse.unquote(p)
 
 
-def _정적(start, 이름, 앞=b""):
+def _정적(start, 이름, 앞=b"", env=None):
     # 이름이 여럿이면 줄바꿈으로 이어 붙임(소도구 묶음)
     b = 앞
     for i, 하나 in enumerate((이름,) if isinstance(이름, str) else 이름):
@@ -907,8 +944,13 @@ def _정적(start, 이름, 앞=b""):
             return _응답(start, {"오류": "없는 주소"}, 404)
         with open(p, "rb") as f:
             b += (b"\n" if i else b"") + f.read()
+    # 브라우저가 가진 것과 같으면 본문 없이 304(편집 창을 열 때마다 소도구를 다시 받지 않게)
+    꼬리표 = '"' + hashlib.sha256(b).hexdigest()[:20] + '"'
+    if env is not None and 꼬리표 in [v.strip().removeprefix("W/") for v in (env.get("HTTP_IF_NONE_MATCH") or "").split(",")]:
+        start("304 Not Modified", 공통머리 + [("ETag", 꼬리표), ("Cache-Control", "no-cache")])
+        return [b""]
     머리 = 공통머리 + [("Content-Type", 갈래.get(os.path.splitext(p)[1], "application/octet-stream")),
-                    ("Content-Length", str(len(b))), ("Cache-Control", "no-cache")]
+                    ("Content-Length", str(len(b))), ("Cache-Control", "no-cache"), ("ETag", 꼬리표)]
     start("200 OK", 머리)
     return [b]
 
@@ -933,7 +975,7 @@ def _몸(env):
         raise 손님오류("요청이 너무 큽니다")
     try:
         몸 = json.loads(env["wsgi.input"].read(n).decode("utf-8") or "{}") if n else {}
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         raise 손님오류("요청 본문은 올바른 UTF-8 JSON이어야 합니다")
     if not isinstance(몸, dict):
         raise 손님오류("요청 본문은 JSON 객체여야 합니다")
@@ -951,6 +993,9 @@ def _파일쪽(q):
     파일 = 파일.strip()
     if not 파일:
         raise 손님오류("file(파일 이름)이 없습니다")
+    # 미디어위키 제목 규칙 — 255바이트까지 · 제어문자와 # < > [ ] | { } 는 못 씀
+    if len(파일.encode("utf-8", "replace")) > 255 or re.search(r"[\x00-\x1f\x7f#<>\[\]|{}]", 파일):
+        raise 손님오류("file(파일 이름)이 올바르지 않습니다")
     쪽 = q.get("page", q.get("쪽", 1))
     try:
         if isinstance(쪽, bool) or not isinstance(쪽, (str, int, float)) or (isinstance(쪽, float) and not 쪽.is_integer()):
@@ -971,10 +1016,10 @@ def app(env, start):
         return [b""]
     try:
         if 경로 in ("/", "/index.html"):
-            return _정적(start, "index.html")
+            return _정적(start, "index.html", env=env)
         if 경로 in 소도구들:
             앞 = _서버문장(env, 유지=True)
-            return _정적(start, 소도구들[경로], 앞)
+            return _정적(start, 소도구들[경로], 앞, env=env)
         if 경로 == 옛영역길 or 경로.startswith(옛영역길 + "/"):
             새 = "/area/" + 경로[len(옛영역길):].lstrip("/")
             qs = env.get("QUERY_STRING", "")
@@ -991,7 +1036,7 @@ def app(env, start):
                     b = _서버문장(env)
                     start("200 OK", 공통머리 + [("Content-Type", "text/javascript; charset=utf-8"), ("Content-Length", str(len(b)))])
                     return [b]
-                return _정적(start, os.path.join("영역지정", 이름))
+                return _정적(start, os.path.join("영역지정", 이름), env=env)
         if 경로 == "/api/health":
             return _응답(start, dict(모델=판정보, 스레드=스레드, 살핀파일=len(_살핀), 판형기억오래둠=판형기억오래,
                                   켠지초=round(time.time() - 켠때),

@@ -5,6 +5,7 @@
 여기서는 '몇 칸으로 자를지'를 정하지 않는다. 그것은 align.py 가 정한다.
 이 파일이 하는 일은 자를 자리의 후보를 만들어 주는 것까지다.
 """
+import hashlib
 import os
 import threading
 import numpy as np
@@ -1414,17 +1415,35 @@ def split_column(sp, y0, y1, n, cands, lam=1.2):
     if m < n + 1: return None, INF
     mx = max(1.0, sp[y0:min(y1, len(sp))].max())
     lo, hi = pitch * 0.45, pitch * 2.0
+    열쇠 = None
     if (type(pitch) is float and type(lam) in (float, int) and isinstance(sp, np.ndarray)
             and sp.dtype == np.float64 and all(type(p) is int for p in pts)):
+        # 같은 띠 · 후보 · 칸수는 한 번만 셈함(전사대조가 같은 열을 기하마다 다시 가름)
+        h = hashlib.blake2b(np.array([m] + pts, dtype=np.int64).tobytes(), digest_size=16)
+        h.update(sp[y0:y1 + 1].tobytes())
+        열쇠 = (h.digest(), n, lam)
+        본 = _가름기억.get(열쇠)
+        if 본 is not None:
+            return (list(본[0]) if 본[0] is not None else None), 본[1]
         dp, prev = _split_dp(sp, n, lam, pts, pitch, lo, hi, mx, INF)
     else:
         dp, prev = _split_dp_loop(sp, n, lam, pts, pitch, lo, hi, mx, INF)
-    if dp[n][m-1] >= INF: return None, INF
-    out, c, j = [], n, m - 1
-    while c > 0:
-        out.append(pts[j]); j = prev[c][j]; c -= 1
-    out.append(pts[0])
-    return sorted(out), float(dp[n][m-1])
+    if dp[n][m-1] >= INF:
+        답 = (None, INF)
+    else:
+        out, c, j = [], n, m - 1
+        while c > 0:
+            out.append(pts[j]); j = prev[c][j]; c -= 1
+        out.append(pts[0])
+        답 = (sorted(out), float(dp[n][m-1]))
+    if 열쇠 is not None:
+        if len(_가름기억) >= _가름기억수:
+            _가름기억.clear()
+        _가름기억[열쇠] = (tuple(답[0]) if 답[0] is not None else None, 답[1])
+    return 답
+
+
+_가름기억, _가름기억수 = {}, 4000     # `split_column` 의 (띠 · 후보 · 칸수) → (자른 자리, 비용)
 
 
 def _split_dp(sp, n, lam, pts, pitch, lo, hi, mx, INF):
@@ -1500,12 +1519,11 @@ def _fold_contrast(prof, y0, y1, period):
     k = len(seg) // P
     if k < 4:
         return -1.0
-    x = seg[:k * P]
-    idx = np.arange(k * P) % P
-    m = np.bincount(idx, weights=x, minlength=P)
-    c = np.bincount(idx, minlength=P)
-    curve = m / np.maximum(c, 1)
-    return float(curve.std() / max(1e-6, curve.mean()))
+    # 자리마다 k 개씩 차례로 더한 평균 · 표준편차 ÷ 평균(`np.bincount` · `std` · `mean` 과 같은 값)
+    curve = np.add.reduce(seg[:k * P].reshape(k, P), axis=0) / k
+    평균 = np.add.reduce(curve) / P
+    d = curve - 평균
+    return float(np.sqrt(np.add.reduce(d * d) / P) / max(1e-6, 평균))
 
 
 # 참 간격의 두 배로 접어도 또렷해서 두 배를 집을 수 있다 — 열마다 고른 t 의 절반으로 접은 점수가

@@ -269,10 +269,16 @@ if (서버) {
 }
 
 async function 서버로(경로, 몸) {
-  const res = await fetch(서버 + 경로, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(몸) });
-  const 답 = await res.json();
-  if (!res.ok || 답.오류) throw new Error(답.오류 || ("서버 오류 " + res.status));
-  return 답;
+  for (let 번 = 0; ; 번++) {
+    const res = await fetch(서버 + 경로, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(몸) });
+    const 답 = await res.json();
+    if (res.status === 503 && 답.상태 === "붐빔" && 번 < 30) {   // 서버가 붐빔 — 잠깐 뒤 다시(1분까지)
+      await new Promise(r => setTimeout(r, 2000));
+      continue;
+    }
+    if (!res.ok || 답.오류) throw new Error(답.오류 || ("서버 오류 " + res.status));
+    return 답;
+  }
 }
 
 let 글자표지문 = null;          // 서버 `/api/tables` 의 `표`(지금 모델의 글자표 지문)
@@ -382,7 +388,10 @@ function 해석(raw) {
 
 // ── 스캔 받기 ─────────────────────────────────────────────────────────
 // ⚠ 여러 쪽 파일은 API 가 요청한 너비를 무시함 → 주소를 한 번 받아 `/page{쪽}-1920px-` 만 갈아 끼움
+// 스캔은 위키미디어 프로젝트에서만 받음(주소 칸 · `?host=` 로 다른 곳을 가리키지 못하게)
+const 위키호스트 = /^([a-z0-9-]+\.)*(wikisource|wikimedia|wikipedia|wikibooks|wikiquote|wikiversity|wiktionary|mediawiki)\.org$/;
 async function 스캔주소(host, file, page) {
+  if (!위키호스트.test(String(host).toLowerCase())) throw new Error("위키미디어 프로젝트의 주소가 아닙니다: " + host);
   const 너비 = (설정 && 설정.스캔너비) || 1920;
   const multi = /\.(pdf|djvu|tiff?)$/i.test(file);
   const q = new URLSearchParams({
@@ -398,6 +407,7 @@ async function 스캔주소(host, file, page) {
   if (multi && ii.pagecount && page > ii.pagecount) throw new Error("이 파일은 " + ii.pagecount + "쪽까지입니다");
   let u = (ii.thumburl || ii.url).split("?")[0];
   if (multi) u = u.replace(/\/page\d+-\d+px-/, "/page" + page + "-" + 너비 + "px-");
+  if (!/^https:\/\/(upload|thumb)\.wikimedia\.org\//.test(u) && !(location.origin && u.startsWith(location.origin + "/"))) throw new Error("위키미디어 공용의 그림 주소가 아닙니다");
   return u;
 }
 
@@ -638,9 +648,14 @@ function 다시그리기() {
   }
 }
 
-function 표시글(p) {
+/** 조각의 글자들을 `칸` 에 채움 — 확신 낮은 글자는 .low(글자는 글로만 넣음) */
+function 표시글(칸, p) {
   const 문턱 = 설정 ? 설정.표시문턱 : 0.9;
-  return p.글자.map((c, i) => p.확신[i] < 문턱 ? '<span class="low">' + c + "</span>" : c).join("");
+  p.글자.forEach((c, i) => {
+    if (p.확신[i] < 문턱) { const s = document.createElement("span"); s.className = "low"; s.textContent = c; 칸.append(s); }
+    else 칸.append(c);
+  });
+  if (!p.글자.length) { const 빈 = document.createElement("i"); 빈.textContent = "(글자 없음)"; 칸.append(빈); }
 }
 
 function 그리기목록() {
@@ -661,7 +676,7 @@ function 그리기목록() {
     const x = document.createElement("button"); x.textContent = "지우기";
     x.onclick = e => { e.stopPropagation(); 지우기(p.id); };
     meta.append(x);
-    const t = document.createElement("div"); t.className = "txt"; t.innerHTML = 표시글(p) || "<i>(글자 없음)</i>";
+    const t = document.createElement("div"); t.className = "txt"; 표시글(t, p);
     li.append(meta, t);
     li.onclick = () => { st.고름 = p.id; 그리기목록(); 다시그리기(); };
     ul.append(li);

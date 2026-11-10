@@ -12,6 +12,7 @@
 
     python 근원/부품/대조.py <문헌> <쪽>      한 쪽을 대 보고 후보를 찍는다(시험용)
 """
+import functools
 import os
 import re
 import sys
@@ -194,6 +195,12 @@ def 인쇄글자(raw, keep_headings=False, 큰빼기=False):
             cur = [ch, [p]]
     if cur: out.append(cur)
     return [(c, min(ps), max(ps) + 1, any(p in 오식 for p in ps)) for c, ps in out]
+
+
+@functools.lru_cache(maxsize=8)
+def _인쇄글자(raw, keep_headings, 큰빼기):
+    """`인쇄글자` 의 결과를 기억(튜플) — 한 쪽을 맞대는 동안 같은 원문을 기하마다 다시 걷지 않게."""
+    return tuple(인쇄글자(raw, keep_headings, 큰빼기))
 
 
 # ── 문헌 설정 · 기하 ─────────────────────────────────────────────────
@@ -603,16 +610,16 @@ def 기하(slug, ip, 읽기=False, 끝띠=False, 판심=None, 설정=None, 조�
 def 편집정렬(R, T):
     """편집 거리 맞대기 → [(i, j)] (i = R 자리 또는 -1, j = T 자리 또는 -1). `실험35_읽기정렬라벨.정렬` 과 같음."""
     n, m = len(R), len(T)
+    번호 = {}
+    T번호 = np.array([번호.setdefault(t, len(번호)) for t in T], np.int64).reshape(m)   # 글자 → 번호(같은 글자인지를 배열로 견줌)
     D = np.zeros((n + 1, m + 1), np.int32)
     D[:, 0] = np.arange(n + 1); D[0, :] = np.arange(m + 1)
+    자리 = np.arange(m + 1, dtype=np.int32)
     for i in range(1, n + 1):
-        r = R[i - 1]
-        same = np.array([r == t for t in T], np.int32)
+        same = (T번호 == 번호.get(R[i - 1], -1)).astype(np.int32)
         row = D[i]; prev = D[i - 1]
         row[1:] = np.minimum(prev[:-1] + 1 - same, prev[1:] + 1)
-        for j in range(1, m + 1):
-            if row[j - 1] + 1 < row[j]:
-                row[j] = row[j - 1] + 1
+        row[:] = np.minimum.accumulate(row - 자리) + 자리      # 왼쪽 칸 + 1 이 더 작으면 그것으로(왼쪽부터 차례로 한 것과 같음)
     i, j, ops = n, m, []
     while i > 0 or j > 0:
         if i > 0 and j > 0 and D[i, j] == D[i - 1, j - 1] + (0 if R[i - 1] == T[j - 1] else 1):
@@ -1022,7 +1029,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                         continue
                     이전 = None
                     for kh in 시도:
-                        글자들 = 인쇄글자(raw, kh, 빼기)
+                        글자들 = list(_인쇄글자(raw, kh, 빼기))
                         if 이전 is not None and len(글자들) == 이전:
                             continue
                         이전 = len(글자들)
@@ -1062,7 +1069,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                     본열["자르기"] = geo["cols"]
                 이전 = None
                 for kh in 시도:
-                    글자들 = 인쇄글자(raw, kh, 빼기)
+                    글자들 = list(_인쇄글자(raw, kh, 빼기))
                     if 이전 is not None and len(글자들) == 이전:
                         continue                      # 제목이 없는 쪽 — 같은 것을 두 번 할 까닭이 없다
                     이전 = len(글자들)
@@ -1096,6 +1103,7 @@ def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들
     설정 = 파일마다 잰 문헌 설정(`기하` 참고) — 주면 slug 대신 그것으로 기하를 잡는다(Toolforge 서버).
     반환 dict — 후보마다 원문 자리(시작 · 끝)와 그림(data: 주소)을 붙인다.
     """
+    _인쇄글자.cache_clear()                      # 기억은 이 부름 안에서만
     r, 글자들 = _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 설정=설정)
     본문 = r.pop("_본문기하", None)
     if r.get("사유"):

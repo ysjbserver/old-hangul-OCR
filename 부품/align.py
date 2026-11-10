@@ -144,12 +144,16 @@ def build_plans(geo, centers, span, allow_empty=True, 그림자=None):
 # ── 정답지가 있을 때 (2단계) ─────────────────────────────────────────
 def _match_matrix(pL, pV, pT, rL, rV, rT):
     """후보상자 × 전사글자 점수판. 다 맞으면 1.2, 하나도 안 맞으면 0."""
-    mL = (pL[:, None] == rL[None, :])
-    mV = (pV[:, None] == rV[None, :])
-    mT = (pT[:, None] == rT[None, :])
-    M = W_L * mL + W_V * mV + W_T * mT + W_ALL * (mL & mV & mT)
+    # 맞은 머리의 조합(0~7)마다 점수를 한 번만 셈해 표에서 꺼냄 — 칸마다 셈한 것과 같은 값
+    k = np.arange(8)
+    l, v, t = (k & 1).astype(bool), (k & 2).astype(bool), (k & 4).astype(bool)
+    표 = (W_L * l + W_V * v + W_T * t + W_ALL * (l & v & t)).astype(np.float64)
+    어느 = (pL[:, None] == rL[None, :]).view(np.uint8) \
+        + ((pV[:, None] == rV[None, :]).view(np.uint8) << 1) \
+        + ((pT[:, None] == rT[None, :]).view(np.uint8) << 2)
+    M = 표[어느]
     M[:, (rL < 0) | (rV < 0)] = UNKNOWN
-    return M.astype(np.float64), (mL & mV & mT)
+    return M, 어느 == 7
 
 
 def _bonus(plans, geo, logc, page_pitch):
