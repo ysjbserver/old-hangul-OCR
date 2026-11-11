@@ -66,6 +66,9 @@ TAIL_NUMBER = (1.0, 0.2, 0.2)
 # (같은 때) 꽉 차지 않은 가는 꼬리(높이 < 첫 값 × 자간 — 끊긴 · 물결진 아래 광곽)도 빼되, 본문과의 빈 틈이 열 가운데 ± 0.45 가로 자간
 #   띠에서 `SPAN_LOW` 넘는 줄이 둘째 값 이하일 때만(기운 쪽은 글자가 열 밖으로 비켜나 열 안만 보면 빈 틈). None = 끔. JS 짝 · 설정 `꼬리선토막`
 TAIL_LINE = (0.2, 2)
+# (같은 때) 쪽 머리 제목 글자 떼기 — 열 시작의 (몫) 넘게가 가운데값 ± (띠) 자간에 모였는데 어떤 열만 (위) 자간 넘게 위에서 시작하고,
+#   그 머리와 본문 사이에 (틈) 자간 넘는 빈 줄이 있으면 본문부터. (위, 틈, 띠, 몫) · None = 끔. JS 짝 `머리떼기` · 설정 `머리떼기`
+HEAD_DROP = (0.8, 0.7, 0.3, 0.6)
 # 읽을 때 광곽 높이를 열마다 따로 (_열광곽) — 기운·휜 광곽 대비
 FRAME_LOCAL = True
 FRAME_LOCAL_FILL = 0.6    # 열 + 안쪽 고랑 띠의 이만큼이 잉크인 줄을 광곽 가로줄로
@@ -915,6 +918,38 @@ def _넓은띠(g, cols, xpitch):
     return out
 
 
+def _머리떼기(prof, cols, out, pitch):
+    """다른 열보다 훨씬 위에서 시작하고 빈 틈 뒤에 본문이 오는 열의 머리(쪽 머리 제목 글자)를 뗀 구간들 — `HEAD_DROP`."""
+    위, 틈, 띠, 몫 = HEAD_DROP
+    시작 = [s[0] for s in out if s]
+    if len(시작) < 4:
+        return out
+    med = float(np.median(시작))
+    if sum(1 for a in 시작 if abs(a - med) <= 띠 * pitch) < len(시작) * 몫:
+        return out
+    new = list(out)
+    for i, s in enumerate(out):
+        if not s or s[0] >= med - 위 * pitch:
+            continue
+        빈 = prof[i] <= (cols[i][1] - cols[i][0]) * SPAN_LOW
+        y, run, 끝 = min(int(med + 띠 * pitch), s[1]) - 1, 0, None
+        while y > s[0]:                          # 본문 머리께에서 위로 — 처음 만나는 긴 빈 줄 덩이
+            if 빈[y]:
+                run += 1
+                if run >= 틈 * pitch:
+                    끝 = y + run
+                    break
+            else:
+                run = 0
+            y -= 1
+        if 끝 is not None:
+            while 끝 < s[1] and 빈[끝]:
+                끝 += 1
+            if 끝 < s[1]:
+                new[i] = (끝, s[1])
+    return new
+
+
 def spans_between(prof, cols, T, B, pitch, 이어=False, 첫글자=False, 꼬리선=False, 연한=None, 넓은=None):
     """
     T~B 안에서 열마다 글자가 실제로 시작하고 끝나는 y 범위.
@@ -966,6 +1001,8 @@ def spans_between(prof, cols, T, B, pitch, 이어=False, 첫글자=False, 꼬리
         out = _첫글자잇기(prof, cols, out, Ts, pitch)
     if 첫글자 and 연한 is not None:
         out = _연한머리잇기(연한, cols, out, Ts, pitch)
+    if 꼬리선 and HEAD_DROP:
+        out = _머리떼기(prof, cols, out, pitch)
     return out
 
 

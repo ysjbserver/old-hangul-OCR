@@ -953,6 +953,33 @@ function 넓은띠(g, cols, xpitch) {
   });
 }
 
+let HEAD_DROP = null;   // scan.HEAD_DROP [위, 틈, 띠, 몫] — 설정 `머리떼기`(없으면 끔)
+/** `scan._머리떼기` — 다른 열보다 훨씬 위에서 시작하고 빈 틈 뒤에 본문이 오는 열의 머리를 뗌(out 을 고침). */
+function 머리떼기(prof, cols, out, pitch) {
+  const 위 = HEAD_DROP[0], 틈 = HEAD_DROP[1], 띠 = HEAD_DROP[2], 몫 = HEAD_DROP[3];
+  const 시작 = out.filter(function (s) { return s; }).map(function (s) { return s[0]; }).sort(function (a, b) { return a - b; });
+  if (시작.length < 4) return;
+  const m = 시작.length >> 1, med = 시작.length % 2 ? 시작[m] : (시작[m - 1] + 시작[m]) / 2;
+  let n = 0;
+  for (let i = 0; i < 시작.length; i++) if (Math.abs(시작[i] - med) <= 띠 * pitch) n++;
+  if (n < 시작.length * 몫) return;
+  const lim = 자름(med + 띠 * pitch);
+  for (let i = 0; i < out.length; i++) {
+    const s = out[i];
+    if (!s || s[0] >= med - 위 * pitch) continue;
+    const p = prof[i], low = (cols[i][1] - cols[i][0]) * SPAN_LOW;
+    let y = Math.min(lim, s[1]) - 1, run = 0, 끝 = -1;
+    while (y > s[0]) {                           // 본문 머리께에서 위로 — 처음 만나는 긴 빈 줄 덩이
+      if (p[y] <= low) { run++; if (run >= 틈 * pitch) { 끝 = y + run; break; } }
+      else run = 0;
+      y--;
+    }
+    if (끝 < 0) continue;
+    while (끝 < s[1] && p[끝] <= low) 끝++;
+    if (끝 < s[1]) out[i] = [끝, s[1]];
+  }
+}
+
 function 글자구간(prof, cols, T, B, pitch, 이어, 첫글자, 꼬리선, 연한, 넓은) {
   const Ts = Array.isArray(T) ? T : cols.map(function () { return T; });   // 열마다 목록이어도 됨(`열광곽`)
   const Bs = Array.isArray(B) ? B : cols.map(function () { return B; });
@@ -999,6 +1026,7 @@ function 글자구간(prof, cols, T, B, pitch, 이어, 첫글자, 꼬리선, 연
   });
   if (첫글자 && 이어 && SPAN_EXTEND) 첫글자잇기(prof, cols, out, Ts, pitch);
   if (첫글자 && 연한) 연한머리잇기(연한, cols, out, Ts, pitch);
+  if (꼬리선 && HEAD_DROP) 머리떼기(prof, cols, out, pitch);
   return out;
 }
 
@@ -2342,6 +2370,7 @@ async function 열마다읽기(모델, geo, span) {
   const 열들 = 고른.map(function (x) { return x === null ? null : x.열; });
   if (HEADING) await 큰제목읽기(모델, geo, 열들, span);
   if (BUNJU) await 분주읽기(모델, geo, 열들);
+  if (LONG_SPLIT) await 긴칸가르기(모델, geo, 열들);
   return { 열들: 열들, 상자수: 상자수 };
 }
 
@@ -2629,6 +2658,47 @@ async function 줄읽기(모델, geo, x0, x1, y0, y1) {
  * `align.분주읽기` — 열 안의 두 줄(분주 · 협주)을 오른쪽 줄 → 왼쪽 줄로 갈라 읽어 보고 모델이 뚜렷이 자신 있을 때만 바꿈.
  * 열들을 제자리에서 고침 · 점수 · 칸수는 그대로
  */
+let LONG_SPLIT = null;   // align.LONG_SPLIT [높이, 확신, 자간몫, 시작, 끝, 끝높이, 끝확신] — 설정 `긴칸가르기`(없으면 끔)
+const LONG_SPLIT_NO = ["ㅣ", "○", "ㅅ", "々", ",", "."];   // align.LONG_SPLIT_NO — 이 글자는 안 가름
+/** `align.긴칸가르기` — 유난히 긴 칸을 가장 옅은 줄에서 갈라 읽어 두 쪽 다 자신 있으면 두 글자로. 열들을 제자리에서 고침 */
+async function 긴칸가르기(모델, geo, 열들) {
+  const 높이 = LONG_SPLIT[0], 확신 = LONG_SPLIT[1], 자간몫 = LONG_SPLIT[2], 시작 = LONG_SPLIT[3], 끝 = LONG_SPLIT[4];
+  const 끝높이 = LONG_SPLIT.length > 5 ? LONG_SPLIT[5] : 높이, 끝확신 = LONG_SPLIT.length > 6 ? LONG_SPLIT[6] : 확신;
+  const g = 잉크판(geo);
+  for (let i = 0; i < 열들.length; i++) {
+    const o = 열들[i];
+    if (o === null || o.상자.length < 3) continue;
+    const hs = o.상자.map(function (b) { return b[3] - b[1]; });
+    const mid = 중앙값(hs), sm = geo.sm[i];
+    const 시험 = [], 자리 = [];
+    for (let k = 0; k < hs.length; k++) {
+      const 가 = k === 0 || k === hs.length - 1, hh = 가 ? 끝높이 : 높이, cc = 가 ? 끝확신 : 확신;
+      if (hs[k] < hh * mid || hs[k] < 자간몫 * geo.pitch || LONG_SPLIT_NO.indexOf(o.글자[k]) >= 0) continue;
+      const b = o.상자[k], y0 = b[1], y1 = b[3];
+      const a = 자름(y0 + 시작 * (y1 - y0)), e = 자름(y0 + 끝 * (y1 - y0));
+      if (e - a < 2) continue;
+      let y = a, 옅 = Infinity, 멀 = Infinity;
+      for (let yy = a; yy < e; yy++) {            // 가장 옅은 줄 — 같으면 칸 가운데에 가까운 쪽
+        const v = sm[yy], d = Math.abs(yy - (y0 + y1) / 2);
+        if (v < 옅 || (v === 옅 && d < 멀)) { y = yy; 옅 = v; 멀 = d; }
+      }
+      시험.push([b[0], y0, b[2], y], [b[0], y, b[2], y1]);
+      자리.push([k, cc]);
+    }
+    if (!시험.length) continue;
+    const 읽 = await 모델.읽기(geo.그림, 맞춤상자(g, 시험, geo));
+    const 글 = o.글자.slice(), 확 = o.확신.slice(), 상 = o.상자.slice();
+    for (let q = 자리.length - 1; q >= 0; q--) {
+      const k = 자리[q][0], cc = 자리[q][1], c1 = 읽.확신[2 * q], c2 = 읽.확신[2 * q + 1];
+      const l1 = 모델.글자(읽.초[2 * q], 읽.중[2 * q], 읽.종[2 * q]), l2 = 모델.글자(읽.초[2 * q + 1], 읽.중[2 * q + 1], 읽.종[2 * q + 1]);
+      if (Math.min(c1, c2) >= cc && LONG_SPLIT_NO.indexOf(l1) < 0 && LONG_SPLIT_NO.indexOf(l2) < 0) {
+        글.splice(k, 1, l1, l2); 확.splice(k, 1, c1, c2); 상.splice(k, 1, 시험[2 * q], 시험[2 * q + 1]);
+      }
+    }
+    열들[i] = { 점수: o.점수, 글자: 글, 확신: 확, 칸수: o.칸수, 상자: 상 };
+  }
+}
+
 async function 분주읽기(모델, geo, 열들) {
   const g = 잉크판(geo);
   for (let i = 0; i < 열들.length; i++) {
@@ -3203,6 +3273,8 @@ const API = {
     TOP_OPEN_GAP = s.위끝풀기 || 0;
     TAIL_NUMBER = s.꼬리번호 || null;
     TAIL_LINE = s.꼬리선토막 || null;
+    HEAD_DROP = s.머리떼기 || null;
+    LONG_SPLIT = s.긴칸가르기 || null;
     if (s.끝열보호 !== undefined) {
       EDGE_MEDIAN = s.끝열보호 ? s.끝열보호[0] : null;
       if (s.끝열보호) { EDGE_MEDIAN_LOW = s.끝열보호[1]; EDGE_MEDIAN_OPEN = s.끝열보호[2] === undefined ? null : s.끝열보호[2]; }

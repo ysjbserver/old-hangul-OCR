@@ -13,7 +13,8 @@ FIRST = {"u", "du", "wu", "물결밑줄", "밑줄", "더크게", "더더크게",
          "크게", "작게", "가운데", "복원", "SIC", "sc", "글자크기",
          "C", "Sic", "쌍밑줄", "할주", "*", "오른쪽", "세로쓰기", "머리글자 장식",
          "드러냄표", "가늘게", "내어쓰기", "다크 모드 반전"}
-# 일부러 안 넣음(버림): `오른쪽 띄우기` · `더작게` · `더더작게` · `?` · `앵커` · `분수` · 숫자 인자 틀
+# 일부러 안 넣음(버림): `더작게` · `더더작게` · `?` · `앵커` · `분수` · 숫자 인자 틀
+FIRST_NOLATIN = {"오른쪽 띄우기"}           # 첫 인자 = 본문(열 아래에 붙여 찍힘) — 로마자가 들었으면 버림(가로로 찍힌 영문 곡명 등)
 SECOND = {"색상", "배경색상", "배경 색상"}   # {{색상|white|本義}} → 本義
 SPACED = {"자간"}                          # {{자간|2em|군|말}} → 군말 (둘째 · 셋째 인자)
 
@@ -27,11 +28,11 @@ def 틀이름(name):
 _표 = {}
 
 
-def 남길인자(name, n):
-    """틀 하나 → 남길 인자 번호 목록(인자 n 개). `대조._틀남길것` 도 이것을 씀."""
+def 남길인자(name, n, 첫=""):
+    """틀 하나 → 남길 인자 번호 목록(인자 n 개 · 첫 = 첫 인자의 글). `대조._틀남길것` 도 이것을 씀."""
     if not _표:                        # 처음 부를 때 이름을 맞춰 둠(표를 고치면 `_표.clear()`)
         for 이름, 표 in (("DROP", DROP), ("LAST", LAST), ("JOIN", JOIN), ("FIRST", FIRST),
-                       ("SECOND", SECOND), ("SPACED", SPACED)):
+                       ("SECOND", SECOND), ("SPACED", SPACED), ("FIRST_NOLATIN", FIRST_NOLATIN)):
             _표[이름] = {틀이름(x) for x in 표}
     k = 틀이름(name)
     if k in _표["DROP"] or k.startswith("왼쪽 여백/"):
@@ -39,13 +40,14 @@ def 남길인자(name, n):
     if k in _표["JOIN"]:   return list(range(min(n, 2)))
     if k in _표["LAST"]:   return [n - 1] if n else []
     if k in _표["FIRST"]:  return [0] if n else []
+    if k in _표["FIRST_NOLATIN"]: return [0] if n and not re.search(r'[A-Za-z]', 첫) else []
     if k in _표["SECOND"]: return [1] if n > 1 else []
     if k in _표["SPACED"]: return list(range(1, min(n, 3)))
     return []                          # 모르는 틀은 서식·주석으로 보고 버린다
 
 
 def _template(name, args):
-    return "".join(args[i] for i in 남길인자(name, len(args)))
+    return "".join(args[i] for i in 남길인자(name, len(args), args[0] if args else ""))
 
 
 # 표 문법 `{| … |}` — 칸 글자는 남기고 표시 · 속성만 걷음. 쪽에 `{|` 가 있을 때만.
@@ -79,6 +81,10 @@ def 표구간(t, 표):
     return out
 
 
+# 혼자 한 줄을 차지한 `오른쪽 띄우기` — 종이에서는 다음 줄 글의 아래에 찍히므로 그 뒤로 옮겨 읽는다. `대조.인쇄글자` 도 이것을 씀.
+띄우기줄 = re.compile(r'^[ \t]*(\{\{\s*오른쪽[ _]띄우기\s*\|(?:[^{}]|\{\{[^{}]*\}\})*\}\})[ \t\r]*\n(?:[ \t\r]*\n)*([^\n]+)', re.M)
+
+
 def 표있나(raw):
     return bool(re.search(r'(?<!\{)\{\|', raw))
 
@@ -92,6 +98,7 @@ def printed_text(t, keep_headings=False):
     """
     표 = 표있나(t)
     t = re.sub(r'<noinclude>.*?</noinclude>', '', t, flags=re.S)
+    t = 띄우기줄.sub(lambda m: m.group(2) + m.group(1), t)
     while True:                        # 안쪽 틀부터 하나씩 푼다
         m = re.search(r'\{\{([^{}]*)\}\}', t)
         if not m:
@@ -102,6 +109,7 @@ def printed_text(t, keep_headings=False):
     t = re.sub(r'^\s*=+\s*(.*?)\s*=+\s*$', (r'\1' if keep_headings else ''),
                t, flags=re.M)                            # 편·장 제목
     t = re.sub(r'^[ \t]*:+', '', t, flags=re.M)         # 줄 머리 `:` = 위키 들여쓰기
+    t = re.sub(r'^[ \t]*-{4,}', '', t, flags=re.M)      # 줄 머리 `----` = 가로줄
     t = re.sub(r"'{2,}", '', t)                          # `''기울임''` · `'''굵게'''`
     t = re.sub(r'\[\[[^|\]]*\|([^\]]*)\]\]', r'\1', t)
     t = re.sub(r'\[\[([^\]]*)\]\]', r'\1', t)

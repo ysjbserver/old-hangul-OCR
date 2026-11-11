@@ -666,8 +666,57 @@ def 열마다읽기(mdl, geo, span=3):
         큰제목읽기(mdl, geo, out, span)
     if BUNJU:
         분주읽기(mdl, geo, out)
+    if LONG_SPLIT and not getattr(mdl, "긴칸끔", False):
+        긴칸가르기(mdl, geo, out)
     # 넷째 = 글자를 낸 칸의 상자들(글자와 같은 차례) · 다섯째 = 잘라 본 칸 수(뺀 칸 포함 — 끝 열 보호가 씀)
     return [None if o is None else (o[0], o[1], o[2], o[4], o[3]) for o in out]
+
+
+# (읽을 때만) 두 글자를 한 칸으로 합친 긴 칸 가르기 — 높이가 그 열 가운데 높이의 (높이) 배 · 자간의 (자간몫) 배 넘는 칸을
+#   칸의 (시작 ~ 끝) 몫 사이 잉크가 가장 옅은 줄에서 갈라 읽어, 두 쪽 다 확신이 (확신) 넘으면 두 글자로. `LONG_SPLIT_NO` 는 안 가름.
+#   열의 첫 · 끝 칸(광곽에 눌린 끝 글자)은 (끝높이, 끝확신) 으로 느슨하게.
+#   (높이, 확신, 자간몫, 시작, 끝, 끝높이, 끝확신) · None = 끔. JS 짝 `긴칸가르기` · 설정 `긴칸가르기`
+LONG_SPLIT = (1.3, 0.9, 1.15, 0.3, 0.7, 1.15, 0.85)
+LONG_SPLIT_NO = ("ㅣ", "○", "ㅅ", "々", ",", ".")   # 원래 칸이나 갈라 읽은 한쪽이 이것이면 안 가름(부호 · 낱자모 — 광곽 줄 · 절 표시 · 떨어진 받침)
+
+
+def 긴칸가르기(mdl, geo, out):
+    """열마다 유난히 긴 칸을 둘로 갈라 읽어 보고 두 쪽 다 자신 있으면 두 글자로 바꾼다 — `out` 을 제자리에서 고침(열 점수는 그대로)."""
+    높이, 확신, 자간몫, 시작, 끝, 끝높이, 끝확신 = LONG_SPLIT
+    g = 잉크판(geo)
+    for i, o in enumerate(out):
+        if o is None or len(o[4]) < 3:
+            continue
+        hs = [b[3] - b[1] for b in o[4]]
+        mid = float(np.median(hs))
+        sm = geo["sm"][i]
+        시험, 자리 = [], []
+        for k, h in enumerate(hs):
+            hh, cc = (끝높이, 끝확신) if k in (0, len(hs) - 1) else (높이, 확신)
+            if h < hh * mid or h < 자간몫 * geo["pitch"] or o[1][k] in LONG_SPLIT_NO:
+                continue
+            x0, y0, x1, y1 = o[4][k][:4]
+            a, b = int(y0 + 시작 * (y1 - y0)), int(y0 + 끝 * (y1 - y0))
+            if b - a < 2:
+                continue
+            y, 최소 = a, None
+            for yy in range(a, b):               # 가장 옅은 줄 — 같으면 칸 가운데에 가까운 쪽
+                v = (float(sm[yy]), abs(yy - (y0 + y1) / 2))
+                if 최소 is None or v < 최소:
+                    y, 최소 = yy, v
+            시험 += [(x0, y0, x1, y), (x0, y, x1, y1)]
+            자리.append((k, cc))
+        if not 시험:
+            continue
+        L, V, T, cf = mdl.read(geo["image"], _맞춤상자(g, 시험, geo))
+        글, 확, 상 = list(o[1]), list(o[2]), list(o[4])
+        for q in reversed(range(len(자리))):
+            k, cc = 자리[q]
+            c1, c2 = float(cf[2 * q]), float(cf[2 * q + 1])
+            l1, l2 = mdl.letter(L[2 * q], V[2 * q], T[2 * q]), mdl.letter(L[2 * q + 1], V[2 * q + 1], T[2 * q + 1])
+            if min(c1, c2) >= cc and l1 not in LONG_SPLIT_NO and l2 not in LONG_SPLIT_NO:
+                글[k:k + 1] = [l1, l2]; 확[k:k + 1] = [c1, c2]; 상[k:k + 1] = [시험[2 * q], 시험[2 * q + 1]]
+        out[i] = (o[0], 글, 확, o[3], 상)
 
 
 BUNJU      = True    # (읽을 때만) 열 안의 두 줄(분주 · 협주)을 갈라 읽어 보고 모델이 뚜렷이 자신 있을 때만 바꿈 — `분주읽기`

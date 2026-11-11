@@ -90,8 +90,35 @@ def _다시읽기(mdl, geo, 열, y0, y1, 칸수, 촘촘):
     return [_글자(mdl.letter(l, v, t)) for l, v, t in zip(L, V, T)], [float(v) for v in cf], boxes
 
 
+열끝높이 = (0.75, 1.25)   # 열 머리 · 끝 칸의 높이가 그 열 가운데 높이의 이 범위를 벗어나면(합친 칸 · 잘린 칸) 그 자리 글자 수 후보를 버린다
+열끝잉크 = 0.45           # 열 머리 · 끝 칸 바깥 한 자간에 열 폭의 이만큼 넘는 잉크(가로줄 빼고)가 있으면 읽기가 글자를 놓친 것으로 본다
+
+
+def _바깥글자(geo, g, 상자, 위):
+    """열 머리(위=True) · 끝 칸 바깥 한 자간 안에 글자만 한 잉크가 있는가 — 가로줄은 빼고 본다."""
+    x0, y0, x1, y1 = [int(v) for v in 상자[:4]]
+    자간 = max(1, int(round(geo['pitch'])))
+    ya, yb = (max(0, y0 - 자간), y0) if 위 else (y1, min(g.shape[0], y1 + 자간))
+    c = g[ya:yb, x0:x1] < scan.INK
+    if c.size == 0:
+        return False
+    c = c[c.mean(axis=1) < 0.6]
+    return bool(c.size) and c.any(axis=0).mean() >= 열끝잉크 and c.any(axis=1).sum() >= 0.3 * 자간
+
+
+def _열끝성함(geo, 읽음, 앞끝, 뒤머리):
+    """열이 바뀌는 자리(읽음[앞끝] | 읽음[뒤머리])의 두 칸이 제 높이이고 그 바깥에 놓친 글자가 없는가."""
+    g = align.잉크판(geo)
+    for k, 위 in ((앞끝, False), (뒤머리, True)):
+        높이 = [z[2][3] - z[2][1] for z in 읽음 if z[3] == 읽음[k][3]]
+        비 = (읽음[k][2][3] - 읽음[k][2][1]) / max(1.0, float(np.median(높이)))
+        if not 열끝높이[0] <= 비 <= 열끝높이[1] or _바깥글자(geo, g, 읽음[k][2], 위):
+            return False
+    return True
+
+
 def 글자수후보(mdl, geo, 글자들, raw, 전사, 읽음, ops):
-    """전사문 1~3글자 자리에 스캔은 다른 수(0~3)의 글자 — 열 안쪽에서 앞뒤가 맞고, 다시 잘라도 같고, 전사문 칸수로는 안 읽힐 때만."""
+    """전사문 1~3글자 자리에 스캔은 다른 수(0~3)의 글자 — 앞뒤가 맞고, 다시 잘라도 같고, 전사문 칸수로는 안 읽힐 때만. 열 머리 · 끝은 `_열끝성함` 까지."""
     후보 = []
     for i, (tag, a, b, c, d) in enumerate(ops):
         n전, n읽 = b - a, d - c
@@ -115,8 +142,11 @@ def 글자수후보(mdl, geo, 글자들, raw, 전사, 읽음, ops):
             continue
         # 같은 열끼리 묶어 따로 확인 — (읽음 구간, 그 구간에 전사문대로라면 있을 글자들)
         열 = 읽음[c][3]
-        if 읽음[c - 1][3] != 열 or 읽음[d][3] != 열 or any(z[3] != 열 for z in 스캔):
-            continue                           # 열 머리 · 끝은 독립 읽기가 글자를 놓치기 쉬워 내지 않음
+        if any(z[3] != 열 for z in 스캔):
+            continue
+        머리, 끝 = 읽음[c - 1][3] != 열, d > c and 읽음[d][3] != 열
+        if 머리 and 끝:
+            continue
         왼, 오른 = c, d
         while 왼 > c - 3 and 읽음[왼 - 1][3] == 열:
             왼 -= 1
@@ -125,6 +155,14 @@ def 글자수후보(mdl, geo, 글자들, raw, 전사, 읽음, ops):
         if (c - 왼) + (오른 - d) < 3:
             continue
         묶음 = [(왼, 오른, 전사[a - (c - 왼):b + (오른 - d)])]
+        if 머리 or 끝:                           # 열 머리 · 끝 — 읽기가 글자를 놓치거나 합친 흔적이 없을 때만
+            경계 = c if 머리 else d
+            if min(z[1] for z in 읽음[c - 3:d + 3]) < 0.93 or not _열끝성함(geo, 읽음, 경계 - 1, 경계):
+                continue
+            if 머리 and not 스캔:                # 덧글자가 앞 열 끝에 있었을 수도 — 앞 열 쪽도 확인
+                if len({z[3] for z in 읽음[c - 3:c]}) != 1:
+                    continue
+                묶음.insert(0, (c - 3, c, 전사[a - 3:b]))
         확인값, 탈락 = [], False
         for 시, 끝, 전사글 in 묶음:
             열 = 읽음[시][3]

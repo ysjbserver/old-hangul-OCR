@@ -133,11 +133,11 @@ def _바꾸기(t, pos, 맞음들, 남길것):
 큰틀 = {"크게", "더크게", "더더크게", "더더더크게", "더더더더크게"}   # 큰 활자 — `_한번` 이 '빼고 맞대기' 를 후보로 해 봄
 
 
-def _틀남길것(이름, 인자, 큰빼기=False):
+def _틀남길것(이름, 인자, 큰빼기=False, 첫=""):
     """`wikitext._template` 과 같은 판정(`wikitext.남길인자`) — 문자열 대신 인자 구간을 돌려준다. 큰빼기면 큰 활자 틀(`큰틀`)도 버림."""
     if 큰빼기 and wikitext.틀이름(이름) in 큰틀:
         return []
-    return [인자[i] for i in wikitext.남길인자(이름, len(인자))]
+    return [인자[i] for i in wikitext.남길인자(이름, len(인자), 첫)]
 
 
 class _자리:
@@ -160,6 +160,7 @@ def 인쇄글자(raw, keep_headings=False, 큰빼기=False):
     오식 = set()
     표 = wikitext.표있나(raw)
     t, pos = _바꾸기(t, pos, re.finditer(r'<noinclude>.*?</noinclude>', t, flags=re.S), lambda m: [])
+    t, pos = _바꾸기(t, pos, wikitext.띄우기줄.finditer(t), lambda m: [m.span(2), m.span(1)])   # 혼자 선 `오른쪽 띄우기` 를 다음 줄 뒤로
     while True:                                  # 안쪽 틀부터 하나씩
         m = re.search(r'\{\{([^{}]*)\}\}', t)
         if not m:
@@ -169,7 +170,7 @@ def 인쇄글자(raw, keep_headings=False, 큰빼기=False):
             조각.append((a, 끝)); a = 끝 + 1
         이름 = t[조각[0][0]:조각[0][1]].strip()
         인자 = [(a, b) for a, b in 조각[1:] if not re.match(r'^\s*[A-Za-z-]+\s*=', t[a:b])]
-        남길 = _틀남길것(이름, 인자, 큰빼기)
+        남길 = _틀남길것(이름, 인자, 큰빼기, t[인자[0][0]:인자[0][1]] if 인자 else "")
         if wikitext.틀이름(이름) in 오식틀:
             for a, b in 남길:
                 오식.update(pos[a:b])
@@ -177,6 +178,7 @@ def 인쇄글자(raw, keep_headings=False, 큰빼기=False):
     t, pos = _바꾸기(t, pos, re.finditer(r'^\s*=+\s*(.*?)\s*=+\s*$', t, flags=re.M),
                      lambda m: [m.span(1)] if keep_headings else [])
     t, pos = _바꾸기(t, pos, re.finditer(r'^[ \t]*:+', t, flags=re.M), lambda m: [])   # 줄 머리 `:` 들여쓰기
+    t, pos = _바꾸기(t, pos, re.finditer(r'^[ \t]*-{4,}', t, flags=re.M), lambda m: [])   # 줄 머리 `----` 가로줄
     t, pos = _바꾸기(t, pos, re.finditer(r"'{2,}", t), lambda m: [])   # `''` · `'''` 굵게 · 기울임
     t, pos = _바꾸기(t, pos, re.finditer(r'\[\[[^|\]]*\|([^\]]*)\]\]', t), lambda m: [m.span(1)])
     t, pos = _바꾸기(t, pos, re.finditer(r'\[\[([^\]]*)\]\]', t), lambda m: [m.span(1)])

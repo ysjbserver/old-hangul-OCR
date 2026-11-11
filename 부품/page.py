@@ -109,6 +109,17 @@ READ_PICK_GAIN = 0.02    # 읽기 자간은 바탕보다 확신 로그 평균이
 READ_PICK_PAGES = 4      # 읽기 자간을 고를 때 읽어 볼 '좋음' 쪽 수
 
 
+class _긴칸끈모델:
+    """모델을 그대로 넘기되 `align.긴칸가르기` 는 안 하게 — 자간을 크게 잡아 길어진 칸을 갈라 확신이 오르면 자간 고르기가 흔들림."""
+    긴칸끔 = True
+
+    def __init__(self, m):
+        self._m = m
+
+    def __getattr__(self, k):
+        return getattr(self._m, k)
+
+
 def 읽기자간고르기(그림들, 바탕, 단, mdl, 표준=None, 이득=READ_PICK_GAIN, 빈단=True, 알림=None):
     """
     쪽 그림(경로)들을 자간 `바탕` × `읽기배율` 로 읽어 확신 로그 평균이 가장 높은 자간을 고른다(전사문 안 씀).
@@ -117,6 +128,7 @@ def 읽기자간고르기(그림들, 바탕, 단, mdl, 표준=None, 이득=READ_
     반환: (자간, {배율: 점수})
     """
     import align as _align
+    mdl = _긴칸끈모델(mdl)
     점수 = {}
     def 재기(m):
         if m not in 점수:
