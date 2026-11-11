@@ -46,6 +46,7 @@ TOP_MIN   = 0.80    # 모델 1순위의 확신(세 머리 중 가장 낮은 것)
 쪽자간차이 = 0.02   # "쪽자간" 후보 — 이 쪽 그림으로 잰 자간비가 쓰던 값과 이만큼(몫) 넘게 다를 때만 해 본다
 끝맞춤    = (0.3, 1.5)   # "끝맞춤" 후보 — 꽉 찬 열의 위 · 아래 끝이 다른 열들(중앙값)보다 자간의 이 범위만큼 짧으면 거기까지 늘림
 열문턱    = 0.75    # 한 열에서 모델과 전사문이 이만큼 안 맞으면 그 열의 '글자가 다름' 후보는 내지 않는다(열이 통째로 어긋난 것)
+받침넘김몫 = (0.12, 0.2, 0.28, 0.36)   # 받침만 빠진 칸을 아래로 이만큼(열 가운데 높이의 몫) 늘려 다시 읽어 본다 — 전사 글자가 되면 자르기 실수
 받침잘림높이 = 0.8   # 스캔 쪽에서 받침만 빠졌고 상자가 그 열 가운데 높이의 이만큼도 안 되면 버린다
                     # (상자를 짧게 잘라 받침이 다음 칸으로 넘어간 것)
 밀림몫    = 0.6     # 줄지어 다른 구간에서 한 칸 옮겨 이 몫 넘게 맞으면 '빠짐 · 더 들어감'
@@ -147,7 +148,7 @@ class _자리:
     def end(self): return self._b
 
 
-오식틀 = {"SIC", "Sic"}   # 원문 오식을 그대로 옮긴 표시 — 이 안의 글자는 후보로 내지 않는다(`Sic` = `sic` 넘겨주기)
+오식틀 = {"SIC", "Sic", "복원"}   # 원문 오식 · 안 보여 복원한 글자 표시 — 이 안의 글자는 후보로 내지 않는다(`Sic` = `sic` 넘겨주기)
 
 
 def 인쇄글자(raw, keep_headings=False, 큰빼기=False):
@@ -719,9 +720,46 @@ def 맞대기(mdl, geo, 글자들, span=3, 경계=False, 짝=None):
         return (kL[j] == rL[kk] and kV[j] == rV[kk] and rT[kk] != 빈종성 and kT[j] == 빈종성
                 and 높이비(j) < 받침잘림높이)
 
+    넘김기억 = {}
+
+    def 받침넘어감(j):
+        """받침만 빠진 칸 — 아래 칸으로 넘어간 받침을 되찾으면 전사 글자로 읽히고 아래 칸도 그대로 맞는가."""
+        if j in 넘김기억:
+            return 넘김기억[j]
+        넘김기억[j] = False
+        kk = assign[j]
+        if not (받침넘김몫 and kL[j] == rL[kk] and kV[j] == rV[kk] and rT[kk] != 빈종성 and kT[j] == 빈종성):
+            return False
+        뒤 = j + 1 if j + 1 < n and 열[j + 1] == 열[j] else None
+        if 뒤 is not None and not 같음[뒤]:
+            return False
+        x0, y0, x1, y1 = boxes[j][:4]
+        시험 = []
+        for f in 받침넘김몫:
+            d = int(round(f * 열높이[열[j]]))
+            if 뒤 is not None:
+                if boxes[뒤][3] - (boxes[뒤][1] + d) < 0.5 * 열높이[열[j]]:
+                    break
+                시험.append((boxes[뒤][0], boxes[뒤][1] + d, boxes[뒤][2], boxes[뒤][3]))
+            시험.insert(len(시험) - (뒤 is not None), (x0, y0, x1, min(np.asarray(geo["image"]).shape[0], y1 + d)))
+        if not 시험:
+            return False
+        tL, tV, tT = 확률읽기(mdl, geo["image"], align._맞춤상자(align.잉크판(geo), 시험, geo))
+        걸음 = 2 if 뒤 is not None else 1
+        for q in range(0, len(시험), 걸음):
+            if not (tL[q].argmax() == rL[kk] and tV[q].argmax() == rV[kk] and tT[q].argmax() == rT[kk]):
+                continue
+            if 뒤 is not None:
+                k2 = assign[뒤]
+                if not (tL[q + 1].argmax() == rL[k2] and tV[q + 1].argmax() == rV[k2] and tT[q + 1].argmax() == rT[k2]):
+                    continue
+            넘김기억[j] = True
+            break
+        return 넘김기억[j]
+
     def 바뀜인가(j, 엄격=1.0):
         return (아는[j] and not 글자들[assign[j]][3] and 전사확률[j] < P_TR_MAX * 엄격
-                and 확신[j] >= TOP_MIN and 열[j] not in 흔들린열 and not 받침잘림(j))
+                and 확신[j] >= TOP_MIN and 열[j] not in 흔들린열 and not 받침잘림(j) and not 받침넘어감(j))
 
     i = 0
     while i < n:                                  # 읽는 차례로 '다름' 이 이어진 덩이마다(열을 넘어가도 이어 봄 — 밀림은 열을 넘는다)
@@ -733,7 +771,7 @@ def 맞대기(mdl, geo, 글자들, span=3, 경계=False, 짝=None):
         덩이 = list(range(i, e + 1))
         if len(덩이) == 1:
             if 글자들[assign[i]][3]:
-                pass                              # {{SIC}} 안 — 원문 오식으로 이미 표시됨
+                pass                              # {{SIC}} · {{복원}} 안 — 이미 표시됨
             elif not 아는[i]:
                 if 확신[i] >= TOP_MIN and 열[i] not in 흔들린열:
                     넣기("모르는자모", i, 0.0)
@@ -1146,10 +1184,13 @@ def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들
         if geo is not None:
             for c in 누락대조.후보찾기(mdl, geo, 글자들, raw):
                 c["상자번호"] = -1
+                if c["갈래"] == "글자수":         # 같은 자리의 접힌 '글자가 다름' 은 이것으로 대신
+                    r["후보"] = [x for x in r["후보"] if x["갈래"] not in 낱갈래 or x["합의"]
+                                 or not c["번호"] - 1 <= x["번호"] <= c["끝번호"] + 1]
                 if 그림:
                     c["그림"] = 조각그림(geo["image"], c["누락이웃"], 1)   # 앞뒤 한 칸씩 함께
                 r["후보"].append(c)
-    차례 = {"바뀜": 0, "모르는자모": 1, "깨진글자": 1, "누락": 2, "빠짐": 2, "더들어감": 2}
+    차례 = {"바뀜": 0, "모르는자모": 1, "깨진글자": 1, "누락": 2, "글자수": 2, "빠짐": 2, "더들어감": 2}
     r["후보"].sort(key=lambda c: (not c["합의"], 차례[c["갈래"]], -c["점수"]))
 
     for c in r["후보"]:

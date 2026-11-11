@@ -1,4 +1,4 @@
-"""전사문과 독립적으로 읽은 스캔에서, 앞뒤가 맞는 1~3글자 누락만 찾는다.
+"""전사문과 독립적으로 읽은 스캔에서, 앞뒤가 맞는 1~3글자 누락과 글자 수가 다른 곳만 찾는다.
 
 같은 열의 이웃과 독립 재자르기로 확인한다. 열 첫/끝은 한쪽 여섯 글자와 칸수 대안도 확인한다.
 """
@@ -7,6 +7,9 @@ import unicodedata
 import numpy as np
 import align
 import scan
+
+
+글자수찾기 = True   # 전사문과 스캔의 글자 수가 다른 곳(덧글자 · 두 글자 ↔ 한 글자)도 낸다
 
 
 def _글자(c):
@@ -67,6 +70,91 @@ def _끝확인(mdl, geo, 주변, 앞수, 칸수):
         if 글 == 이웃글 and min(cf) >= 0.8:
             return None                       # 더 적은 칸으로도 전사문이 맞으면 불확실
     return min(확인들)
+
+
+def _한글(c):
+    return any(0xAC00 <= ord(ch) <= 0xD7A3 or 0x1100 <= ord(ch) <= 0x11FF for ch in c)
+
+
+def _다시읽기(mdl, geo, 열, y0, y1, 칸수, 촘촘):
+    """열의 y0~y1 을 잉크만으로 칸수만큼 잘라 읽는다 → (글자들, 확신들) 또는 None."""
+    x0, x1 = geo['crop_cols'][열]
+    sm = geo['sm'][열]
+    pts = (list(range(y0 + 1, y1, max(1, (y1 - y0 + 1023) // 1024))) if 촘촘
+           else scan.cut_points(sm, y0, y1, geo['pitch']))
+    cuts, _ = scan.split_column(sm, y0, y1, 칸수, pts)
+    if not cuts:
+        return None
+    boxes = [(x0, s, x1, e) for s, e in zip(cuts[:-1], cuts[1:])]
+    L, V, T, cf = mdl.read(geo['image'], align._맞춤상자(align.잉크판(geo), boxes, geo))
+    return [_글자(mdl.letter(l, v, t)) for l, v, t in zip(L, V, T)], [float(v) for v in cf], boxes
+
+
+def 글자수후보(mdl, geo, 글자들, raw, 전사, 읽음, ops):
+    """전사문 1~3글자 자리에 스캔은 다른 수(0~3)의 글자 — 열 안쪽에서 앞뒤가 맞고, 다시 잘라도 같고, 전사문 칸수로는 안 읽힐 때만."""
+    후보 = []
+    for i, (tag, a, b, c, d) in enumerate(ops):
+        n전, n읽 = b - a, d - c
+        if tag not in ('delete', 'replace') or n전 == n읽 or not 1 <= n전 <= 3 or n읽 > 3:
+            continue
+        if not 0 < i < len(ops) - 1:
+            continue
+        앞, 뒤 = ops[i - 1], ops[i + 1]
+        if 앞[0] != 'equal' or 앞[2] - 앞[1] < 3 or 뒤[0] != 'equal' or 뒤[2] - 뒤[1] < 3:
+            continue
+        if any(g[3] for g in 글자들[a - 3:b + 3]):
+            continue
+        틈 = raw[글자들[a - 1][2]:글자들[a][1]] + raw[글자들[b - 1][2]:글자들[b][1]]
+        if (any(ch in 틈 for ch in "<>{|")
+                or "".join(raw[글자들[a][1]:글자들[b - 1][2]].split()) != "".join(g[0] for g in 글자들[a:b])):
+            continue                           # 각주 · 틀이 시작되거나 낀 자리는 내지 않음
+        if min(z[1] for z in 읽음[c - 3:d + 3]) < 0.8:
+            continue
+        스캔 = 읽음[c:d]
+        if any(z[1] < 0.90 or not _한글(z[0]) for z in 스캔) or any(not _한글(t) for t in 전사[a:b]):
+            continue
+        # 같은 열끼리 묶어 따로 확인 — (읽음 구간, 그 구간에 전사문대로라면 있을 글자들)
+        열 = 읽음[c][3]
+        if 읽음[c - 1][3] != 열 or 읽음[d][3] != 열 or any(z[3] != 열 for z in 스캔):
+            continue                           # 열 머리 · 끝은 독립 읽기가 글자를 놓치기 쉬워 내지 않음
+        왼, 오른 = c, d
+        while 왼 > c - 3 and 읽음[왼 - 1][3] == 열:
+            왼 -= 1
+        while 오른 < d + 3 and 읽음[오른][3] == 열:
+            오른 += 1
+        if (c - 왼) + (오른 - d) < 3:
+            continue
+        묶음 = [(왼, 오른, 전사[a - (c - 왼):b + (오른 - d)])]
+        확인값, 탈락 = [], False
+        for 시, 끝, 전사글 in 묶음:
+            열 = 읽음[시][3]
+            y0, y1 = 읽음[시][2][1], 읽음[끝 - 1][2][3]
+            읽은글 = [z[0] for z in 읽음[시:끝]]
+            확인 = None
+            for 촘촘 in (False, True):
+                r = _다시읽기(mdl, geo, 열, y0, y1, len(읽은글), 촘촘)
+                if r is not None and r[0] == 읽은글 and min(r[1]) >= 0.8:
+                    높이 = [e - s0 for _, s0, _, e in r[2]]
+                    mid = max(1.0, float(np.median(높이)))
+                    if all(mid * 0.55 <= h <= mid * 1.7 for h in 높이):
+                        확인 = min(r[1]) if 확인 is None else max(확인, min(r[1]))
+                r = _다시읽기(mdl, geo, 열, y0, y1, len(전사글), 촘촘)
+                if r is not None and r[0] == 전사글 and min(r[1]) >= 0.8:
+                    탈락 = True
+            if 확인 is None:
+                탈락 = True
+            확인값.append(확인)
+        if 탈락:
+            continue
+        확인 = min(확인값)
+        열 = 읽음[c][3] if not 스캔 else 스캔[0][3]
+        x0, x1 = geo['crop_cols'][열]
+        box = (x0, 스캔[0][2][1], x1, 스캔[-1][2][3]) if 스캔 else 읽음[c][2]
+        후보.append(dict(갈래='글자수', 번호=a, 끝번호=b - 1, 전사=''.join(g[0] for g in 글자들[a:b]),
+                         스캔=''.join(z[0] for z in 스캔), 칸=n읽, 전사확률=0.0,
+                         확신=float(min([확인] + [z[1] for z in 스캔])), 점수=float(abs(n전 - n읽)), 합의=True,
+                         누락상자=box, 누락이웃=[읽음[c - 1][2], box, 읽음[d][2]]))
+    return 후보
 
 
 def 후보찾기(mdl, geo, 글자들, raw):
@@ -160,4 +248,4 @@ def 후보찾기(mdl, geo, 글자들, raw):
                          점수=float(d - c), 합의=True, 누락상자=box, 누락이웃=이웃,
                          앞=''.join(g[0] for g in 글자들[max(0, a - 5):a]),
                          뒤=''.join(g[0] for g in 글자들[a:a + 5])))
-    return 후보
+    return 후보 + (글자수후보(mdl, geo, 글자들, raw, 전사, 읽음, ops) if 글자수찾기 else [])
