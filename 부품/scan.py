@@ -891,21 +891,22 @@ def ink_profile(g, cols):
     return [(g[:, x0:x1] < INK).sum(axis=1).astype(float) for x0, x1 in cols]
 
 
-def _이어잡기(p, a, b, w, T, B, pitch):
+def _이어잡기(p, a, b, w, T, B, pitch, 틈=None, 거리=None):
     """
     구간 끝의 가는 글자를 이어 붙인다 — 읽을 때만 (`SPAN_EXTEND`).
     구간 밖 `SPAN_REACH` 자간 안에서 `SPAN_LOW` 를 넘는 줄을, 빈 줄이 `SPAN_GAP` 자간 넘게 끊기기 전까지 잇는다.
     """
-    reach = SPAN_REACH
+    reach = SPAN_REACH if 거리 is None else 거리
+    gap = SPAN_GAP if 틈 is None else 틈
     lim, 끝 = max(T, int(a - reach * pitch)), a
     for y in range(a - 1, lim - 1, -1):
         if p[y] > w * SPAN_LOW: 끝 = y
-        elif 끝 - y > SPAN_GAP * pitch: break
+        elif 끝 - y > gap * pitch: break
     a = 끝
     lim, 끝 = min(B, int(b + reach * pitch)), b
     for y in range(b, lim):
         if p[y] > w * SPAN_LOW: 끝 = y + 1
-        elif y - 끝 > SPAN_GAP * pitch: break
+        elif y - 끝 > gap * pitch: break
     return a, 끝
 
 

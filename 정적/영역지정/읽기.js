@@ -908,17 +908,18 @@ function 잉크무늬(g, cols) {
  * `scan._이어잡기` — 구간 끝의 가는 글자(GLYPH 를 못 넘는 `이` 등)를 이어 붙임. 읽을 때만.
  * ⚠ `int(a - REACH·pitch)` 는 파이썬 절삭 — Math.trunc
  */
-function 이어잡기(p, a, b, w, T, B, pitch) {
-  let lim = Math.max(T, Math.trunc(a - SPAN_REACH * pitch)), 끝 = a;
+function 이어잡기(p, a, b, w, T, B, pitch, 틈, 거리) {
+  const GAP = 틈 === undefined ? SPAN_GAP : 틈, REACH = 거리 === undefined ? SPAN_REACH : 거리;
+  let lim = Math.max(T, Math.trunc(a - REACH * pitch)), 끝 = a;
   for (let y = a - 1; y >= lim; y--) {
     if (p[y] > w * SPAN_LOW) 끝 = y;
-    else if (끝 - y > SPAN_GAP * pitch) break;
+    else if (끝 - y > GAP * pitch) break;
   }
   const a2 = 끝;
-  lim = Math.min(B, Math.trunc(b + SPAN_REACH * pitch)); 끝 = b;
+  lim = Math.min(B, Math.trunc(b + REACH * pitch)); 끝 = b;
   for (let y = b; y < lim; y++) {
     if (p[y] > w * SPAN_LOW) 끝 = y + 1;
-    else if (y - 끝 > SPAN_GAP * pitch) break;
+    else if (y - 끝 > GAP * pitch) break;
   }
   return [a2, 끝];
 }
@@ -2353,6 +2354,7 @@ async function 열마다읽기(모델, geo, span) {
   const 고른 = r.bp.계획.map(function (_, i) { return 고르기(r, i); });
   let 상자수 = r.bp.상자.length;
   const 끝 = SPAN_ALIGN ? geo.끝맞춤 : null;
+  const 바뀐 = new Set();                        // 끝맞춤 구간으로 바뀐 열(끝잇기가 건드리지 않음)
   if (끝) {
     // 끝을 맞춘 구간(`scan._끝맞추기`)으로도 읽어 고르는 점수가 더 높은 열만 바꾼다(`align.열마다읽기`)
     const g2 = Object.assign({}, geo, {
@@ -2364,8 +2366,59 @@ async function 열마다읽기(모델, geo, span) {
     끝.forEach(function (s, i) {
       if (s === null || 고른[i] === null) return;
       const 새 = 고르기(r2, i);
-      if (새 !== null && 새.고름 > 고른[i].고름) 고른[i] = 새;
+      if (새 !== null && 새.고름 > 고른[i].고름) { 고른[i] = 새; 바뀐.add(i); }
     });
+  }
+  if (TAIL_EXTEND) {
+    // `align.끝잇기` — 일찍 끝난 열의 아래를 넓게 이어 다시 읽고, 원래 글 + 끝에 몇 자만 더 붙을 때 받음(열 점수 · 칸수는 그대로)
+    const 빈줄 = TAIL_EXTEND[0], 거리 = TAIL_EXTEND[1], 최대 = TAIL_EXTEND[2], 확신 = TAIL_EXTEND[3], 백분위 = TAIL_EXTEND[4];
+    // 여러 단이면 세로 범위가 겹치는 이웃 열끼리 한 단(가름줄을 넘지 않게 단마다 잼) — `align.끝잇기`
+    let 무리 = [];
+    if ((geo.단 || 1) >= 2) {
+      let 앞 = null;
+      geo.spans.forEach(function (s, i) {
+        if (!s) return;
+        if (무리.length && 앞[0] < s[1] && s[0] < 앞[1]) 무리[무리.length - 1].push(i);
+        else 무리.push([i]);
+        앞 = s;
+      });
+    } else {
+      무리 = [geo.spans.map(function (s, i) { return s ? i : -1; }).filter(function (i) { return i >= 0; })];
+    }
+    const 새 = geo.spans.map(function () { return null; });
+    무리.forEach(function (단열) {
+      if (단열.length < 4) return;
+      const 한계 = 자름(백분위np(단열.map(function (i) { return geo.spans[i][1]; }), 백분위));
+      단열.forEach(function (i) {
+        const s = geo.spans[i];
+        if (고른[i] === null || 바뀐.has(i) || s[1] > 한계 - geo.pitch * 0.3) return;
+        const x0 = geo.cols[i][0], x1 = geo.cols[i][1];
+        const e = 이어잡기(열잉크(판, x0, x1), s[0], s[1], x1 - x0, s[0], 한계, geo.pitch, 빈줄, 거리);
+        if (e[1] - s[1] >= geo.pitch * 0.3) 새[i] = [s[0], e[1]];
+      });
+    });
+    {
+      if (새.some(function (s) { return s; })) {
+        const g3 = Object.assign({}, geo, {
+          spans: 새,
+          est: 새.map(function (s) { return s === null ? 0 : Math.max(1, 반올림((s[1] - s[0]) / geo.pitch)); }),
+        });
+        const r3 = await 읽어(g3);
+        상자수 += r3.bp.상자.length;
+        새.forEach(function (s, i) {
+          if (!s) return;
+          const x = 고르기(r3, i);
+          if (x === null) return;
+          const old = 고른[i].열, o = x.열, n = old.글자.length;
+          const 더 = o.글자.slice(n), 더확 = o.확신.slice(n);
+          if (o.글자.slice(0, n).join("|") === old.글자.join("|") && 더.length >= 1 && 더.length <= 최대 &&
+              Math.min.apply(null, 더확) >= 확신 &&
+              더.every(function (c) { return LONG_SPLIT_NO.indexOf(c) < 0 && PUNCT_DROP.indexOf(c) < 0; })) {
+            고른[i] = { 고름: 고른[i].고름, 열: { 점수: old.점수, 글자: o.글자, 확신: o.확신, 칸수: old.칸수, 상자: o.상자 } };
+          }
+        });
+      }
+    }
   }
   const 열들 = 고른.map(function (x) { return x === null ? null : x.열; });
   if (HEADING) await 큰제목읽기(모델, geo, 열들, span);
@@ -2658,6 +2711,7 @@ async function 줄읽기(모델, geo, x0, x1, y0, y1) {
  * `align.분주읽기` — 열 안의 두 줄(분주 · 협주)을 오른쪽 줄 → 왼쪽 줄로 갈라 읽어 보고 모델이 뚜렷이 자신 있을 때만 바꿈.
  * 열들을 제자리에서 고침 · 점수 · 칸수는 그대로
  */
+let TAIL_EXTEND = null;   // align.TAIL_EXTEND [빈줄, 거리, 최대, 확신, 백분위] — 설정 `끝잇기`(없으면 끔)
 let LONG_SPLIT = null;   // align.LONG_SPLIT [높이, 확신, 자간몫, 시작, 끝, 끝높이, 끝확신] — 설정 `긴칸가르기`(없으면 끔)
 const LONG_SPLIT_NO = ["ㅣ", "○", "ㅅ", "々", ",", "."];   // align.LONG_SPLIT_NO — 이 글자는 안 가름
 /** `align.긴칸가르기` — 유난히 긴 칸을 가장 옅은 줄에서 갈라 읽어 두 쪽 다 자신 있으면 두 글자로. 열들을 제자리에서 고침 */
@@ -3275,6 +3329,7 @@ const API = {
     TAIL_LINE = s.꼬리선토막 || null;
     HEAD_DROP = s.머리떼기 || null;
     LONG_SPLIT = s.긴칸가르기 || null;
+    TAIL_EXTEND = s.끝잇기 || null;
     if (s.끝열보호 !== undefined) {
       EDGE_MEDIAN = s.끝열보호 ? s.끝열보호[0] : null;
       if (s.끝열보호) { EDGE_MEDIAN_LOW = s.끝열보호[1]; EDGE_MEDIAN_OPEN = s.끝열보호[2] === undefined ? null : s.끝열보호[2]; }

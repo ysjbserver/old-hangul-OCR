@@ -650,6 +650,7 @@ def 열마다읽기(mdl, geo, span=3):
         s, o = 고르기(opts, r)
         점수.append(s); out.append(o)
     끝 = geo.get("끝맞춤") if scan.SPAN_ALIGN else None
+    바뀐 = set()                                  # 끝맞춤 구간으로 바뀐 열(끝잇기가 건드리지 않음)
     if 끝:
         # 끝을 맞춘 구간(`scan._끝맞추기`)으로도 읽어 고름 점수가 더 높은 열만 바꾼다.
         geo2 = dict(geo, spans=끝, est=[0 if s is None else max(1, int(round((s[1] - s[0]) / geo["pitch"]))) for s in 끝])
@@ -662,6 +663,9 @@ def 열마다읽기(mdl, geo, span=3):
             s, o = 고르기(opts, r2)
             if s is not None and s > 점수[i]:
                 out[i] = o
+                바뀐.add(i)
+    if TAIL_EXTEND:
+        끝잇기(geo, out, 바뀐, span, g, 읽어, 고르기)
     if HEADING:
         큰제목읽기(mdl, geo, out, span)
     if BUNJU:
@@ -717,6 +721,63 @@ def 긴칸가르기(mdl, geo, out):
             if min(c1, c2) >= cc and l1 not in LONG_SPLIT_NO and l2 not in LONG_SPLIT_NO:
                 글[k:k + 1] = [l1, l2]; 확[k:k + 1] = [c1, c2]; 상[k:k + 1] = [시험[2 * q], 시험[2 * q + 1]]
         out[i] = (o[0], 글, 확, o[3], 상)
+
+
+# (읽을 때만) 가는 끝 글자에서 일찍 끝난 열 잇기 — 다른 열 끝의 (백분위) 보다 0.3 자간 넘게 짧은 열의 아래를 빈 줄 (빈줄) 자간 · (거리) 자간까지
+#   넓게 이어(`scan._이어잡기`) 다시 읽고, 원래 글은 그대로이고 끝에 (최대) 자 이하만 더 붙으며 그 글자 확신이 모두 (확신) 넘을 때만 받음.
+#   열 점수 · 잘라 본 칸 수는 원래 값(`가장자리다듬기` 판단을 안 바꿈). (빈줄, 거리, 최대, 확신, 백분위) · None = 끔. JS 짝 `끝잇기` · 설정 `끝잇기`
+TAIL_EXTEND = (1.0, 1.5, 2, 0.85, 75)
+
+
+def 끝잇기(geo, out, 바뀐, span, g, 읽어, 고르기):
+    """`열마다읽기` 안에서 — `out` 을 제자리에서 고침. 끝맞춤으로 바뀐 열(`바뀐`)은 건드리지 않음."""
+    빈줄, 거리, 최대, 확신, 백분위 = TAIL_EXTEND
+    spans, pitch = geo["spans"], geo["pitch"]
+    if (geo.get("단") or 1) >= 2:               # 여러 단 — 세로 범위가 겹치는 이웃 열끼리 한 단(가름줄을 넘지 않게 단마다 잼)
+        무리, 앞 = [], None
+        for i, s in enumerate(spans):
+            if s is None:
+                continue
+            if 무리 and 앞[0] < s[1] and s[0] < 앞[1]:
+                무리[-1].append(i)
+            else:
+                무리.append([i])
+            앞 = s
+    else:
+        무리 = [[i for i, s in enumerate(spans) if s]]
+    새 = [None] * len(spans)
+    for 단열 in 무리:
+        ends = [spans[i][1] for i in 단열]
+        if len(ends) < 4:
+            continue
+        한계 = int(np.percentile(ends, 백분위))
+        for i in 단열:
+            s = spans[i]
+            if out[i] is None or i in 바뀐 or s[1] > 한계 - pitch * 0.3:
+                continue
+            x0, x1 = geo["cols"][i]
+            p = (g[:, x0:x1] < scan.INK).sum(axis=1)
+            e = scan._이어잡기(p, s[0], s[1], x1 - x0, s[0], 한계, pitch, 빈줄, 거리)
+            if e[1] - s[1] >= pitch * 0.3:
+                새[i] = (s[0], e[1])
+    if not any(새):
+        return
+    geo3 = dict(geo, spans=새, est=[0 if s is None else max(1, int(round((s[1] - s[0]) / pitch))) for s in 새])
+    plans3, flat3 = build_plans(geo3, geo3["est"], span, allow_empty=False,
+                                그림자=경계프로파일(geo3) if CUT_LEARN else None)
+    r3 = 읽어(flat3)
+    for i, opts in enumerate(plans3):
+        if 새[i] is None:
+            continue
+        _, o = 고르기(opts, r3)
+        if o is None:
+            continue
+        old = out[i]
+        n = len(old[1])
+        더 = o[1][n:]
+        if (o[1][:n] == old[1] and 1 <= len(더) <= 최대 and min(o[2][n:]) >= 확신
+                and not any(c in LONG_SPLIT_NO or c in PUNCT_DROP for c in 더)):
+            out[i] = (old[0], o[1], o[2], old[3], o[4])
 
 
 BUNJU      = True    # (읽을 때만) 열 안의 두 줄(분주 · 협주)을 갈라 읽어 보고 모델이 뚜렷이 자신 있을 때만 바꿈 — `분주읽기`
