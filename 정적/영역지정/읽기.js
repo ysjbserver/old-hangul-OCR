@@ -67,7 +67,50 @@ function 그림만들기(rgba, 너비, 높이) {
   for (let i = 0, j = 0; i < v.length; i++, j += 4) {
     v[i] = (rgba[j] * 19595 + rgba[j + 1] * 38470 + rgba[j + 2] * 7471 + 32768) >> 16;
   }
-  return { 너비: 너비, 높이: 높이, 값: v };
+  return 종이만({ 너비: 너비, 높이: 높이, 값: v });
+}
+
+// `scan.PAPER_BAND` — (아주 어두움, 줄의 어두운 몫, 덩이 넓이, 가장자리 가까이) · null = 끔
+const PAPER_BAND = [60, 0.6, 0.04, 0.08];
+
+/** `scan._가장자리띠` — 가장자리 가까이에서 시작하는 넓은 검은 덩이의 안쪽 [a, b) */
+function 가장자리띠(띠, 넓이, 가까이) {
+  const n = 띠.length;
+  let a = 0, b = n, i = 0;
+  while (i < n) {
+    if (띠[i]) {
+      let j = i;
+      while (j < n && 띠[j]) j++;
+      if (j - i >= 넓이 * n) {
+        if (i <= 가까이 * n) a = Math.max(a, j);
+        if (j >= (1 - 가까이) * n) b = Math.min(b, i);
+      }
+      i = j;
+    } else i++;
+  }
+  return b - a > 0.3 * n ? [a, b] : [0, n];
+}
+
+/** `scan._종이만` — 스캐너 검은 띠(종이 밖)를 흰색으로. 띠가 없으면 그대로(같은 객체) */
+function 종이만(g) {
+  if (!PAPER_BAND) return g;
+  const [문턱, 몫, 넓이, 가까이] = PAPER_BAND, W = g.너비, H = g.높이, v = g.값;
+  const 줄 = new Array(H);
+  for (let y = 0; y < H; y++) {
+    let k = 0;
+    for (let x = 0, o = y * W; x < W; x++) if (v[o + x] < 문턱) k++;
+    줄[y] = k / W > 몫;
+  }
+  const [y0, y1] = 가장자리띠(줄, 넓이, 가까이);
+  const 셈 = new Float64Array(W);
+  for (let y = y0; y < y1; y++) for (let x = 0, o = y * W; x < W; x++) if (v[o + x] < 문턱) 셈[x]++;
+  const 칸 = new Array(W);
+  for (let x = 0; x < W; x++) 칸[x] = 셈[x] / (y1 - y0) > 몫;
+  const [x0, x1] = 가장자리띠(칸, 넓이, 가까이);
+  if (y0 === 0 && y1 === H && x0 === 0 && x1 === W) return g;
+  const out = new Uint8Array(W * H).fill(255);
+  for (let y = y0; y < y1; y++) out.set(v.subarray(y * W + x0, y * W + x1), y * W + x0);
+  return { 너비: W, 높이: H, 값: out };
 }
 
 /** 이미지/캔버스 → 회색조 그림. */
@@ -93,6 +136,7 @@ let SPAN_ALIGN = [0.3, 1.5], SPAN_ALIGN_Q = 75;   // scan._끝맞추기 — (읽
 let GRID = [1.15, 1.5, 0.01];   // scan.GRID — (읽을 때만) 판짜임 열 간격으로 열을 다시 짠 격자 후보(`격자기하`) [넓음, 틈, 잉크몫] (null = 끔)
 let SPAN_FAINT = 160;   // scan._연한머리잇기 — 흐린 열 머리를 이 밝기 미만으로 다시 찾음(0 = 끔)
 let INK_FAINT = [70, 45];   // scan.INK_FAINT — (읽을 때만) 흐린 잉크 쪽의 잉크 문턱(`연한잉크문턱`). null = 끔
+const GRID_STARVED = 2.0;  // align.GRID_STARVED — 격자가 글자를 이 배 넘게 읽고 확신 글자도 많으면 격자(`잉크골라`)
 let FAINT_PICK = 0.93;     // align.FAINT_PICK — 흐린 쪽 두 기하 중 이 확신 넘는 글자가 많은 쪽(`잉크골라`)
 let TAIL_RULED = 0.5;   // scan.TAIL_RULED — 열 쌍의 이 몫 넘게 세로줄이 있을 때만 꼬리선(아래 가는 가로줄 빼기)을 끔. 0 = 한 쌍만 있어도 끔
 let FRAME_LOCAL = true, FRAME_LOCAL_FILL = 0.6, FRAME_LOCAL_REACH = 0.35, FRAME_LOCAL_EDGE = 8;   // scan._열광곽
@@ -2096,6 +2140,7 @@ function 잉크판(geo) { return geo.잉크그림 || geo.그림; }
 /**
  * `align.잉크골라` — 흐린 쪽 기하(`기본기하` 가 있음)면 기본 문턱 기하로도 읽어 확신 ≥ FAINT_PICK 글자가 더 많은 쪽.
  * 격자 후보(`geo.격자`)가 있으면 그것으로도 읽어 (확신 ≥ FAINT_PICK 글자 − 나머지 글자)가 더 클 때만 씀.
+ * 단 격자가 글자를 GRID_STARVED 배 넘게 읽고 확신 글자도 더 많으면 씀(원래 기하가 거의 못 읽은 쪽).
  * 읽기(geo) → 결과(Promise), 확신들(결과) → 확신 목록(없으면 결과.확신). 반환 {geo, 결과}
  */
 async function 잉크골라(geo, 읽기, 확신들) {
@@ -2106,7 +2151,8 @@ async function 잉크골라(geo, 읽기, 확신들) {
     const r = await 읽기(g);
     if (!g.격자) return { geo: g, 결과: r };
     const rk = await 읽기(g.격자);
-    return 격자셈(rk) > 격자셈(r) ? { geo: g.격자, 결과: rk } : { geo: g, 결과: r };
+    const 굶음 = 확(rk).length >= GRID_STARVED * 확(r).length && 셈(rk) > 셈(r);
+    return 굶음 || 격자셈(rk) > 격자셈(r) ? { geo: g.격자, 결과: rk } : { geo: g, 결과: r };
   };
   if (!geo) return { geo: geo, 결과: null };
   const a = await 격자골라(geo);
@@ -2339,7 +2385,8 @@ async function 열마다읽기(모델, geo, span) {
     for (let j = 0; j < best.개수; j++) {
       const c = cf[best.시작 + j];
       const 자 = 모델.글자(pL[best.시작 + j], pV[best.시작 + j], pT[best.시작 + j]);
-      if (c < NOTCHAR_CONF && NOTCHAR_KEEP.indexOf(자) < 0) {
+      const 빈 = BLANK_DROP.indexOf(자) >= 0 && r.잉크칸 && !r.잉크칸[best.시작 + j];
+      if ((c < NOTCHAR_CONF || 빈) && NOTCHAR_KEEP.indexOf(자) < 0) {
         const m = 칸모양(판, best.상자들[j]);
         if (m[0] < NOTCHAR_WIDTH || m[1] >= NOTCHAR_ROW) continue;
       }
@@ -2793,6 +2840,7 @@ let EDGE_SHORT = 2;   // align.EDGE_SHORT — 짧은 끝 열(쪽 번호 조각)�
 let EDGE_BAR = 0.5;   // align.EDGE_BAR — 끝 열이 이 몫 넘게 `ㅣ` 면 광곽 세로줄로 보고 뗌 (null = 끔)
 let EDGE_GUIDE = 0.3;  // align.EDGE_GUIDE — 세로줄 너머 떼일 열들이 본문 같으면(확신 · 간격 자간 ±이 몫) 안 뗌 — 계선 판 (null = 끔)
 let CUT_COST_W = 1.0;        // align.CUT_COST_W — 열의 칸수를 고르는 점수 = 평균 로그 확신 − 이 무게 × 자르기 비용 ÷ 칸수 (0 = 확신만)
+let BLANK_DROP = [];   // align.BLANK_DROP — 빈 칸(잉크 몫 < BLANK_SKIP)을 이 글자로 읽으면 확신과 상관없이 '글자 아닌 칸' · 설정 `빈칸글자뺌`
 let BLANK_SKIP = null, BLANK_INNER = false;   // align.BLANK_SKIP · BLANK_INNER — 칸수를 고를 때 빈 칸(잉크 몫 < BLANK_SKIP)을 평균 확신에서 뺌(null = 끔)
 let EDGE_GUIDE_CHAIN = true;   // align.EDGE_GUIDE_CHAIN — 세로줄 너머로 뗄 열 가운데 안쪽에서부터 본문 같은 열이 이어지는 만큼은 안 뗌
 let EDGE_GUIDE_ONE = 0.8;      // align.EDGE_GUIDE_ONE — 세로줄 너머 **한 열만** 떼일 때도 본문 같은 꽉 찬 열이면 안 뗌(글자 수 ≥ 안쪽 열 중앙값 × 이 몫) (null = 끔)
@@ -3314,6 +3362,7 @@ const API = {
     if (s.가장자리계선 !== undefined) EDGE_GUIDE = s.가장자리계선;
     if (s.비용섞기 !== undefined) CUT_COST_W = s.비용섞기;
     if (s.빈칸중립) { BLANK_SKIP = s.빈칸중립[0]; BLANK_INNER = !!s.빈칸중립[1]; } else { BLANK_SKIP = null; BLANK_INNER = false; }
+    BLANK_DROP = s.빈칸글자뺌 || [];
     if (s.가장자리계선연쇄 !== undefined) EDGE_GUIDE_CHAIN = s.가장자리계선연쇄;
     if (s.가장자리계선한열 !== undefined) { EDGE_GUIDE_ONE = s.가장자리계선한열[0]; EDGE_GUIDE_ONE_MIN = s.가장자리계선한열[1]; }
     if (s.자간절반 !== undefined) RATIO_HALF = s.자간절반;

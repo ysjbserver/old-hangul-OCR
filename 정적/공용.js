@@ -354,7 +354,7 @@ document.addEventListener("keydown", function (e) {
 /** 서버에 판형 살피기를 맡기고 끝날 때까지 되물음(처음 보는 파일은 1~3분) */
 공.서버살피기 = async function (파일, 일) {
   for (;;) {
-    var 답 = await 일.기다림(fetch(서버 + "api/inspect?file=" + encodeURIComponent(파일)).then(function (r) { return r.json(); }));
+    var 답 = await 일.기다림(fetch(서버 + "api/inspect?file=" + encodeURIComponent(파일), { signal: 일.신호 }).then(function (r) { return r.json(); }));
     if (답.상태 === "끝") return 답.값;
     if (답.상태 === "오류" || 답.오류) throw new Error(답.오류 || "서버가 판형을 못 살폈습니다");
     if (답.상태 === "바쁨" || 답.진행 === "차례 기다림") {          // 다른 파일들을 살피는 중 — 자리가 날 때까지

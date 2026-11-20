@@ -22,13 +22,13 @@ def _쪽그림(path):
         st = os.stat(path)
         열쇠 = (os.path.abspath(path), st.st_mtime_ns, st.st_size)
     except (TypeError, ValueError, OSError):
-        return {"그림": Image.open(path).convert("L")}
+        return {"그림": _종이만(Image.open(path).convert("L"))}
     with _그림잠금:
         항목 = _그림기억.pop(열쇠, None)
         if 항목 is not None:
             _그림기억[열쇠] = 항목
             return 항목
-    항목 = {"그림": Image.open(path).convert("L")}
+    항목 = {"그림": _종이만(Image.open(path).convert("L"))}
     with _그림잠금:
         _그림기억[열쇠] = 항목
         while len(_그림기억) > _그림기억수:
@@ -37,8 +37,48 @@ def _쪽그림(path):
 
 
 def _쪽배열(path):
-    """`np.array(Image.open(path).convert("L"))` 와 같은 배열(새 사본)."""
+    """`np.array(_종이만(Image.open(path).convert("L")))` 와 같은 배열(새 사본)."""
     return np.array(_쪽그림(path)["그림"])
+
+
+PAPER_BAND = (60, 0.6, 0.04, 0.08)   # (아주 어두움, 줄의 어두운 몫, 덩이 넓이, 가장자리 가까이) — None = 끔(11-16)
+
+
+def _가장자리띠(띠, 넓이, 가까이):
+    """검은 줄 띠 가운데 가장자리 가까이에서 시작하는 넓은 덩이만 스캐너 바탕으로 보고 그 안쪽 [a, b) — 판심 · 광곽은 안 셈."""
+    n = len(띠); a, b = 0, n
+    i = 0
+    while i < n:
+        if 띠[i]:
+            j = i
+            while j < n and 띠[j]:
+                j += 1
+            if j - i >= 넓이 * n:
+                if i <= 가까이 * n:
+                    a = max(a, j)
+                if j >= (1 - 가까이) * n:
+                    b = min(b, i)
+            i = j
+        else:
+            i += 1
+    return (a, b) if b - a > 0.3 * n else (0, n)
+
+
+def _종이만(im):
+    """스캐너 검은 띠(종이 밖)를 흰색으로 — 띠가 없으면 그림 그대로(같은 객체). 예수셩교누가처럼 흰 테두리 → 검은 띠 → 종이 꼴 스캔에서
+    검은 띠가 열 찾기를 망쳐 12쪽 중 7쪽이 '기하 없음' 이었음(2026-11-16 · `읽은결과/틀점검_20261116/검은둘레시험.py`)."""
+    if not PAPER_BAND:
+        return im
+    문턱, 몫, 넓이, 가까이 = PAPER_BAND
+    g = np.asarray(im)
+    어 = g < 문턱
+    y0, y1 = _가장자리띠(어.mean(1) > 몫, 넓이, 가까이)
+    x0, x1 = _가장자리띠(어[y0:y1].mean(0) > 몫, 넓이, 가까이)
+    if (y0, y1, x0, x1) == (0, g.shape[0], 0, g.shape[1]):
+        return im
+    out = np.full_like(g, 255)
+    out[y0:y1, x0:x1] = g[y0:y1, x0:x1]
+    return Image.fromarray(out)
 
 INK = 120           # 이보다 어두우면 잉크로 본다
 YX_RATIO = 0.867    # 세로 자간 ÷ 가로 자간 기본값
@@ -93,6 +133,8 @@ def 연한잉크문턱(g):
         return INK
     H, W = g.shape
     c = g[int(H * 0.1):int(H * 0.9), int(W * 0.1):int(W * 0.9)]
+    if not c.size:                        # 한 변이 아주 짧은 그림 — JS 짝처럼 기본값
+        return INK
     종이, 잉크 = np.percentile(c, 90), np.percentile(c, 1)
     return int(max(INK, min(잉크 + INK_FAINT[0], 종이 - INK_FAINT[1])))
 
@@ -1420,7 +1462,12 @@ def 분주후보(g, cols, i, sp, pitch):
 
 def smooth(a, s):
     k = np.exp(-0.5 * (np.arange(-3*s, 3*s+1) / s) ** 2); k /= k.sum()
-    return np.convolve(a, k, 'same')
+    if len(k) <= len(a):
+        return np.convolve(a, k, 'same')
+    if not len(a):
+        return np.zeros(0)
+    o = (len(k) - 1) // 2                 # 커널이 더 길면 'same' 이 커널 길이를 냄 — `읽기.js` `고르기` 처럼 a 의 길이로
+    return np.convolve(a, k, 'full')[o:o + len(a)]
 
 
 def cut_points(sp, y0, y1, pitch):

@@ -41,6 +41,19 @@ class 너무큼(Exception):
     """받은 것이 `_open(최대=)` 를 넘음 — 다시 시도하지 않음."""
 
 
+최대대기 = 60                 # Retry-After 를 이 초까지만 따름(받기 자리를 오래 쥐지 않게)
+API최대 = 64 * 2**20         # 위키 API 응답 한 번의 바이트 한도
+
+
+def _기다릴초(값, attempt):
+    """Retry-After(초 · 날짜 꼴 · 잘못된 값) → 기다릴 초(최대 `최대대기`)."""
+    try:
+        초 = max(0, int(str(값).strip()))
+    except (TypeError, ValueError):
+        초 = 5
+    return min(최대대기, 초 + attempt * 5)
+
+
 def _open(url, method="GET", timeout=90, 최대=None):
     """429/503 을 만나면 Retry-After 만큼 기다렸다 다시 시도한다. `최대` 바이트를 넘으면 `너무큼`."""
     req = urllib.request.Request(url, headers={"User-Agent": UA}, method=method)
@@ -57,7 +70,7 @@ def _open(url, method="GET", timeout=90, 최대=None):
             raise
         except urllib.error.HTTPError as e:
             if e.code in (429, 503):
-                wait = int(e.headers.get("Retry-After") or 5) + attempt * 5
+                wait = _기다릴초(e.headers.get("Retry-After") or 5, attempt)
                 with _print_lock:
                     print(f"    (서버가 잠시 쉬라고 합니다 — {wait}초 대기)")
                 time.sleep(wait); continue
@@ -69,19 +82,23 @@ def _open(url, method="GET", timeout=90, 최대=None):
 def api(**params):
     params.setdefault("format", "json")
     params.setdefault("formatversion", "2")
-    return json.loads(_open(API + "?" + urllib.parse.urlencode(params)).decode("utf-8"))
+    return json.loads(_open(API + "?" + urllib.parse.urlencode(params), 최대=API최대).decode("utf-8"))
 
-def list_pages(pdf):
-    """전사된 (쪽번호, 위키텍스트). 한 번에 50쪽씩 받아 온다."""
+판파일 = "판번호.json"      # data/<문헌>/ — 쪽마다 받은 판 번호(`제작/자료갱신.py` 가 견줌)
+
+
+def list_pages(pdf, 판=False):
+    """전사된 (쪽번호, 위키텍스트) — 판=True 면 (쪽번호, 위키텍스트, 판 번호). 한 번에 50쪽씩 받아 온다."""
     out, cont = [], {}
     while True:
         r = api(action="query", generator="allpages", gapnamespace=250,
                 gapprefix=pdf + "/", gaplimit=50,
-                prop="revisions", rvprop="content", rvslots="main", **cont)
+                prop="revisions", rvprop="content|ids", rvslots="main", **cont)
         for p in r.get("query", {}).get("pages", []):
             m = re.search(r"/(\d+)$", p["title"])
             if m and "revisions" in p:
-                out.append((int(m.group(1)), p["revisions"][0]["slots"]["main"]["content"]))
+                rev = p["revisions"][0]
+                out.append((int(m.group(1)), rev["slots"]["main"]["content"]) + ((rev["revid"],) if 판 else ()))
         if "continue" in r:
             cont = r["continue"]
         else:
@@ -156,14 +173,20 @@ def collect(pdf, slug, limit=None):
         f.write(pdf + "\n")
 
     print(f"[1/3] '{pdf}' 의 전사된 페이지를 찾는 중…")
-    pages = list_pages(pdf)
+    pages = list_pages(pdf, 판=True)
     if limit: pages = pages[:limit]
     print(f"      {len(pages)}쪽 발견  →  data/{slug}/")
 
     print("[2/3] 위키텍스트 저장 중…")
-    for n, body in pages:
+    for n, body, _ in pages:
         with open(os.path.join(tdir, f"{n:04d}.txt"), "w", encoding="utf-8") as f:
             f.write(body)
+    판경로 = os.path.join(root, 판파일)                 # 내용과 같은 응답에서 받은 판 번호 — 그 사이 고친 판을 놓치지 않게
+    옛 = json.load(open(판경로, encoding="utf-8")) if os.path.exists(판경로) else {}
+    옛.setdefault("판", {}).update({f"{n:04d}": rev for n, _, rev in pages})
+    옛["받은때"] = time.strftime("%Y-%m-%d %H:%M")
+    with open(판경로, "w", encoding="utf-8") as f:
+        json.dump(옛, f, ensure_ascii=False, indent=1)
 
     print(f"[3/3] 스캔 이미지 내려받는 중 (동시 {WORKERS}개)…")
     pat = url_pattern(pdf)

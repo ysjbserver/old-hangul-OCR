@@ -57,6 +57,7 @@ SEG_UNIF  = 0.0       # 칸 높이가 고르지 않은 만큼의 벌점(칸마�
 # ── 읽을 때 자를 자리를 배운 경계 검출기로 (`경계검출.py`) ────────
 BLANK_INNER = True     # True 면 BLANK_SKIP 이 글자 사이의 빈 칸만 뺀다(열 끝 빈 칸은 그대로 셈 — 빈 끝을 쪼개는 칸수를 막으려고)
 BLANK_SKIP = 0.04     # 칸수를 고를 때 잉크 몫이 이 값 미만인 빈 칸은 평균 확신에서 뺀다. None = 끔 · 설정 `빈칸중립`
+BLANK_DROP = ("아", "\u110b\u1161")   # 그 빈 칸을 이 글자로 읽으면 확신과 상관없이 '글자 아닌 칸'(빈 그림을 '아' 로 확신 높게 읽는 모델) · () = 끔 · 설정 `빈칸글자뺌` · 읽기.js 짝
 CUT_COST_W = 1.0      # 칸수를 고를 때 평균 로그 확신에서 이 무게 × (자르기 비용 ÷ 칸수) 를 뺀다. 0 = 끔 · 설정 `비용섞기`
 CUT_LEARN = True      # 자를 후보·비용에 검출기의 '경계가 아닐 확률' 을 섞는다(몫 `CUT_MIX`) — 읽는 경로에만
 CUT_MIX   = 0.5       # 1 = 검출기만 · 0 = 잉크 그림자만
@@ -330,6 +331,8 @@ def to_text(mdl, geo, letters, span=3, min_col=0.45, 경계=False):
 # ── 정답지가 없을 때 (4단계) ─────────────────────────────────────────
 # 흐린 쪽(`scan.INK_FAINT`) 두 기하 중 확신이 이 값 넘는 글자가 더 많은 쪽을 씀 — 표시 문턱과 같게. JS 짝 `잉크골라`
 FAINT_PICK = 0.93
+# 격자 후보가 원래 기하보다 글자를 이 배 넘게 읽고 확신 글자도 더 많으면 `격자셈` 과 상관없이 격자 — 원래 기하가 열을 거의 못 잡은 쪽(JS 짝 같은 값)
+GRID_STARVED = 2.0
 
 
 def 잉크판(geo):
@@ -356,6 +359,7 @@ def 잉크골라(geo, 읽기, 확신들=None):
     흐린 쪽 문턱으로 잡은 기하(`geo["기본기하"]` 가 있음)면 기본 문턱 기하로도 읽어 확신 ≥ `FAINT_PICK` 글자가
     더 많은 쪽 → (geo, 읽기(geo)). 확신들(결과) → 확신 목록 — 없으면 결과를 (글자, 확신, …) 줄 목록으로 봄.
     격자 후보(`geo["격자"]` — `scan.격자기하`)가 있으면 그것으로도 읽어 (확신 ≥ `FAINT_PICK` 글자 − 나머지 글자)가 더 클 때만 씀.
+    단 격자가 글자를 `GRID_STARVED` 배 넘게 읽고 확신 글자도 더 많으면 씀 — 원래 기하가 거의 못 읽은 쪽은 위 셈이 '덜 읽은 쪽' 을 고름.
     """
     확 = lambda x: 확신들(x) if 확신들 else [c for z in x for c in z[1]]
     셈 = lambda x: sum(1 for c in 확(x) if c >= FAINT_PICK)
@@ -367,7 +371,8 @@ def 잉크골라(geo, 읽기, 확신들=None):
         if k is None:
             return g, r
         rk = 읽기(k)
-        return (k, rk) if 격자셈(rk) > 격자셈(r) else (g, r)
+        굶음 = len(확(rk)) >= GRID_STARVED * len(확(r)) and 셈(rk) > 셈(r)
+        return (k, rk) if 굶음 or 격자셈(rk) > 격자셈(r) else (g, r)
 
     if geo is None:
         return geo, None
@@ -605,7 +610,7 @@ def 열마다읽기(mdl, geo, span=3):
     열마다 가장 자신 있는 칸수로 읽는다. `read_page` 의 앞 절반.
     반환: 열마다 (로그 확신 평균, 글자들, 확신들, 글자마다 상자, 잘라 본 칸 수) — 읽을 것이 없는 열은 None.
 
-    글자가 아닌 칸은 뺀다: 확신이 `NOTCHAR_CONF` 보다 낮은 칸 중 잉크 폭이 상자의 `NOTCHAR_WIDTH` 가 안 되는 것
+    글자가 아닌 칸은 뺀다: 확신이 `NOTCHAR_CONF` 보다 낮은(또는 잉크 몫이 `BLANK_SKIP` 미만이고 `BLANK_DROP` 글자로 읽힌) 칸 중 잉크 폭이 상자의 `NOTCHAR_WIDTH` 가 안 되는 것
     (작은 한자 절 번호)과 한 행이 폭의 `NOTCHAR_ROW` 를 채우는 것(광곽 가로줄).
     ⚠ 열 점수(첫 값)는 뺀 칸까지 다 넣어 낸다 — `가장자리다듬기` 의 판단을 바꾸지 않으려고.
     """
@@ -637,7 +642,8 @@ def 열마다읽기(mdl, geo, span=3):
         for j in range(ln):
             c = float(cf[s0 + j])
             자 = mdl.letter(pL[s0+j], pV[s0+j], pT[s0+j])
-            if c < NOTCHAR_CONF and 자 not in NOTCHAR_KEEP:
+            빈 = 자 in BLANK_DROP and inkflag is not None and not inkflag[s0 + j]
+            if (c < NOTCHAR_CONF or 빈) and 자 not in NOTCHAR_KEEP:
                 폭, 가로 = scan.칸모양(g, bx[j])
                 if 폭 < NOTCHAR_WIDTH or 가로 >= NOTCHAR_ROW:
                     continue

@@ -83,7 +83,7 @@ def doc_layout(slug):
         return v
     잰 = []
     for t in corpus.sample(corpus.images(slug), 20):
-        xp, cols = scan.find_columns(np.array(Image.open(t[2]).convert("L")))
+        xp, cols = scan.find_columns(scan._쪽배열(t[2]))
         잰.append((xp, len(cols)) if xp and cols else None)
     v = 판짜임정하기(잰)
     if v is None:

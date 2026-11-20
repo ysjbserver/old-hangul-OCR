@@ -158,18 +158,18 @@ def 인쇄글자(raw, keep_headings=False, 큰빼기=False):
     """
     t, pos = raw, list(range(len(raw)))
     오식 = set()
-    표 = wikitext.표있나(raw)
+    t, pos = _바꾸기(t, pos, wikitext.주석.finditer(t), lambda m: [])
+    표 = wikitext.표있나(t)
     t, pos = _바꾸기(t, pos, re.finditer(r'<noinclude>.*?</noinclude>', t, flags=re.S), lambda m: [])
     t, pos = _바꾸기(t, pos, wikitext.띄우기줄.finditer(t), lambda m: [m.span(2), m.span(1)])   # 혼자 선 `오른쪽 띄우기` 를 다음 줄 뒤로
     while True:                                  # 안쪽 틀부터 하나씩
         m = re.search(r'\{\{([^{}]*)\}\}', t)
         if not m:
             break
-        조각, a = [], m.start(1)
-        for 끝 in [i for i in range(m.start(1), m.end(1)) if t[i] == "|"] + [m.end(1)]:
-            조각.append((a, 끝)); a = 끝 + 1
-        이름 = t[조각[0][0]:조각[0][1]].strip()
-        인자 = [(a, b) for a, b in 조각[1:] if not re.match(r'^\s*[A-Za-z-]+\s*=', t[a:b])]
+        s, o = m.group(1), m.start(1)
+        조각 = wikitext.틀조각(s)
+        이름 = s[조각[0][0]:조각[0][1]].strip()
+        인자 = [(o + a, o + b) for a, b in wikitext.틀인자(s, 조각[1:])]
         남길 = _틀남길것(이름, 인자, 큰빼기, t[인자[0][0]:인자[0][1]] if 인자 else "")
         if wikitext.틀이름(이름) in 오식틀:
             for a, b in 남길:
@@ -180,11 +180,13 @@ def 인쇄글자(raw, keep_headings=False, 큰빼기=False):
     t, pos = _바꾸기(t, pos, re.finditer(r'^[ \t]*:+', t, flags=re.M), lambda m: [])   # 줄 머리 `:` 들여쓰기
     t, pos = _바꾸기(t, pos, re.finditer(r'^[ \t]*-{4,}', t, flags=re.M), lambda m: [])   # 줄 머리 `----` 가로줄
     t, pos = _바꾸기(t, pos, re.finditer(r"'{2,}", t), lambda m: [])   # `''` · `'''` 굵게 · 기울임
+    t, pos = _바꾸기(t, pos, re.finditer(r'\[\[\s*(?:File|Image|파일|그림)\s*:[^\]]*\]\]', t, flags=re.I), lambda m: [])   # 그림 링크(11-16)
     t, pos = _바꾸기(t, pos, re.finditer(r'\[\[[^|\]]*\|([^\]]*)\]\]', t), lambda m: [m.span(1)])
     t, pos = _바꾸기(t, pos, re.finditer(r'\[\[([^\]]*)\]\]', t), lambda m: [m.span(1)])
     표자리 = wikitext.표구간(t, 표)                  # 표 문법 — 규칙은 `wikitext` 의 것을 그대로
     t, pos = _바꾸기(t, pos, [_자리(a, b, 남길) for a, b, 남길 in 표자리], lambda m: m.남길)
     t, pos = _바꾸기(t, pos, re.finditer(r'<[^>]+>', t), lambda m: [])
+    t, pos = _바꾸기(t, pos, re.finditer(r'&(?:#\d+|#x[0-9a-fA-F]+|[A-Za-z]+);', t), lambda m: [])   # HTML 개체(11-16)
     t, pos = _바꾸기(t, pos, re.finditer(r'[\s​]+', t), lambda m: [])
 
     out, cur = [], None                          # `wikitext.letters` 와 같은 묶기

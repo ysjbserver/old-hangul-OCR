@@ -64,6 +64,7 @@ import onnx모델
 import step1_collect
 from 표시 import 줄글월, 표시문턱
 import 대조
+import 곁글지움
 
 켠때 = time.time()
 정적 = os.path.join(여기, "정적")
@@ -77,8 +78,22 @@ os.makedirs(캐시, exist_ok=True)
 모델 = onnx모델.끼우기(os.path.join(여기, "모델"), 스레드)
 너비 = 모델.설정.get("스캔너비", 1920)
 계산 = threading.Lock()            # CPU 가 적어 모델 셈은 한 번에 하나씩
-계산동시 = int(os.environ.get("OCR_QUEUE", "3"))    # 모델 셈을 하거나 기다리는 요청 수 — 넘으면 503(가벼운 요청이 쓸 스레드를 남김 · gunicorn 스레드 수보다 작게)
+_곁글파일 = os.path.join(여기, "모델", "공용", "곁글검출.onnx")
+곁글검출 = 곁글지움.검출기(_곁글파일, 스레드) if os.path.exists(_곁글파일) else None   # 없으면 곁글 지우기 없이(옛 길 그대로)
+계산동시 = int(os.environ.get("OCR_QUEUE", "3"))    # 모델 셈을 하거나 기다리는 요청 수 — 넘으면 503
 _계산자리 = threading.BoundedSemaphore(계산동시)
+요청동시 = int(os.environ.get("OCR_REQUESTS", "3"))   # 무거운 요청(파일 정보 · 스캔 받기 · 셈) 수 — 넘으면 503(gunicorn 스레드 수보다 작게 · health · 정적 파일 몫을 남김)
+_요청자리 = threading.BoundedSemaphore(요청동시)
+
+
+def _무겁게(일, *a):
+    """무거운 요청 전체(받기 포함) — `요청동시` 를 넘으면 기다리지 않고 503."""
+    if not _요청자리.acquire(blocking=False):
+        raise 손님오류("서버가 다른 요청들을 처리하느라 바쁩니다 — 잠시 뒤에 다시", 503, {"상태": "붐빔"})
+    try:
+        return 일(*a)
+    finally:
+        _요청자리.release()
 
 
 @contextmanager
@@ -137,9 +152,11 @@ def 단바꾸기(s, 단):
     try:
         if isinstance(단, bool) or not isinstance(단, (str, int, float)):
             raise ValueError
+        if isinstance(단, float) and not 단.is_integer():       # 1.9 를 1단으로 버리지 않게(inf · nan 도)
+            raise ValueError
         n = int(단)
     except (TypeError, ValueError, OverflowError):
-        raise 손님오류("tiers(몇 단)는 숫자나 auto 여야 합니다")
+        raise 손님오류("tiers(몇 단)는 정수나 auto 여야 합니다")
     if not 1 <= n <= 6:
         raise 손님오류("tiers(몇 단)는 1~6 사이여야 합니다")
     s = dict(s)
@@ -353,17 +370,19 @@ def 진단정보(파일, 쪽, 경로, 결과):
 r_정리 = threading.Lock()
 _정리때 = [0.0]                           # 캐시 폴더를 마지막으로 훑은 때
 _한장잠금 = threading.Lock()
-_그림들 = OrderedDict()                   # (파일, 쪽) → (PIL 회색 그림, numpy) — 최근 6쪽
+_그림들 = OrderedDict()                   # 스캔 경로 → (PIL 회색 그림, numpy) — 최근 6쪽
 _그림잠금 = threading.Lock()
 
 
 def 그림(파일, 쪽):
-    열쇠 = (파일, 쪽)
+    """그 쪽 스캔. 늘 `스캔` 을 거쳐 경로로 찾음 — 같은 이름으로 새로 올린 파일(해시가 다름)은 다른 경로."""
+    열쇠 = 스캔(파일, 쪽)
     with _그림잠금:
         if 열쇠 in _그림들:
             _그림들.move_to_end(열쇠)
             return _그림들[열쇠]
-    im = Image.open(스캔(파일, 쪽)).convert("L")
+    with Image.open(열쇠) as 원:
+        im = 원.convert("L")
     v = (im, np.asarray(im))
     with _그림잠금:
         _그림들[열쇠] = v
@@ -373,7 +392,7 @@ def 그림(파일, 쪽):
 
 
 # ── 파일마다 처음 한 번 — 판형 · 자간비 · 판짜임 (`읽기.js` `판형살피기` 와 같은 셈) ─────
-판형판 = 6                               # 판정 규칙을 바꾸거나 새 모델로 읽기 자간이 달라지면 올림(기억한 값을 버림) — `읽기.js` `판형판` 과 같은 뜻
+판형판 = 7                               # 판정 규칙을 바꾸거나 새 모델로 읽기 자간이 달라지면 올림(기억한 값을 버림) — `읽기.js` `판형판` 과 같은 뜻
 판형기억꼴 = 2                            # 기억 파일의 꼴
 
 
@@ -509,6 +528,9 @@ def _살피기(파일):
                 고른, _ = page.읽기자간고르기(고를쪽, float(잰), 판형, _잠근모델(모델), 표준, 알림=읽었음)
                 if 고른 != float(잰):
                     값["읽기자간비"] = float(고른)
+            곁 = _곁글살피기([길[p] for p in 단쪽 if p in 길], 판형, 짜) if 곁글검출 else None
+            if 곁:
+                값["곁글"] = 곁
         with _살핌잠금:
             _살핀.pop(파일, None)                 # 새로 잰 것을 맨 뒤로
             _살핀[파일] = {"값": 값, "해시": 정보.get("해시") or "", "쓴날": _날()}
@@ -522,6 +544,56 @@ def _살피기(파일):
             오류들 = [k for k, v in _살핌일.items() if v.get("오류")]
             for k in 오류들[:-64]:               # 아무도 되묻지 않은 오류는 64개까지만
                 del _살핌일[k]
+
+
+def _곁글쪽자간(그림들, 판형):
+    vals = []
+    for q in 그림들:
+        try:
+            vals.append(scan.page_ratio(q, 단=판형))
+        except Exception:
+            vals.append(None)
+    return 곁글지움.곁글자간(vals)
+
+
+def _곁글살피기(단쪽그림, 판형, 짜):
+    """책의 고른 쪽에서 곁글 지운 넓이 몫(중앙값)이 `곁글지움.곁글문턱` 을 넘으면 {몫, 자간비(지운 쪽들로 · `곁글자간`)}
+    — 아니면 None(지운 그림도 치움). 옛 `자간비` · `읽기자간비` 는 그대로 둠(영역 지정 JS 가 씀)."""
+    if not 단쪽그림:
+        return None
+    지운 = []
+    for ip in 단쪽그림:
+        with 계산:
+            지운.append(곁글지움.지우기(곁글검출, ip))
+    몫 = float(np.median([m for _, m in 지운]))
+    if 몫 <= 곁글지움.곁글문턱:
+        for q, _ in 지운:
+            try:
+                os.remove(q)
+            except OSError:
+                pass
+        return None
+    그림 = [q for q, _ in 지운]
+    잰 = _곁글쪽자간(그림, 판형)
+    곁 = {"몫": round(몫, 4)}
+    if 잰:
+        곁["자간비"] = float(잰)
+    # ⚠ 읽기 자간 고르기는 안 함 — 지운 쪽에서는 너무 큰 값을 고름
+    return 곁
+
+
+def 곁글적용(s, ip):
+    """곁글 책이면 (지운 자간 설정, 지운 그림 경로) — 아니면 (s, ip) 그대로."""
+    곁 = s.get("곁글")
+    if not (곁 and 곁글검출 and 곁.get("자간비")):
+        return s, ip
+    q = 곁글지움.지운자리(ip)
+    if not os.path.exists(q):
+        with 계산:
+            q, _ = 곁글지움.지우기(곁글검출, ip)
+    s = dict(s, 자간비=곁["자간비"])
+    s.pop("읽기자간비", None)                # 곁글 책은 지운 쪽 자간비 그대로(`_곁글살피기`)
+    return s, q
 
 
 class _잠근모델:
@@ -666,6 +738,7 @@ def 읽기(파일, 쪽, 문턱=표시문턱, 모델이름=None, 단=None, 띄움
     단계 = {"준비": time.perf_counter() - 시작}
     t = time.perf_counter()
     ip = 스캔(파일, 쪽)
+    s, ip = 곁글적용(s, ip)
     단계["스캔"] = time.perf_counter() - t
     단 = s.get("단") or 1
     단 = tuple(단) if isinstance(단, list) else 단
@@ -702,6 +775,7 @@ def 맞대기(파일, 쪽, 본문, 모델이름=None, 단=None):
     단계 = {"준비": time.perf_counter() - 시작}
     t = time.perf_counter()
     ip = 스캔(파일, 쪽)
+    s, ip = 곁글적용(s, ip)
     단계["스캔"] = time.perf_counter() - t
     def 작업():
         r = 대조.한쪽(모델, None, ip, 본문, 설정=s)
@@ -731,8 +805,10 @@ def 영역자동읽기(파일, 쪽, 자간비=None, 모델이름=None, 너비확
     시작 = time.perf_counter()
     모델 = 모델얻기(모델이름)
     try:
+        if isinstance(자간비, bool):
+            raise ValueError
         r = float(자간비) if 자간비 is not None else scan.YX_RATIO
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):            # 10**400 같은 큰 정수도 400
         raise 손님오류("ratio(자간비)는 양수여야 합니다")
     if not np.isfinite(r) or not 자간비범위[0] <= r <= 자간비범위[1]:
         raise 손님오류(f"ratio(자간비)는 {자간비범위[0]}~{자간비범위[1]} 사이여야 합니다")
@@ -1067,21 +1143,21 @@ def app(env, start):
                     raise ValueError
             except (TypeError, ValueError, OverflowError):
                 raise 손님오류("threshold(확신 문턱)는 0~1 사이의 숫자여야 합니다")
-            return _응답(start, 읽기(파일, 쪽, 문턱, 몸.get("model"), 몸.get("tiers"), 몸.get("spacing") is not False))
+            return _응답(start, _무겁게(읽기, 파일, 쪽, 문턱, 몸.get("model"), 몸.get("tiers"), 몸.get("spacing") is not False))
         if 경로 == "/api/compare":
             본문 = 몸.get("text") if 몸.get("text") is not None else 몸.get("본문")
             if not isinstance(본문, str):
                 raise 손님오류("text(본문)가 없습니다")
             if len(본문) > 본문최대글자:
                 raise 손님오류(f"text(본문)가 너무 깁니다(최대 {본문최대글자:,}자)")
-            return _응답(start, 맞대기(파일, 쪽, 본문, 몸.get("model"), 몸.get("tiers")))
+            return _응답(start, _무겁게(맞대기, 파일, 쪽, 본문, 몸.get("model"), 몸.get("tiers")))
         if 경로 == "/api/boxes":
             상자 = 몸.get("boxes", [])
-            return _응답(start, 상자읽기(파일, 쪽, 상자, 몸.get("model")))
+            return _응답(start, _무겁게(상자읽기, 파일, 쪽, 상자, 몸.get("model")))
         if 경로 == "/api/area-read":
-            return _응답(start, 영역자동읽기(파일, 쪽, 몸.get("ratio"), 몸.get("model"), 몸.get("width"), 몸.get("height")))
+            return _응답(start, _무겁게(영역자동읽기, 파일, 쪽, 몸.get("ratio"), 몸.get("model"), 몸.get("width"), 몸.get("height")))
         if 경로 == "/api/edge":
-            return _응답(start, 경계읽기(파일, 쪽, 몸.get("x0"), 몸.get("x1")))
+            return _응답(start, _무겁게(경계읽기, 파일, 쪽, 몸.get("x0"), 몸.get("x1")))
         return _응답(start, {"오류": "없는 주소"}, 404)
     except 손님오류 as e:
         return _응답(start, dict({"오류": str(e)}, **e.덧), e.코드)

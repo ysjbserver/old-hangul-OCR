@@ -12,10 +12,14 @@ JOIN  = {"분주"}                       # {{분주|윗줄|아랫줄}} → 윗�
 FIRST = {"u", "du", "wu", "물결밑줄", "밑줄", "더크게", "더더크게", "더더더크게", "더더더더크게",   # 첫 인자 = 본문(서식만 입힘)
          "크게", "작게", "가운데", "복원", "SIC", "sc", "글자크기",
          "C", "Sic", "쌍밑줄", "할주", "*", "오른쪽", "세로쓰기", "머리글자 장식",
-         "드러냄표", "가늘게", "내어쓰기", "다크 모드 반전"}
+         "드러냄표", "가늘게", "내어쓰기", "다크 모드 반전",
+         "Suspect", "Reconstruct", "문자 주석", "Ruby",   # (11-16 틀 점검) 첫 인자가 보이는 글 — Ruby 는 {{ruby|본문|곁글}}
+         "윗주", "더 크게"}                                # {{윗주|본문|곁글}} — 곁글(작은 글)은 정답에서 뺌 · `더 크게` = `더크게`
 # 일부러 안 넣음(버림): `더작게` · `더더작게` · `?` · `앵커` · `분수` · 숫자 인자 틀
 FIRST_NOLATIN = {"오른쪽 띄우기"}           # 첫 인자 = 본문(열 아래에 붙여 찍힘) — 로마자가 들었으면 버림(가로로 찍힌 영문 곡명 등)
-SECOND = {"색상", "배경색상", "배경 색상"}   # {{색상|white|本義}} → 本義
+SECOND = {"색상", "배경색상", "배경 색상", "Color",   # {{색상|white|本義}} → 本義
+          "윗주2"}                                   # {{윗주2|곁글|본문}} — 틀:윗주2 = {{윗주|{{{2}}}|{{{1}}}}}
+VARIANT = {"이체자"}                       # (11-16) {{이체자|정자|이체}} → 이체(종이 꼴) · {{이체자|정자}}(부호 없는 이체) → 정자 — 위키 화면과 같음
 SPACED = {"자간"}                          # {{자간|2em|군|말}} → 군말 (둘째 · 셋째 인자)
 
 
@@ -32,7 +36,7 @@ def 남길인자(name, n, 첫=""):
     """틀 하나 → 남길 인자 번호 목록(인자 n 개 · 첫 = 첫 인자의 글). `대조._틀남길것` 도 이것을 씀."""
     if not _표:                        # 처음 부를 때 이름을 맞춰 둠(표를 고치면 `_표.clear()`)
         for 이름, 표 in (("DROP", DROP), ("LAST", LAST), ("JOIN", JOIN), ("FIRST", FIRST),
-                       ("SECOND", SECOND), ("SPACED", SPACED), ("FIRST_NOLATIN", FIRST_NOLATIN)):
+                       ("SECOND", SECOND), ("SPACED", SPACED), ("FIRST_NOLATIN", FIRST_NOLATIN), ("VARIANT", VARIANT)):
             _표[이름] = {틀이름(x) for x in 표}
     k = 틀이름(name)
     if k in _표["DROP"] or k.startswith("왼쪽 여백/"):
@@ -43,11 +47,53 @@ def 남길인자(name, n, 첫=""):
     if k in _표["FIRST_NOLATIN"]: return [0] if n and not re.search(r'[A-Za-z]', 첫) else []
     if k in _표["SECOND"]: return [1] if n > 1 else []
     if k in _표["SPACED"]: return list(range(1, min(n, 3)))
+    if k in _표["VARIANT"]: return [1] if n > 1 else ([0] if n else [])
     return []                          # 모르는 틀은 서식·주석으로 보고 버린다
 
 
 def _template(name, args):
     return "".join(args[i] for i in 남길인자(name, len(args), args[0] if args else ""))
+
+
+주석 = re.compile(r'<!--.*?(?:-->|\Z)', re.S)          # HTML 주석(닫히지 않으면 끝까지) — 틀 · 태그보다 먼저 걷음
+_번호인자 = re.compile(r'\s*(\d+)\s*=')
+_이름인자 = re.compile(r'^\s*[A-Za-z-]+\s*=')
+번호인자최대 = 50
+
+
+def 틀조각(s):
+    """틀 안 글 `이름|인자|…` → [(시작, 끝), …](첫 조각 = 이름). `[[링크|표시]]` 안의 `|` 는 가르지 않음. `대조.인쇄글자` 도 씀."""
+    out, a, 깊, i = [], 0, 0, 0
+    while i < len(s):
+        if s.startswith("[[", i):
+            깊 += 1; i += 2; continue
+        if 깊 and s.startswith("]]", i):
+            깊 -= 1; i += 2; continue
+        if s[i] == "|" and not 깊:
+            out.append((a, i)); a = i + 1
+        i += 1
+    out.append((a, len(s)))
+    return out
+
+
+def 틀인자(s, 조각):
+    """인자 조각 → 1, 2, … 차례의 인자 구간. `이름=` 은 버림 · `1=` `2=` 는 그 번호 자리(앞뒤 빈칸 뺌 · 뒤가 이김) · 빈 번호는 빈 구간."""
+    자리, n = {}, 0
+    for a, b in 조각:
+        m = _번호인자.match(s, a, b)
+        if m:
+            k = int(m.group(1))
+            if 1 <= k <= 번호인자최대:
+                v, e = m.end(), b
+                while v < e and s[v].isspace():
+                    v += 1
+                while e > v and s[e - 1].isspace():
+                    e -= 1
+                자리[k] = (v, e)
+        elif not _이름인자.match(s[a:b]):
+            n += 1
+            자리[n] = (a, b)
+    return [자리.get(k, (0, 0)) for k in range(1, max(자리) + 1)] if 자리 else []
 
 
 # 표 문법 `{| … |}` — 칸 글자는 남기고 표시 · 속성만 걷음. 쪽에 `{|` 가 있을 때만.
@@ -96,6 +142,7 @@ def printed_text(t, keep_headings=False):
     keep_headings: `== 제목 ==` 을 살릴지(문헌 설정 `corpus.heading_printed`).
     ⚠ `대조.인쇄글자` 에 같은 정규식 — 고치면 둘 다.
     """
+    t = 주석.sub('', t)
     표 = 표있나(t)
     t = re.sub(r'<noinclude>.*?</noinclude>', '', t, flags=re.S)
     t = 띄우기줄.sub(lambda m: m.group(2) + m.group(1), t)
@@ -103,14 +150,16 @@ def printed_text(t, keep_headings=False):
         m = re.search(r'\{\{([^{}]*)\}\}', t)
         if not m:
             break
-        parts = m.group(1).split("|")
-        args = [a for a in parts[1:] if not re.match(r'^\s*[A-Za-z-]+\s*=', a)]
-        t = t[:m.start()] + _template(parts[0], args) + t[m.end():]
+        s = m.group(1)
+        조각 = 틀조각(s)
+        args = [s[a:b] for a, b in 틀인자(s, 조각[1:])]
+        t = t[:m.start()] + _template(s[조각[0][0]:조각[0][1]], args) + t[m.end():]
     t = re.sub(r'^\s*=+\s*(.*?)\s*=+\s*$', (r'\1' if keep_headings else ''),
                t, flags=re.M)                            # 편·장 제목
     t = re.sub(r'^[ \t]*:+', '', t, flags=re.M)         # 줄 머리 `:` = 위키 들여쓰기
     t = re.sub(r'^[ \t]*-{4,}', '', t, flags=re.M)      # 줄 머리 `----` = 가로줄
     t = re.sub(r"'{2,}", '', t)                          # `''기울임''` · `'''굵게'''`
+    t = re.sub(r'\[\[\s*(?:File|Image|파일|그림)\s*:[^\]]*\]\]', '', t, flags=re.I)        # 그림 링크 — 통째로(11-16)
     t = re.sub(r'\[\[[^|\]]*\|([^\]]*)\]\]', r'\1', t)
     t = re.sub(r'\[\[([^\]]*)\]\]', r'\1', t)
     nt, p = [], 0                                        # 표 문법 (위 `표구간`)
@@ -118,6 +167,7 @@ def printed_text(t, keep_headings=False):
         nt.append(t[p:a]); nt.extend(t[x:y] for x, y in 남길); p = b
     t = "".join(nt) + t[p:]
     t = re.sub(r'<[^>]+>', '', t)
+    t = re.sub(r'&(?:#\d+|#x[0-9a-fA-F]+|[A-Za-z]+);', '', t)          # HTML 개체(&bull; · &nbsp; …) — 뺌(11-16)
     return re.sub(r'[\s​]+', '', t)
 
 

@@ -96,7 +96,7 @@ kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font-si
     <option value="글자">글자 하나</option>
     <option value="영역">여러 열</option>
   </select></label>
-  <label title="비우면 모델이 칸수를 고릅니다">글자 수 <input id="nIn" type="number" min="1" style="width:56px" placeholder="자동"></label>
+  <label title="비우면 모델이 칸수를 고릅니다">글자 수 <input id="nIn" type="number" min="1" max="1000" step="1" style="width:56px" placeholder="자동"></label>
   <label title="세로 글자 간격 ÷ 열 간격 — 불러올 때 쪽에서 잼">자간비 <input id="ratioIn" type="number" step="0.001" min="0.3" max="2" style="width:72px"></label>
   <button id="autoBtn" disabled>쪽 전체 자동 읽기</button>
   <button id="zoomOut" title="축소 (스캔 위에서 휠을 아래로)">－</button><button id="zoomFit" title="쪽 전체가 보이게">맞춤</button><button id="zoomIn" title="확대 (스캔 위에서 휠을 위로)">＋</button>
@@ -449,6 +449,9 @@ async function 불러오기() {
     if (세대 !== 쪽세대) return;
     const url = await 스캔주소(p.host, p.file, page);
     if (세대 !== 쪽세대) return;
+    // 서버는 파일을 한국어 위키문헌(→ 공용)에서 찾음 — 다른 위키의 자체 파일이면 화면과 다른 스캔을 읽게 되므로 막음
+    if (서버 && p.host !== "ko.wikisource.org" && !/^https:\/\/(upload|thumb)\.wikimedia\.org\/wikipedia\/commons\//.test(url))
+      throw new Error("서버 모드는 위키미디어 공용 · 한국어 위키문헌의 파일만 읽습니다(이 파일은 " + p.host + " 에만 있음)");
     재기("스캔 주소(API)");
     기록.push(["스캔", url]);
     const im = await 그림받기(url);
@@ -692,7 +695,10 @@ $("markIn").onchange = 그리기목록;
 $("showText").onchange = 다시그리기;
 
 function 지우기(id) { st.조각 = st.조각.filter(p => p.id !== id); if (st.고름 === id) st.고름 = null; 그리기목록(); 다시그리기(); }
-$("clearBtn").onclick = () => { st.조각 = []; st.고름 = null; 그리기목록(); 다시그리기(); };
+$("clearBtn").onclick = () => {
+  if (바쁨) { 알림("읽는 중에는 지울 수 없습니다 — 끝난 뒤에 다시", true); return; }   // 늦게 온 결과 · 되돌릴 옛 조각이 되살아나지 않게
+  st.조각 = []; st.고름 = null; 그리기목록(); 다시그리기();
+};
 $("copyBtn").onclick = async () => {
   try { await navigator.clipboard.writeText($("out").value); 알림("복사했습니다"); }
   catch (e) { $("out").select(); document.execCommand("copy"); 알림("복사했습니다"); }
@@ -729,9 +735,11 @@ function 누른자리고르기(pt) {
 }
 
 function 방식() { return document.querySelector("#modeSel").value; }
+const 글자수최대 = 1000, 칸최소높이 = 4;   // 한 열 칸수 — 정수 아니거나 넘으면 '자동'(열 읽기는 `상자읽기` 가 알림) · 칸 하나는 4px 이상
 function 옵션() {
-  const r = +$("ratioIn").value;
-  return { 자간비: r >= 0.3 && r <= 2 ? r : st.자간비, 열간격: st.열간격, 열들: st.열들, 글자수: +$("nIn").value || null };
+  const r = +$("ratioIn").value, n = +$("nIn").value;
+  return { 자간비: r >= 0.3 && r <= 2 ? r : st.자간비, 열간격: st.열간격, 열들: st.열들,
+           글자수: Number.isInteger(n) && n >= 1 && n <= 글자수최대 ? n : null };
 }
 
 let 바쁨 = false;
@@ -747,6 +755,10 @@ async function 상자읽기(상자) {
     때["모델 준비"] = performance.now() - 처음;
     const m = 방식(), o = 옵션();
     동작 = 방식이름[m] || m;
+    if (m !== "글자" && $("nIn").value.trim() && !o.글자수) throw new Error("글자 수는 1~" + 글자수최대 + " 사이의 정수여야 합니다");
+    const 높이최대 = Math.max(1, Math.floor((상자[3] - 상자[1]) / 칸최소높이));
+    if (m !== "글자" && o.글자수 > 높이최대)
+      throw new Error("이 상자 높이(" + Math.round(상자[3] - 상자[1]) + "px)에는 글자 수를 " + 높이최대 + "까지 줄 수 있습니다(칸 하나 " + 칸최소높이 + "px 이상)");
     줄.push(["옵션", "자간비 " + o.자간비.toFixed(3) + (Math.abs(o.자간비 - st.자간비) > 5e-4 ? "(손으로 고침 — 쪽 값 " + st.자간비.toFixed(3) + ")" : "")
                     + " · 글자 수 " + (o.글자수 || "자동")]);
     앞 = st.조각.length;
@@ -852,7 +864,8 @@ function 열넣기(r, 상자, 방식) {
 async function 칸바꾸기(p, d) {
   if (바쁨 || !st.g || !st.조각.includes(p)) return;
   const 세대 = 쪽세대;
-  const n = Math.max(1, (p.칸수 || p.글자.length) + d);
+  const 높이 = p.원상자 ? p.원상자[3] - p.원상자[1] : Infinity;
+  const n = Math.max(1, Math.min(글자수최대, Math.floor(높이 / 칸최소높이), (p.칸수 || p.글자.length) + d));
   바쁨 = true;
   const 언제 = new Date(), 처음 = performance.now(), 때 = {}, 줄 = [["칸수", (p.칸수 || p.글자.length) + " → " + n]];
   try {
@@ -888,9 +901,10 @@ function 글자끼우기(r) {
       const cx = (s[0] + s[2]) / 2, cy = (s[1] + s[3]) / 2;
       if (cx >= b[0] && cx < b[2] && cy >= b[1] && cy < b[3]) 안.push(i);
     });
-    if (안.length) {
-      const i = 안[0], k = 안.length;
-      p.글자.splice(i, k, r.글자[0]); p.확신.splice(i, k, r.확신[0]); p.상자.splice(i, k, b);
+    if (안.length) {                    // 든 칸이 붙어 있지 않을 수 있음(분주 — 오른줄 다음 왼줄) — 든 것만 뒤에서부터 뺌
+      for (let k = 안.length - 1; k > 0; k--) { const j = 안[k]; p.글자.splice(j, 1); p.확신.splice(j, 1); p.상자.splice(j, 1); }
+      const i = 안[0];
+      p.글자[i] = r.글자[0]; p.확신[i] = r.확신[0]; p.상자[i] = b;
       p.범위 = 범위(p.상자); st.고름 = p.id;
       return;
     }
@@ -904,6 +918,18 @@ function 글자끼우기(r) {
     return;
   }
   조각더하기("글자", r, b);
+}
+
+/** 자동 열 하나 — 손으로 읽은 조각(같은 열 · 그 높이)에 든 글자는 빼고, 끊긴 곳에서 나눠 넣음 */
+function 자동넣기(z, 손) {
+  const 덮임 = s => { const cy = (s[1] + s[3]) / 2; return 손.some(p => 같은열(p.범위, s) && cy >= p.범위[1] && cy < p.범위[3]); };
+  let 덩 = [];
+  const 내기 = () => {
+    if (덩.length) 조각더하기("자동", { 글자: 덩.map(i => z.글자[i]), 확신: 덩.map(i => z.확신[i]), 상자: 덩.map(i => z.상자[i]) }, null);
+    덩 = [];
+  };
+  z.상자.forEach((s, i) => { if (덮임(s)) 내기(); else 덩.push(i); });
+  내기();
 }
 
 // ── 쪽 전체 자동 읽기 ─────────────────────────────────────────────────
@@ -941,7 +967,8 @@ $("autoBtn").onclick = async () => {
     줄.push(...읽은줄(열들));
     앞 = st.조각.length;
     st.조각 = st.조각.filter(p => p.방식 !== "자동");
-    열들.forEach(z => 조각더하기("자동", z, null));
+    const 손 = st.조각.slice();          // 손으로 읽은 조각 — 그 자리는 새 자동 결과로 겹치지 않게
+    열들.forEach(z => 자동넣기(z, 손));
     st.고름 = null;
     $("keepIn").checked = true;    // 새 상자가 자동 결과를 지우지 않게
     그리기목록(); 다시그리기();
