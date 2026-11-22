@@ -579,6 +579,7 @@ function 광곽한열(g, x0, x1, 한쪽) {
  * `scan._frame_read` — 광곽 안쪽 위·아래를 열들의 합의로 찾기 (여러 열을 가로지르는 것은 광곽뿐)
  * ⚠ 읽을 때만 — 자를 때 쓰면 학습이 망가짐
  */
+let FRAME_READ_SPAN = null;   // scan.FRAME_READ_SPAN — 설정 `광곽무리폭`(없으면 끔)
 function 광곽합의(g, cols, fill, agree) {
   if (fill === undefined) fill = 0.90;
   if (agree === undefined) agree = 0.30;
@@ -597,9 +598,21 @@ function 광곽합의(g, cols, fill, agree) {
   const 쓸 = 줄.filter(function (r) {          // 스캔 가장자리의 검은 띠 제외
     return r[0] > H * 0.01 && r[1] < H * 0.99;
   });
-  const 위 = 쓸.filter(function (r) { return r[1] < H * 0.30; });
-  const 아래 = 쓸.filter(function (r) { return r[0] > H * 0.70; });
+  let 위 = 쓸.filter(function (r) { return r[1] < H * 0.30; });
+  let 아래 = 쓸.filter(function (r) { return r[0] > H * 0.70; });
   if (!위.length || !아래.length) return null;
+  if (FRAME_READ_SPAN) {                       // 글자 무리 폭을 넘게 찬 줄만(글자 가로획 거름) — 없으면 옛 줄
+    let a = Infinity, b = -Infinity;
+    for (let i = 0; i < cols.length; i++) { a = Math.min(a, cols[i][0]); b = Math.max(b, cols[i][1]); }
+    const p = 열잉크(g, a, b);
+    const 찬 = function (r) {
+      let m = 0;
+      for (let y = r[0]; y <= r[1]; y++) m = Math.max(m, p[y] / (b - a));
+      return m >= FRAME_READ_SPAN;
+    };
+    위 = 위.filter(찬).length ? 위.filter(찬) : 위;
+    아래 = 아래.filter(찬).length ? 아래.filter(찬) : 아래;
+  }
   const T = 위[위.length - 1][1] + 4;          // 가장 안쪽 줄의 안쪽
   const B = 아래[0][0] - 4;
   return (B - T > H * 0.4) ? [T, B] : null;
@@ -2471,6 +2484,7 @@ async function 열마다읽기(모델, geo, span) {
   if (HEADING) await 큰제목읽기(모델, geo, 열들, span);
   if (BUNJU) await 분주읽기(모델, geo, 열들);
   if (LONG_SPLIT) await 긴칸가르기(모델, geo, 열들);
+  if (END_DROP) 끝칸떼기(열들);
   return { 열들: 열들, 상자수: 상자수 };
 }
 
@@ -2759,6 +2773,21 @@ async function 줄읽기(모델, geo, x0, x1, y0, y1) {
  * 열들을 제자리에서 고침 · 점수 · 칸수는 그대로
  */
 let TAIL_EXTEND = null;   // align.TAIL_EXTEND [빈줄, 거리, 최대, 확신, 백분위] — 설정 `끝잇기`(없으면 끔)
+let END_DROP = null;   // align.END_DROP [문턱, 글자들] — 설정 `끝칸뺌`(없으면 끔)
+/** `align.끝칸떼기` — 열 첫 · 끝 칸이 확신 < 문턱이고 글자들 중 하나면 뺌(앞 · 뒤 두 번까지). 열들을 제자리에서 고침 */
+function 끝칸떼기(열들) {
+  const 문턱 = END_DROP[0], 글자들 = END_DROP[1];
+  for (let i = 0; i < 열들.length; i++) {
+    const o = 열들[i];
+    if (o === null) continue;
+    const 글 = o.글자.slice(), 확 = o.확신.slice(), 상 = o.상자.slice();
+    for (let k = 0; k < 2; k++) {
+      if (글.length > 1 && 확[확.length - 1] < 문턱 && 글자들.indexOf(글[글.length - 1]) >= 0) { 글.pop(); 확.pop(); 상.pop(); }
+      if (글.length > 1 && 확[0] < 문턱 && 글자들.indexOf(글[0]) >= 0) { 글.shift(); 확.shift(); 상.shift(); }
+    }
+    열들[i] = { 점수: o.점수, 글자: 글, 확신: 확, 칸수: o.칸수, 상자: 상 };
+  }
+}
 let LONG_SPLIT = null;   // align.LONG_SPLIT [높이, 확신, 자간몫, 시작, 끝, 끝높이, 끝확신] — 설정 `긴칸가르기`(없으면 끔)
 const LONG_SPLIT_NO = ["ㅣ", "○", "ㅅ", "々", ",", "."];   // align.LONG_SPLIT_NO — 이 글자는 안 가름
 /** `align.긴칸가르기` — 유난히 긴 칸을 가장 옅은 줄에서 갈라 읽어 두 쪽 다 자신 있으면 두 글자로. 열들을 제자리에서 고침 */
@@ -3300,6 +3329,7 @@ const API = {
     글자구간: 글자구간, 단봉우리: 단봉우리, 단가름: 단가름,
     고랑곡선: 고랑곡선, 줄덩이: 줄덩이, 가름판기하: 가름판기하,
     자를후보: 자를후보, 열가르기: 열가르기, 오리기: 오리기,
+    끝칸떼기: 끝칸떼기,
   },
   그림만들기: 그림만들기,
   그림읽기: 그림읽기,
@@ -3378,6 +3408,8 @@ const API = {
     TAIL_LINE = s.꼬리선토막 || null;
     HEAD_DROP = s.머리떼기 || null;
     LONG_SPLIT = s.긴칸가르기 || null;
+    END_DROP = s.끝칸뺌 || null;
+    FRAME_READ_SPAN = s.광곽무리폭 || null;
     TAIL_EXTEND = s.끝잇기 || null;
     if (s.끝열보호 !== undefined) {
       EDGE_MEDIAN = s.끝열보호 ? s.끝열보호[0] : null;

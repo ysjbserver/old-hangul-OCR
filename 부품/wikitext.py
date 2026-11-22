@@ -56,6 +56,7 @@ def _template(name, args):
 
 
 주석 = re.compile(r'<!--.*?(?:-->|\Z)', re.S)          # HTML 주석(닫히지 않으면 끝까지) — 틀 · 태그보다 먼저 걷음
+각주 = re.compile(r'<ref\b[^>]*?/>|<ref\b[^>]*>.*?</ref\s*>', re.S | re.I)   # <ref>편집자 각주</ref> — 안쪽 글째 뺌(종이에 없음)
 _번호인자 = re.compile(r'\s*(\d+)\s*=')
 _이름인자 = re.compile(r'^\s*[A-Za-z-]+\s*=')
 번호인자최대 = 50
@@ -143,6 +144,7 @@ def printed_text(t, keep_headings=False):
     ⚠ `대조.인쇄글자` 에 같은 정규식 — 고치면 둘 다.
     """
     t = 주석.sub('', t)
+    t = 각주.sub('', t)
     표 = 표있나(t)
     t = re.sub(r'<noinclude>.*?</noinclude>', '', t, flags=re.S)
     t = 띄우기줄.sub(lambda m: m.group(2) + m.group(1), t)

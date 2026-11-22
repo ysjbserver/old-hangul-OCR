@@ -602,6 +602,11 @@ def _고랑찬몫(g, 순, c, y0, y1):
     return 몫
 
 
+# (읽을 때만) `_frame_read` 가 모은 광곽 후보 줄 중 첫 열 ~ 끝 열 폭의 이 몫 넘게 찬 줄만 씀(좁은 열을 채운 글자 가로획을 광곽으로 잡지 않게).
+#   넘는 줄이 없으면 옛 줄 그대로. None = 끔. JS 짝 `광곽합의` · 설정 `광곽무리폭`
+FRAME_READ_SPAN = 0.4
+
+
 def _frame_read(g, cols, fill=0.90, agree=0.30):
     """
     광곽(테두리) 안쪽 위·아래를 '열들의 합의'로 찾는다. 못 찾으면 None. 읽을 때만(`page_frame(읽기=True)`).
@@ -623,6 +628,11 @@ def _frame_read(g, cols, fill=0.90, agree=0.30):
     아래 = [r for r in 줄 if r[0] > H * 0.70]
     if not 위 or not 아래:
         return None
+    if FRAME_READ_SPAN:                            # 글자 무리 폭을 넘게 찬 줄만(글자 가로획 거름) — 없으면 옛 줄
+        a, b = int(min(c[0] for c in cols)), int(max(c[1] for c in cols))
+        찬 = lambda r: float((g[r[0]:r[1] + 1, a:b] < INK).mean(axis=1).max()) >= FRAME_READ_SPAN
+        위 = [r for r in 위 if 찬(r)] or 위
+        아래 = [r for r in 아래 if 찬(r)] or 아래
     T, B = 위[-1][1] + 4, 아래[0][0] - 4            # 가장 안쪽 줄의 안쪽
     return (T, B) if B - T > H * 0.4 else None
 

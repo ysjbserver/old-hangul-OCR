@@ -159,6 +159,7 @@ def 인쇄글자(raw, keep_headings=False, 큰빼기=False):
     t, pos = raw, list(range(len(raw)))
     오식 = set()
     t, pos = _바꾸기(t, pos, wikitext.주석.finditer(t), lambda m: [])
+    t, pos = _바꾸기(t, pos, wikitext.각주.finditer(t), lambda m: [])
     표 = wikitext.표있나(t)
     t, pos = _바꾸기(t, pos, re.finditer(r'<noinclude>.*?</noinclude>', t, flags=re.S), lambda m: [])
     t, pos = _바꾸기(t, pos, wikitext.띄우기줄.finditer(t), lambda m: [m.span(2), m.span(1)])   # 혼자 선 `오른쪽 띄우기` 를 다음 줄 뒤로
