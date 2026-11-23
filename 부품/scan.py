@@ -5,6 +5,7 @@
 여기서는 '몇 칸으로 자를지'를 정하지 않는다. 그것은 align.py 가 정한다.
 이 파일이 하는 일은 자를 자리의 후보를 만들어 주는 것까지다.
 """
+import contextlib
 import hashlib
 import os
 import threading
@@ -109,6 +110,20 @@ TAIL_LINE = (0.2, 2)
 # (같은 때) 쪽 머리 제목 글자 떼기 — 열 시작의 (몫) 넘게가 가운데값 ± (띠) 자간에 모였는데 어떤 열만 (위) 자간 넘게 위에서 시작하고,
 #   그 머리와 본문 사이에 (틈) 자간 넘는 빈 줄이 있으면 본문부터. (위, 틈, 띠, 몫) · None = 끔. JS 짝 `머리떼기` · 설정 `머리떼기`
 HEAD_DROP = (0.8, 0.7, 0.3, 0.6)
+_머리떼기끔 = threading.local()             # `머리떼기없이` — 이 스레드에서만 HEAD_DROP 을 끔
+
+
+@contextlib.contextmanager
+def 머리떼기없이():
+    """이 스레드의 기하 계산에서만 `HEAD_DROP` 을 끔(전역값은 그대로 — 서버는 여러 요청을 함께 셈). 대조 `책머리` 후보용."""
+    옛 = getattr(_머리떼기끔, "켬", False)
+    _머리떼기끔.켬 = True
+    try:
+        yield
+    finally:
+        _머리떼기끔.켬 = 옛
+
+
 # 읽을 때 광곽 높이를 열마다 따로 (_열광곽) — 기운·휜 광곽 대비
 FRAME_LOCAL = True
 FRAME_LOCAL_FILL = 0.6    # 열 + 안쪽 고랑 띠의 이만큼이 잉크인 줄을 광곽 가로줄로
@@ -1054,7 +1069,7 @@ def spans_between(prof, cols, T, B, pitch, 이어=False, 첫글자=False, 꼬리
         out = _첫글자잇기(prof, cols, out, Ts, pitch)
     if 첫글자 and 연한 is not None:
         out = _연한머리잇기(연한, cols, out, Ts, pitch)
-    if 꼬리선 and HEAD_DROP:
+    if 꼬리선 and HEAD_DROP and not getattr(_머리떼기끔, "켬", False):
         out = _머리떼기(prof, cols, out, pitch)
     return out
 

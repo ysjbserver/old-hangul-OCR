@@ -2788,22 +2788,24 @@ function 끝칸떼기(열들) {
     열들[i] = { 점수: o.점수, 글자: 글, 확신: 확, 칸수: o.칸수, 상자: 상 };
   }
 }
-let LONG_SPLIT = null;   // align.LONG_SPLIT [높이, 확신, 자간몫, 시작, 끝, 끝높이, 끝확신] — 설정 `긴칸가르기`(없으면 끔)
+let LONG_SPLIT = null;   // align.LONG_SPLIT [높이, 확신, 자간몫, 시작, 끝, 끝높이, 끝확신, 끝자간몫, 끝늘림, 첫반] — 설정 `긴칸가르기`(없으면 끔)
 const LONG_SPLIT_NO = ["ㅣ", "○", "ㅅ", "々", ",", "."];   // align.LONG_SPLIT_NO — 이 글자는 안 가름
 /** `align.긴칸가르기` — 유난히 긴 칸을 가장 옅은 줄에서 갈라 읽어 두 쪽 다 자신 있으면 두 글자로. 열들을 제자리에서 고침 */
 async function 긴칸가르기(모델, geo, 열들) {
   const 높이 = LONG_SPLIT[0], 확신 = LONG_SPLIT[1], 자간몫 = LONG_SPLIT[2], 시작 = LONG_SPLIT[3], 끝 = LONG_SPLIT[4];
   const 끝높이 = LONG_SPLIT.length > 5 ? LONG_SPLIT[5] : 높이, 끝확신 = LONG_SPLIT.length > 6 ? LONG_SPLIT[6] : 확신;
-  const g = 잉크판(geo);
+  const 끝자간몫 = LONG_SPLIT.length > 7 ? LONG_SPLIT[7] : 자간몫, 끝늘림 = LONG_SPLIT.length > 8 && !!LONG_SPLIT[8];
+  const 첫반 = LONG_SPLIT.length > 9 ? LONG_SPLIT[9] : 0;
+  const g = 잉크판(geo), H = g.높이;
   for (let i = 0; i < 열들.length; i++) {
     const o = 열들[i];
     if (o === null || o.상자.length < 3) continue;
     const hs = o.상자.map(function (b) { return b[3] - b[1]; });
     const mid = 중앙값(hs), sm = geo.sm[i];
-    const 시험 = [], 자리 = [];
+    const 시험 = [], 읽을 = [], 자리 = [];
     for (let k = 0; k < hs.length; k++) {
-      const 가 = k === 0 || k === hs.length - 1, hh = 가 ? 끝높이 : 높이, cc = 가 ? 끝확신 : 확신;
-      if (hs[k] < hh * mid || hs[k] < 자간몫 * geo.pitch || LONG_SPLIT_NO.indexOf(o.글자[k]) >= 0) continue;
+      const 가 = k === 0 || k === hs.length - 1, hh = 가 ? 끝높이 : 높이, cc = 가 ? 끝확신 : 확신, pp = 가 ? 끝자간몫 : 자간몫;
+      if (hs[k] < hh * mid || hs[k] < pp * geo.pitch || LONG_SPLIT_NO.indexOf(o.글자[k]) >= 0) continue;
       const b = o.상자[k], y0 = b[1], y1 = b[3];
       const a = 자름(y0 + 시작 * (y1 - y0)), e = 자름(y0 + 끝 * (y1 - y0));
       if (e - a < 2) continue;
@@ -2812,11 +2814,15 @@ async function 긴칸가르기(모델, geo, 열들) {
         const v = sm[yy], d = Math.abs(yy - (y0 + y1) / 2);
         if (v < 옅 || (v === 옅 && d < 멀)) { y = yy; 옅 = v; 멀 = d; }
       }
+      if (k === 0 && Math.min(y - y0, y1 - y) < 첫반 * mid) continue;
       시험.push([b[0], y0, b[2], y], [b[0], y, b[2], y1]);
+      if (가 && 끝늘림 && k === hs.length - 1) 읽을.push([b[0], y0, b[2], y], [b[0], y, b[2], Math.min(H, Math.trunc(Math.max(y1, y + mid)))]);   // 끝 칸 — 아래 반을 가운데 높이까지
+      else if (가 && 끝늘림) 읽을.push([b[0], Math.max(0, Math.trunc(Math.min(y0, y - mid))), b[2], y], [b[0], y, b[2], y1]);   // 첫 칸 — 위 반
+      else 읽을.push([b[0], y0, b[2], y], [b[0], y, b[2], y1]);
       자리.push([k, cc]);
     }
     if (!시험.length) continue;
-    const 읽 = await 모델.읽기(geo.그림, 맞춤상자(g, 시험, geo));
+    const 읽 = await 모델.읽기(geo.그림, 맞춤상자(g, 읽을, geo));
     const 글 = o.글자.slice(), 확 = o.확신.slice(), 상 = o.상자.slice();
     for (let q = 자리.length - 1; q >= 0; q--) {
       const k = 자리[q][0], cc = 자리[q][1], c1 = 읽.확신[2 * q], c2 = 읽.확신[2 * q + 1];

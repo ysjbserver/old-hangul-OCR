@@ -1057,7 +1057,11 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                         elif 판 == "끝맞춤":
                             본열[판] = 열끝맞춤기하(bestgeo)
                         elif 판 == "책머리":
-                            본열[판] = 책머리기하(본열.get("읽기자료") or 기하(slug, ip, True, 설정=설정))
+                            바탕 = None if scan.HEAD_DROP else 본열.get("읽기자료")
+                            if 바탕 is None:
+                                with scan.머리떼기없이():       # 책 이름이 열 구간에 남아 있어야 찾음
+                                    바탕 = 기하(slug, ip, True, 설정=설정)
+                            본열[판] = 책머리기하(바탕)
                         elif 판 == "조각열":
                             본열[판] = 조각열기하(본열.get("읽기자료") or 기하(slug, ip, True, 설정=설정))
                         else:

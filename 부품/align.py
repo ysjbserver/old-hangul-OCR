@@ -706,26 +706,33 @@ def 끝칸떼기(out):
 
 # (읽을 때만) 두 글자를 한 칸으로 합친 긴 칸 가르기 — 높이가 그 열 가운데 높이의 (높이) 배 · 자간의 (자간몫) 배 넘는 칸을
 #   칸의 (시작 ~ 끝) 몫 사이 잉크가 가장 옅은 줄에서 갈라 읽어, 두 쪽 다 확신이 (확신) 넘으면 두 글자로. `LONG_SPLIT_NO` 는 안 가름.
-#   열의 첫 · 끝 칸(광곽에 눌린 끝 글자)은 (끝높이, 끝확신) 으로 느슨하게.
-#   (높이, 확신, 자간몫, 시작, 끝, 끝높이, 끝확신) · None = 끔. JS 짝 `긴칸가르기` · 설정 `긴칸가르기`
-LONG_SPLIT = (1.3, 0.8, 1.15, 0.3, 0.7, 1.15, 0.75)
+#   열의 첫 · 끝 칸(광곽에 눌린 끝 글자 · 열 끝 두 글자)은 (끝높이, 끝확신, 끝자간몫) 으로 느슨하게, (끝늘림) 이면 바깥 쪽 반
+#   (끝 칸은 아래 · 첫 칸은 위)을 가운데 높이까지 늘려 읽음(칸 끝에 붙은 글자를 낮게 읽던 것 — 글자 상자는 늘리지 않은 반).
+#   첫 칸은 갈린 두 쪽이 다 가운데 높이의 (첫반) 배 넘을 때만(얇은 위쪽을 늘려 열 위 빈자리를 '스' 로 읽던 것).
+#   (높이, 확신, 자간몫, 시작, 끝, 끝높이, 끝확신, 끝자간몫, 끝늘림, 첫반) · None = 끔. JS 짝 `긴칸가르기` · 설정 `긴칸가르기`
+LONG_SPLIT = (1.3, 0.8, 1.15, 0.3, 0.7, 1.0, 0.8, 1.1, 1, 0.4)
 LONG_SPLIT_NO = ("ㅣ", "○", "ㅅ", "々", ",", ".")   # 원래 칸이나 갈라 읽은 한쪽이 이것이면 안 가름(부호 · 낱자모 — 광곽 줄 · 절 표시 · 떨어진 받침)
 
 
 def 긴칸가르기(mdl, geo, out):
     """열마다 유난히 긴 칸을 둘로 갈라 읽어 보고 두 쪽 다 자신 있으면 두 글자로 바꾼다 — `out` 을 제자리에서 고침(열 점수는 그대로)."""
-    높이, 확신, 자간몫, 시작, 끝, 끝높이, 끝확신 = LONG_SPLIT
+    높이, 확신, 자간몫, 시작, 끝, 끝높이, 끝확신 = LONG_SPLIT[:7]
+    끝자간몫 = LONG_SPLIT[7] if len(LONG_SPLIT) > 7 else 자간몫
+    끝늘림 = len(LONG_SPLIT) > 8 and LONG_SPLIT[8]
+    첫반 = LONG_SPLIT[9] if len(LONG_SPLIT) > 9 else 0
     g = 잉크판(geo)
+    H = g.shape[0]
     for i, o in enumerate(out):
         if o is None or len(o[4]) < 3:
             continue
         hs = [b[3] - b[1] for b in o[4]]
         mid = float(np.median(hs))
         sm = geo["sm"][i]
-        시험, 자리 = [], []
+        시험, 읽을, 자리 = [], [], []
         for k, h in enumerate(hs):
-            hh, cc = (끝높이, 끝확신) if k in (0, len(hs) - 1) else (높이, 확신)
-            if h < hh * mid or h < 자간몫 * geo["pitch"] or o[1][k] in LONG_SPLIT_NO:
+            가 = k in (0, len(hs) - 1)
+            hh, cc, pp = (끝높이, 끝확신, 끝자간몫) if 가 else (높이, 확신, 자간몫)
+            if h < hh * mid or h < pp * geo["pitch"] or o[1][k] in LONG_SPLIT_NO:
                 continue
             x0, y0, x1, y1 = o[4][k][:4]
             a, b = int(y0 + 시작 * (y1 - y0)), int(y0 + 끝 * (y1 - y0))
@@ -736,11 +743,19 @@ def 긴칸가르기(mdl, geo, out):
                 v = (float(sm[yy]), abs(yy - (y0 + y1) / 2))
                 if 최소 is None or v < 최소:
                     y, 최소 = yy, v
+            if k == 0 and min(y - y0, y1 - y) < 첫반 * mid:
+                continue
             시험 += [(x0, y0, x1, y), (x0, y, x1, y1)]
+            if 가 and 끝늘림 and k == len(hs) - 1:          # 끝 칸 — 아래 반을 가운데 높이까지
+                읽을 += [(x0, y0, x1, y), (x0, y, x1, min(H, int(max(y1, y + mid))))]
+            elif 가 and 끝늘림:                              # 첫 칸 — 위 반을 가운데 높이까지
+                읽을 += [(x0, max(0, int(min(y0, y - mid))), x1, y), (x0, y, x1, y1)]
+            else:
+                읽을 += [(x0, y0, x1, y), (x0, y, x1, y1)]
             자리.append((k, cc))
         if not 시험:
             continue
-        L, V, T, cf = mdl.read(geo["image"], _맞춤상자(g, 시험, geo))
+        L, V, T, cf = mdl.read(geo["image"], _맞춤상자(g, 읽을, geo))
         글, 확, 상 = list(o[1]), list(o[2]), list(o[4])
         for q in reversed(range(len(자리))):
             k, cc = 자리[q]
