@@ -43,6 +43,7 @@ TOP_MIN   = 0.80    # 모델 1순위의 확신(세 머리 중 가장 낮은 것)
 다시볼일치 = 0.9    # 자르는 기하로 이만큼 안 맞으면 읽는 기하로도 해 본다
 READ_RETRY = True    # 자르기 기하가 잘 맞아도 후보가 남으면 읽는 기하로도 한 번 — 열 끝 두 글자 칸의 한 글자 밀림
 BATCHIM_MOVE = True  # 나란히 다른 두 글자가 받침만 옆 음절로 옮긴 꼴(곳이↔고시 · 것보↔겁소)이면 낱글자 문턱으로
+덩이확신 = 0.90     # 나란히 다른 글자 덩이에서 낱글자 후보로 낼 모델 확신(자르기 실수 거르기)
 조각문턱 = 0.12     # "조각" 후보 — 열 간격이 표준에서 벗어난 쪽에서 간격이 표준의 이 몫 안인 다른 문턱으로 찾은 읽는 기하
                     #   (전사대조만 — 인식은 `scan.PITCH_NEAR` 0 그대로)
 쪽자간차이 = 0.02   # "쪽자간" 후보 — 이 쪽 그림으로 잰 자간비가 쓰던 값과 이만큼(몫) 넘게 다를 때만 해 본다
@@ -61,7 +62,9 @@ BATCHIM_MOVE = True  # 나란히 다른 두 글자가 받침만 옆 음절로 �
 # ── 모델 ─────────────────────────────────────────────────────────────
 def 모델폴더():
     """
-    쓸 모델 폴더 — `모델/` 과 `모델/_실험12백업/`(학습 중 사본)이 다르면 최근 채택 모델(`백업_*채택.pt`)과 같은 쪽, 아니면 `모델/`.
+    쓸 모델 폴더 — 학습이 `끝남` · `중단`(또는 상태 파일 없음)이면 `모델/`.
+    그 밖에 `모델/` 과 `모델/_실험12백업/`(학습 중 사본)이 다르면 최근 채택 모델(`백업_*채택.pt`)과 같은 쪽, 아니면 `모델/`.
+    ⚠ 남은 `_실험12백업` 은 옛 모델일 수 있음 — 학습 중이 아닐 때 고르면 안 됨.
     """
     import glob, hashlib
     import ocr                                   # torch 를 불러오므로 여기서만(Toolforge 서버는 안 부름)
@@ -69,6 +72,12 @@ def 모델폴더():
             if all(os.path.exists(os.path.join(d, f)) for f in (ocr.WEIGHTS, ocr.TABLE))]
     if len(있는) < 2:
         return 있는[0] if 있는 else None
+    try:
+        첫줄 = open(경로.학습상태, encoding="utf-8-sig").readline()
+    except OSError:
+        첫줄 = "상태: 끝"
+    if 첫줄.split(":", 1)[-1].strip() in ("끝남", "끝", "중단"):
+        return 있는[0]
     해시 = lambda p: hashlib.sha256(open(p, "rb").read()).hexdigest()
     h = {d: 해시(os.path.join(d, ocr.WEIGHTS)) for d in 있는}
     if h[있는[0]] == h[있는[1]]:
@@ -90,7 +99,7 @@ def 모델불러오기(장치=None):
     장치 = 장치 or ("cuda" if torch.cuda.is_available() else "cpu")
     with open(os.path.join(d, ocr.TABLE), encoding="utf-8") as f:
         v = json.load(f)
-    net = ocr.Net(len(v["초성"]), len(v["중성"]), len(v["종성"])).to(장치)
+    net = ocr.Net(len(v["초성"]), len(v["중성"]), len(v["종성"]), v.get("폭")).to(장치)
     net.load_state_dict(torch.load(os.path.join(d, ocr.WEIGHTS), map_location=장치))
     net.eval()
     m = ocr.Model(net, v["초성"], v["중성"], v["종성"], v["size"], 장치)
@@ -844,13 +853,13 @@ def 맞대기(mdl, geo, 글자들, span=3, 경계=False, 짝=None):
                 틈 = j + 1
             # 어디에도 안 맞는 상자 중 밀림 자리에서 먼 것만 낱글자로(두 글자가 한 칸에 든 자리는 사건 곁에 있다)
             for j in 덩이:
-                if 옮김[j] is None and all(abs(j - q) > 2 for q in 사건) and 바뀜인가(j, 0.2) and 확신[j] >= 0.95:
+                if 옮김[j] is None and all(abs(j - q) > 2 for q in 사건) and 바뀜인가(j, 0.2) and 확신[j] >= 덩이확신:
                     넣기("바뀜", j, np.log(읽음확률[j]) - np.log(max(전사확률[j], 1e-12)))
                     후보[-1]["붙음"] = True
         else:
             # 옮겨도 안 맞으면 하나하나 — 아주 자신 있게 다를 때만(오타가 붙어 있을 수도)
             for j in 덩이:
-                if 바뀜인가(j, 0.2) and 확신[j] >= 0.95:
+                if 바뀜인가(j, 0.2) and 확신[j] >= 덩이확신:
                     넣기("바뀜", j, np.log(읽음확률[j]) - np.log(max(전사확률[j], 1e-12)))
                     후보[-1]["붙음"] = True
         i = e + 1

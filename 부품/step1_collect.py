@@ -237,8 +237,8 @@ def adopt(pdf):
         f.write(pdf + "\n")
     print(f"\n완료 — '{pdf}' 로 정리했습니다.")
 
-def main():
-    args = sys.argv[1:]
+def main(args=None):
+    args = sys.argv[1:] if args is None else args
     if not args: print(__doc__); sys.exit(1)
     if args[0] == "--adopt":
         if len(args) < 2: print('사용법: python 근원/부품/step1_collect.py --adopt "<파일명>.pdf"'); sys.exit(1)

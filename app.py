@@ -409,6 +409,7 @@ def _판형기억자리():
 _살핀 = {}                               # 파일 → {값, 해시, 쓴날}
 _살핌일 = {}                              # 파일 → {진행, 오류}
 _살핌잠금 = threading.Lock()
+_살핌조회중 = set()
 _판형기억 = {"쓴때": 0.0, "바뀜": False}
 
 
@@ -627,41 +628,59 @@ def _살피기차례(파일):
             메모리돌려주기()
 
 
-def 살핌상태(파일, 다시=False):
-    """{상태: 끝, 값} · {상태: 진행, 진행} · {상태: 오류, 오류} · {상태: 바쁨}. 기억이 없거나 파일 해시가 바뀌었으면
-    뒤에서 살피기를 시작. 다시=True 면 기억이 있어도 새로 잼(재는 동안은 진행 · 실패하면 옛 기억 그대로)."""
-    해시 = None
+def _살핌다음(파일, 다시, 해시=None):
+    """`_살핌잠금` 안에서 기억한 판형을 내거나 살피기를 맡김."""
+    기억 = _살핀.get(파일)
+    if 기억 and not 다시 and not (해시 and 기억.get("해시") and 해시 != 기억["해시"]):
+        if 기억.get("쓴날") != _날():
+            기억["쓴날"] = _날()
+            _판형기억["바뀜"] = True
+        if _판형기억["바뀜"] and time.time() - _판형기억["쓴때"] >= 판형기억쓰기간격:
+            _판형기억쓰기()
+        return {"상태": "끝", "값": 기억["값"]}
+    if sum(1 for v in _살핌일.values() if not v.get("오류")) >= 살피기동시 + 살피기대기:
+        return {"상태": "바쁨", "진행": ""}
     if 다시:
         with _파일잠금:
             if 파일 in _파일정보:
-                _파일정보때[파일] = 0           # 다시 잴 때는 파일 정보 · 해시도 새로 물음
-    elif 파일 in _살핀:
-        try:
-            해시 = 파일정보(파일).get("해시")
-        except Exception:
-            pass                               # 못 물으면 기억한 값 그대로
+                _파일정보때[파일] = 0
+    _살핌일[파일] = {"진행": "차례 기다림"}
+    threading.Thread(target=_살피기차례, args=(파일,), daemon=True).start()
+    return {"상태": "진행", "진행": "차례 기다림"}
+
+
+def 살핌상태(파일, 다시=False, 조회요청=False):
+    """판형 상태를 돌려줌. `다시`면 새로 재고, `조회요청`이면 파일 정보 확인에 요청 자리를 잡음."""
     with _살핌잠금:
         일 = _살핌일.get(파일)
         if 일 and 일.get("오류") and (다시 or time.time() - 일.get("때", 0) >= 오류유지):
-            _살핌일.pop(파일, None)             # 오래된 오류 — 다시 해 봄
+            _살핌일.pop(파일, None)
             일 = None
         if 일:
             if 일.get("오류"):
                 return {"상태": "오류", "오류": 일["오류"]}
             return {"상태": "진행", "진행": 일["진행"]}
-        기억 = _살핀.get(파일)
-        if 기억 and not 다시 and not (해시 and 기억.get("해시") and 해시 != 기억["해시"]):
-            if 기억.get("쓴날") != _날():
-                기억["쓴날"] = _날()
-                _판형기억["바뀜"] = True
-            if _판형기억["바뀜"] and time.time() - _판형기억["쓴때"] >= 판형기억쓰기간격:
-                _판형기억쓰기()
-            return {"상태": "끝", "값": 기억["값"]}
-        if sum(1 for v in _살핌일.values() if not v.get("오류")) >= 살피기동시 + 살피기대기:
-            return {"상태": "바쁨", "진행": ""}
-        _살핌일[파일] = {"진행": "차례 기다림"}
-        threading.Thread(target=_살피기차례, args=(파일,), daemon=True).start()
-        return {"상태": "진행", "진행": "차례 기다림"}
+        if 파일 in _살핌조회중:
+            if 다시 or 조회요청:
+                return {"상태": "바쁨" if 다시 else "붐빔", "진행": ""}
+            raise 손님오류("이 파일의 정보를 확인하는 중입니다 — 잠시 뒤에 다시", 503, {"상태": "붐빔"})
+        if 다시 or 파일 not in _살핀:
+            return _살핌다음(파일, 다시)
+        if 조회요청 and not _요청자리.acquire(blocking=False):
+            return {"상태": "붐빔", "진행": ""}
+        _살핌조회중.add(파일)
+    try:
+        try:
+            해시 = 파일정보(파일).get("해시")
+        except Exception:
+            해시 = None
+        with _살핌잠금:
+            return _살핌다음(파일, 다시, 해시)
+    finally:
+        with _살핌잠금:
+            _살핌조회중.remove(파일)
+        if 조회요청:
+            _요청자리.release()
 
 
 def 살핀값(파일):
@@ -1121,8 +1140,8 @@ def app(env, start):
         q = {k: v[0] for k, v in urllib.parse.parse_qs(env.get("QUERY_STRING", "")).items()}
         if 경로 == "/api/inspect":
             파일, _ = _파일쪽(q)
-            s = 살핌상태(파일)
-            return _응답(start, s, 503 if s["상태"] == "바쁨" else 200)
+            s = 살핌상태(파일, 조회요청=True)
+            return _응답(start, s, 503 if s["상태"] in ("바쁨", "붐빔") else 200)
         if 경로 == "/api/tables":
             m = 모델얻기(q.get("model"))
             return _응답(start, dict(초성=m.Ls, 중성=m.Vs, 종성=m.Ts, 표=글자표지문(m)))

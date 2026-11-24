@@ -369,16 +369,17 @@ function 준비() {
 
 // ── 입력 해석 (css-image-crop 도구와 같은 규칙) ───────────────────────
 function 해석(raw) {
-  let s = raw.trim(), host = "ko.wikisource.org";
-  const m = s.match(/^https?:\/\/([^/]+)\/(.*)$/);
-  if (m) {
-    host = m[1];
-    let rest = m[2];
-    const t = rest.match(/[?&]title=([^&#]+)/);
-    rest = t ? t[1] : rest.replace(/^wiki\//, "").replace(/[?#].*$/, "");
-    s = rest;
+  let s = raw.trim(), host = "ko.wikisource.org", 제목 = null;
+  if (/^https?:\/\/[^/]+\//i.test(s)) {
+    try {
+      const url = new URL(s);
+      host = url.host;
+      제목 = url.searchParams.get("title");
+      s = url.pathname.replace(/^\/(?:wiki\/)?/, "");
+    } catch (e) {}
   }
-  try { s = decodeURIComponent(s.replace(/\+/g, " ")); } catch (e) {}
+  if (제목) s = 제목;
+  else { try { s = decodeURIComponent(s.replace(/%(?![0-9a-f]{2})/gi, "%25")); } catch (e) {} }
   s = s.replace(/_/g, " ").trim().replace(/^(페이지|Page|파일|File|색인|Index|Image|그림)\s*:\s*/i, "");
   let page = null;
   const pm = s.match(/^(.*\.(?:pdf|djvu|tiff?))\/(\d+)$/i);
@@ -485,9 +486,22 @@ async function 불러오기() {
                        + " · 자간비 " + (잰.자간비 ? 잰.자간비.toFixed(3) : "못 잼")]);
     let 파일자간 = false;
     if (서버 && st.file) {              // 서버가 파일을 살펴 고른 읽기 자간비가 있으면 그것을 씀
+      let 붐빔 = false;
       try {
-        const 살 = await (await fetch(서버 + "api/inspect?file=" + encodeURIComponent(st.file))).json();
-        if (세대 !== 쪽세대) return;
+        let 살;
+        const 주소 = 서버 + "api/inspect?file=" + encodeURIComponent(st.file);
+        for (let 번 = 0; ; 번++) {
+          const res = await fetch(주소);
+          살 = await res.json();
+          if (세대 !== 쪽세대) return;
+          붐빔 = res.status === 503 && 살?.상태 === "붐빔";
+          if (!붐빔) break;
+          $("stage").hidden = true; $("empty").hidden = false;
+          if (번 === 30) break;
+          알림("서버에서 파일 정보를 확인하는 중…");
+          await new Promise(r => setTimeout(r, 2000));
+          if (세대 !== 쪽세대) return;
+        }
         const v = 살 && 살.상태 === "끝" && 살.값;
         if (v && v.읽기자간비 > 0.2) { st.자간비 = v.읽기자간비; 파일자간 = true; }
         기록.push(["판형 살핀 값", v ? 판형글(v.단) + (v.자간비 ? " · 자간비 " + v.자간비.toFixed(3) : " · 자간비 없음(기본값)")
@@ -495,6 +509,12 @@ async function 불러오기() {
                                     + (v.판짜임 ? " · 판짜임 " + JSON.stringify(v.판짜임) : "")
                                  : "아직 없음 — " + ((살 && (살.상태 + (살.진행 ? " " + 살.진행 : ""))) || "?")]);
       } catch (e) { 기록.push(["판형 살핀 값", "못 받음 — " + (e.message || e)]); }   // 이 쪽에서 잰 값을 씀
+      if (세대 !== 쪽세대) return;
+      if (붐빔) {
+        st.g = null;
+        throw new Error("서버가 다른 요청을 처리하는 중입니다 — 잠시 뒤에 다시 불러오세요");
+      }
+      $("empty").hidden = true; $("stage").hidden = false;
       재기("판형 살피기(서버)");
     }
     기록.push(["쓰는 자간비", st.자간비.toFixed(3) + " (" + (파일자간 ? "파일에서 고른 읽기 자간" : 잰.자간비 ? "이 쪽에서 잰 값" : "못 재서 기본값") + ")"]);

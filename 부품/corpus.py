@@ -100,14 +100,14 @@ def mark_unusable(slug, page):
 # ── 교정 기록 ────────────────────────────────────────────────────────
 def _read_json(path, default, 엄격=False):
     """엄격=True 면 깨진 파일을 default 로 치지 않고 오류(고쳐 쓰다 기록을 지우지 않게)."""
-    if not os.path.exists(path):
-        return default
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
+    except FileNotFoundError:
+        return default
+    except Exception as e:
         if 엄격:
-            raise RuntimeError(f"{path} 를 읽지 못했습니다(깨진 JSON) — 덮어쓰지 않습니다. 파일을 살펴 고쳐 주세요.")
+            raise RuntimeError(f"{path} 를 읽지 못했습니다 — 파일을 살펴 고쳐 주세요.") from e
         return default
 
 
@@ -328,7 +328,12 @@ def held_out(slug=None):
     성능을 재려고 떼어 놓은 고정 표본 쪽 — 사람이 확인하면 안 된다.
     반환: slug 를 주면 그 문헌의 쪽 집합, 안 주면 "문헌_쪽" 전체 집합.
     """
-    d = _read_json(HELD, {})
+    d = _read_json(HELD, {}, 엄격=True)
+    if not isinstance(d, dict) or any(
+        not k.strip() or not isinstance(v, list) or any(not isinstance(p, str) or not p.strip() for p in v)
+        for k, v in d.items()
+    ):
+        raise RuntimeError(f"{HELD} 형식이 잘못되었습니다 — 문헌마다 쪽 번호 문자열 목록을 써 주세요.")
     if slug is None:
         return {f"{k}_{p}" for k, v in d.items() for p in v}
     return set(d.get(slug, []))
