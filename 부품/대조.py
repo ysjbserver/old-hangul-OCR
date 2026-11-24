@@ -41,6 +41,8 @@ P_TR_MAX  = 0.05    # 전사 글자의 모델 확률이 이보다 낮아야(모�
 TOP_MIN   = 0.80    # 모델 1순위의 확신(세 머리 중 가장 낮은 것)이 이보다 높아야
 일치문턱  = 0.75    # 쪽 전체에서 모델과 전사문이 이만큼 안 맞으면 '이 쪽은 맞대기가 흔들림' 으로 본다
 다시볼일치 = 0.9    # 자르는 기하로 이만큼 안 맞으면 읽는 기하로도 해 본다
+READ_RETRY = True    # 자르기 기하가 잘 맞아도 후보가 남으면 읽는 기하로도 한 번 — 열 끝 두 글자 칸의 한 글자 밀림
+BATCHIM_MOVE = True  # 나란히 다른 두 글자가 받침만 옆 음절로 옮긴 꼴(곳이↔고시 · 것보↔겁소)이면 낱글자 문턱으로
 조각문턱 = 0.12     # "조각" 후보 — 열 간격이 표준에서 벗어난 쪽에서 간격이 표준의 이 몫 안인 다른 문턱으로 찾은 읽는 기하
                     #   (전사대조만 — 인식은 `scan.PITCH_NEAR` 0 그대로)
 쪽자간차이 = 0.02   # "쪽자간" 후보 — 이 쪽 그림으로 잰 자간비가 쓰던 값과 이만큼(몫) 넘게 다를 때만 해 본다
@@ -659,6 +661,36 @@ def 읽기정렬짝(mdl, geo, 글자들):
 
 
 # ── 맞대기 ───────────────────────────────────────────────────────────
+def _자모차례(글):
+    """글자들의 자모를 읽는 차례로 — 초성 · 종성은 같은 이름의 자음으로, 소리 없는 초성 ㅇ 은 뺌."""
+    out = []
+    for ch in unicodedata.normalize("NFD", 글):
+        이름 = unicodedata.name(ch, "")
+        if 이름.startswith("HANGUL CHOSEONG "):
+            if 이름 not in ("HANGUL CHOSEONG IEUNG", "HANGUL CHOSEONG FILLER"):
+                out.append(("C", 이름[16:]))
+        elif 이름.startswith("HANGUL JONGSEONG "):
+            out.append(("C", 이름[17:]))
+        elif 이름.startswith("HANGUL JUNGSEONG "):
+            if 이름 != "HANGUL JUNGSEONG FILLER":
+                out.append(("V", 이름[17:]))
+        else:
+            return None
+    return out
+
+
+def 받침옮긴짝(전사, 스캔):
+    """두 글자 전사 ↔ 스캔이 받침만 옆 음절로 옮긴 꼴인가 — 자모 차례가 같거나, 이웃한 두 자음만 자리를 바꿈."""
+    a, b = _자모차례(전사), _자모차례(스캔)
+    if not a or not b or 전사 == 스캔 or len(a) != len(b):
+        return False
+    if a == b:
+        return True
+    다른 = [k for k in range(len(a)) if a[k] != b[k]]
+    return (len(다른) == 2 and 다른[1] == 다른[0] + 1 and a[다른[0]][0] == a[다른[1]][0] == "C"
+            and a[다른[0]] == b[다른[1]] and a[다른[1]] == b[다른[0]])
+
+
 def 맞대기(mdl, geo, 글자들, span=3, 경계=False, 짝=None):
     """
     글자들 = `인쇄글자` 의 결과. 반환:
@@ -774,6 +806,14 @@ def 맞대기(mdl, geo, 글자들, span=3, 경계=False, 짝=None):
         while e + 1 < n and 다름[e + 1]:
             e += 1
         덩이 = list(range(i, e + 1))
+        if (BATCHIM_MOVE and len(덩이) == 2 and assign[e] == assign[i] + 1 and 아는[i] and 아는[e]
+                and 받침옮긴짝(letters[assign[i]] + letters[assign[e]], 스캔[i] + 스캔[e])):
+            for j in 덩이:
+                if 바뀜인가(j):
+                    넣기("바뀜", j, np.log(읽음확률[j]) - np.log(max(전사확률[j], 1e-12)))
+                    후보[-1]["받침옮김"] = True
+            i = e + 1
+            continue
         if len(덩이) == 1:
             if 글자들[assign[i]][3]:
                 pass                              # {{SIC}} · {{복원}} 안 — 이미 표시됨
@@ -1021,7 +1061,8 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                     continue
                 if best and (best[0].get("일치") or 0) >= 다시볼일치:
                     남은열 = best[0].get("흔들린열") or best[0].get("뺀열")
-                    if not (남은열 and 판 in (True, "끝맞춤", *정렬판들)):
+                    다시 = READ_RETRY and 판 is True and best[0].get("후보")
+                    if not (남은열 and 판 in (True, "끝맞춤", *정렬판들)) and not 다시:
                         continue                      # 제외 열이 남으면 읽기 · 끝맞춤 · 읽기정렬로 복구
                 if 판 in ("쪽자간", "본문", "연한본문", "본문열", "조각열", "가장자리", "연한구간", "책머리", "연한", "연한가장자리", "끝맞춤",
                          "읽기정렬", "읽기정렬가장자리", "격자"):

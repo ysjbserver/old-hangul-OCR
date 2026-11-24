@@ -2485,6 +2485,7 @@ async function 열마다읽기(모델, geo, span) {
   if (BUNJU) await 분주읽기(모델, geo, 열들);
   if (LONG_SPLIT) await 긴칸가르기(모델, geo, 열들);
   if (END_DROP) 끝칸떼기(열들);
+  if (TAIL_LOW) 끝칸아래떼기(geo, 열들);
   return { 열들: 열들, 상자수: 상자수 };
 }
 
@@ -2650,7 +2651,7 @@ async function 큰제목읽기(모델, geo, 열들, span) {
   }
 }
 
-let BUNJU = true, BUNJU_GAIN = 0.3, BUNJU_CONF = 0.5, BUNJU_H = [0.45, 0.55, 0.7, 0.85, 1.0];   // align.BUNJU …
+let BUNJU = true, BUNJU_GAIN = 0.15, BUNJU_CONF = 0.5, BUNJU_H = [0.45, 0.55, 0.7, 0.85, 1.0];   // align.BUNJU …
 let BUNJU_MINC = 2, BUNJU_BAR = 0.25;                                                      // align.BUNJU_MINC · BUNJU_BAR
 let BUNJU_BAND = 0.25, BUNJU_WIDE = 1.25, BUNJU_MID = 0.3, BUNJU_GAP = 3, BUNJU_SIDE = 0.3, BUNJU_MIN = 0.6;   // scan.BUNJU_*
 
@@ -2786,6 +2787,23 @@ function 끝칸떼기(열들) {
       if (글.length > 1 && 확[0] < 문턱 && 글자들.indexOf(글[0]) >= 0) { 글.shift(); 확.shift(); 상.shift(); }
     }
     열들[i] = { 점수: o.점수, 글자: 글, 확신: 확, 칸수: o.칸수, 상자: 상 };
+  }
+}
+let TAIL_LOW = null;   // align.TAIL_LOW [자간, 문턱] — 설정 `끝칸아래뺌`(없으면 끔)
+/** `align.끝칸아래떼기` — 열 끝 칸이 열 끝들의 75백분위(numpy 선형)보다 자간 넘게 아래이고 확신 < 문턱이면 뺌(본문 밑 쪽 번호) */
+function 끝칸아래떼기(geo, 열들) {
+  const 자간 = TAIL_LOW[0], 문턱 = TAIL_LOW[1];
+  const 끝들 = [];
+  for (const o of 열들) if (o !== null && o.상자.length) 끝들.push(o.상자[o.상자.length - 1][3]);
+  if (끝들.length < 4) return;
+  끝들.sort(function (a, b) { return a - b; });
+  const 자리 = (끝들.length - 1) * 0.75, lo = Math.floor(자리), hi = Math.ceil(자리);
+  const 기준 = 끝들[lo] + (끝들[hi] - 끝들[lo]) * (자리 - lo);
+  for (let i = 0; i < 열들.length; i++) {
+    const o = 열들[i];
+    if (o === null || o.글자.length < 2) continue;
+    if (o.상자[o.상자.length - 1][3] - 기준 > 자간 * geo.pitch && o.확신[o.확신.length - 1] < 문턱)
+      열들[i] = { 점수: o.점수, 글자: o.글자.slice(0, -1), 확신: o.확신.slice(0, -1), 칸수: o.칸수, 상자: o.상자.slice(0, -1) };
   }
 }
 let LONG_SPLIT = null;   // align.LONG_SPLIT [높이, 확신, 자간몫, 시작, 끝, 끝높이, 끝확신, 끝자간몫, 끝늘림, 첫반] — 설정 `긴칸가르기`(없으면 끔)
@@ -3336,6 +3354,7 @@ const API = {
     고랑곡선: 고랑곡선, 줄덩이: 줄덩이, 가름판기하: 가름판기하,
     자를후보: 자를후보, 열가르기: 열가르기, 오리기: 오리기,
     끝칸떼기: 끝칸떼기,
+    끝칸아래떼기: 끝칸아래떼기,
   },
   그림만들기: 그림만들기,
   그림읽기: 그림읽기,
@@ -3415,6 +3434,7 @@ const API = {
     HEAD_DROP = s.머리떼기 || null;
     LONG_SPLIT = s.긴칸가르기 || null;
     END_DROP = s.끝칸뺌 || null;
+    TAIL_LOW = s.끝칸아래뺌 || null;
     FRAME_READ_SPAN = s.광곽무리폭 || null;
     TAIL_EXTEND = s.끝잇기 || null;
     if (s.끝열보호 !== undefined) {
