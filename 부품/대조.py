@@ -141,6 +141,7 @@ def _바꾸기(t, pos, 맞음들, 남길것):
     return "".join(nt), npos
 
 
+부호빼기 = True     # 일치가 모자라면 부호를 뺀 글자로도 맞대 봄(권점 · 괄호가 칸을 안 차지하는 판) — `_한번`
 큰틀 = {"크게", "더크게", "더더크게", "더더더크게", "더더더더크게"}   # 큰 활자 — `_한번` 이 '빼고 맞대기' 를 후보로 해 봄
 
 
@@ -216,8 +217,15 @@ def 인쇄글자(raw, keep_headings=False, 큰빼기=False):
 
 @functools.lru_cache(maxsize=8)
 def _인쇄글자(raw, keep_headings, 큰빼기):
-    """`인쇄글자` 의 결과를 기억(튜플) — 한 쪽을 맞대는 동안 같은 원문을 기하마다 다시 걷지 않게."""
+    """`인쇄글자` 의 결과를 기억(튜플) — 한 쪽을 맞대는 동안 같은 원문을 기하마다 다시 걷지 않게. 큰빼기="부호" 면 부호(`부호인가`)를 뺌."""
+    if 큰빼기 == "부호":
+        return tuple(g for g in 인쇄글자(raw, keep_headings, False) if not 부호인가(g[0]))
     return tuple(인쇄글자(raw, keep_headings, 큰빼기))
+
+
+def 부호인가(글):
+    """"부호 빼고" 맞대기에서 뺄 글자 — 유니코드 부호 · 기호(`( ) . , ｡ ○ 『 』` …). 숫자 · 로마자 · `々` 은 남김."""
+    return unicodedata.category(글[0])[0] in "PS"
 
 
 # ── 문헌 설정 · 기하 ─────────────────────────────────────────────────
@@ -477,7 +485,7 @@ def 본문열기하(geo):
                crop_cols=[(max(a, int((x0 + x1) / 2 - xpitch * 0.45)),
                            min(b, int((x0 + x1) / 2 + xpitch * 0.45))) for x0, x1 in cols],
                sm=[scan.smooth(p, max(2, pitch / 9)) for p in scan.ink_profile(g, cols)],
-               spans=[None] * len(cols), est=[0] * len(cols))
+               spans=[None] * len(cols), est=[0] * len(cols), 끝맞춤=None)
     out = 연한본문기하(out)
     if out is None or (out["cols"] == body["cols"] and out["spans"] == body["spans"]):
         return None
@@ -621,6 +629,24 @@ def 기하(slug, ip, 읽기=False, 끝띠=False, 판심=None, 설정=None, 조�
     if 아는문헌(slug):
         return page.geometry(slug, ip, 읽기=읽기, 가장자리=False, 끝띠=끝띠, 판심=판심, 조각=조각, 잉크=잉크)
     return scan.page_geometry(ip, scan.page_ratio(ip), 읽기=읽기, 가장자리=False, 끝띠=끝띠, 판심=판심, 조각=조각, 잉크=잉크)
+
+
+def 읽기경로기하(mdl, slug, ip, 설정=None):
+    """"읽기경로" 후보 — 인식(`/api/read` · `읽기.py`)과 같은 읽는 기하: 가장자리 후보 열 · 흐린 문턱 고르기(`align.잉크골라`)까지."""
+    if 설정:
+        단 = 설정.get("단") or 1
+        단 = tuple(단) if isinstance(단, list) else 단
+        r = 설정.get("읽기자간비") or 설정.get("자간비") or scan.page_ratio(ip, 단=단)
+        표준 = 설정["판짜임"]["자간"] if 설정.get("판짜임") and page.SCAN_PITCH else None
+        geo = scan.page_geometry(ip, r, 단, 읽기=True, 가장자리=True, 표준자간=표준)
+    elif 아는문헌(slug):
+        geo = page.geometry(slug, ip, 읽기=True)
+    else:
+        geo = scan.page_geometry(ip, scan.page_ratio(ip), 읽기=True, 가장자리=True)
+    if geo is None:
+        return None
+    geo, _ = align.잉크골라(geo, lambda g: align.read_page_lines(mdl, g, 3))
+    return geo
 
 
 # ── 읽기 정렬 — 읽는 경로가 고른 칸을 읽고 전사문과 편집 거리로 짝지음 ──
@@ -1042,8 +1068,10 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     "읽기정렬" · "읽기정렬가장자리" = 읽는 기하 · 가장자리 기하를 읽는 경로로 읽고 전사문과 편집 거리로 짝지음(`읽기정렬짝`) —
                글자 수를 열마다 박지 않아 빈 칸이 많은 판(절마다 새 열 · 양쪽 맞춤)도 맞댐. 맨 뒤.
     "격자" = 판짜임 열 간격으로 묶인 열을 가르고 빠진 열을 끼운 읽는 기하(`격자기하`)를 읽기 정렬로 — 열 찾기가 간격을 두세 배로 잡은 쪽. 맨 뒤.
+    "읽기경로" = 인식과 같은 읽는 기하(가장자리 · 흐린 문턱 고르기, `읽기경로기하`)를 읽기 정렬로. 맨 뒤.
     후보가 앞 기하와 같으면 건너뜀.
     큰빼기 = 큰 활자 틀(`{{더크게|…}}` 책 이름) 안 글자를 빼고 맞대기. None 이면 일치가 모자라고 큰 활자 틀이 있을 때만 빼고도 해 봄.
+             "부호" = 부호(`부호인가`)를 빼고 맞대기. None 이면 일치가 모자라거나 뺀 열이 남고 부호가 있을 때만(`부호빼기`).
     """
     if 제목 is None and 아는문헌(slug):
         제목 = corpus.heading_printed(slug)
@@ -1060,13 +1088,22 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                     예상칸=g.get("est"), 열=g.get("cols"),
                     상자열=g.get("crop_cols"), 구간=g.get("spans"))
     큰있음 = any(re.search(r"\{\{\s*" + 이름 + r"\s*\|", raw) for 이름 in 큰틀)
-    정렬판들 = ("읽기정렬", "읽기정렬가장자리", "격자")
-    for 단계 in (0, 1):                             # 0 = 자르기 후보들(큰 활자 빼기까지) · 1 = 읽기 정렬(그래도 안 맞을 때만)
-        for 빼기 in ([큰빼기] if 큰빼기 is not None else [False, True]):
-            if 빼기 and 큰빼기 is None and (not 큰있음 or (best and (best[0].get("일치") or 0) >= 다시볼일치)):
-                break                                 # 큰 활자 틀이 없거나 이미 잘 맞음
+    부호있음 = any(부호인가(g[0]) for g in _인쇄글자(raw, False, False))
+    정렬판들 = ("읽기정렬", "읽기정렬가장자리", "격자", "읽기경로")
+    # 단계 0 = 자르기 후보들(큰 활자 빼기까지) · 1 = 읽기 정렬(그래도 안 맞을 때만) · 2 = 읽기경로 · 부호 빼기는 맨 뒤
+    # (뒤 후보가 90% 를 먼저 넘겨 앞 후보의 큰 활자 빼기 · 정렬을 막지 않게)
+    차례 = (((0, [False, True]), (1, [False, True]), (2, [False, True]), (0, ["부호"]), (1, ["부호"]), (2, ["부호"]))
+            if 큰빼기 is None else ((0, [큰빼기]), (1, [큰빼기]), (2, [큰빼기])))
+    for 단계, 빼기들 in 차례:
+        for 빼기 in 빼기들:
+            잘맞음 = best and (best[0].get("일치") or 0) >= 다시볼일치
+            if 빼기 is True and 큰빼기 is None and (not 큰있음 or 잘맞음):
+                continue                              # 큰 활자 틀이 없거나 이미 잘 맞음
+            if 빼기 == "부호" and 큰빼기 is None and (not 부호있음 or not 부호빼기
+                                                     or (잘맞음 and not (best[0].get("흔들린열") or best[0].get("뺀열")))):
+                continue                              # 부호가 없거나 이미 잘 맞음 — 부호가 칸을 안 차지하는 판(권점 ｡ · 글자 옆 괄호)
             for 판 in 기하들:
-                if (판 in 정렬판들) != (단계 == 1):
+                if (2 if 판 == "읽기경로" else 1 if 판 in 정렬판들 else 0) != 단계:
                     continue
                 if best and (best[0].get("일치") or 0) >= 다시볼일치:
                     남은열 = best[0].get("흔들린열") or best[0].get("뺀열")
@@ -1074,9 +1111,11 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                     if not (남은열 and 판 in (True, "끝맞춤", *정렬판들)) and not 다시:
                         continue                      # 제외 열이 남으면 읽기 · 끝맞춤 · 읽기정렬로 복구
                 if 판 in ("쪽자간", "본문", "연한본문", "본문열", "조각열", "가장자리", "연한구간", "책머리", "연한", "연한가장자리", "끝맞춤",
-                         "읽기정렬", "읽기정렬가장자리", "격자"):
+                         "읽기정렬", "읽기정렬가장자리", "격자", "읽기경로"):
                     if 판 not in 본열:
-                        if 판 == "격자":
+                        if 판 == "읽기경로":
+                            본열[판] = 읽기경로기하(mdl, slug, ip, 설정)
+                        elif 판 == "격자":
                             본열[판] = 격자기하(본열.get("읽기자료") or 기하(slug, ip, True, 설정=설정), 표준열간격(slug, 설정))
                         elif 판 == "읽기정렬":
                             본열[판] = 본열.get("읽기자료") or 기하(slug, ip, True, 설정=설정)
@@ -1132,9 +1171,9 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                         이전 = len(글자들)
                         정렬판 = 판 in 정렬판들
                         r = 맞대기(mdl, geo, 글자들, 경계=경계, 짝=읽기정렬짝(mdl, geo, 글자들) if 정렬판 else None)
-                        r["기하"], r["제목"], r["큰빼기"] = 판, kh, 빼기
+                        r["기하"], r["제목"], r["큰빼기"], r["부호빼기"] = 판, kh, 빼기 is True, 빼기 == "부호"
                         if 판 in ("본문", "연한본문", "본문열", "조각열", "가장자리", "연한구간", "책머리", "연한", "연한가장자리", "끝맞춤",
-                                 "읽기정렬", "읽기정렬가장자리", "격자"):
+                                 "읽기정렬", "읽기정렬가장자리", "격자", "읽기경로"):
                             r["_본문기하"] = geo
                         시도기록.append(dict(기하=판, 제목=kh, 큰빼기=빼기, 경계=경계,
                                           전사글자수=len(글자들), 일치=r.get("일치"),
@@ -1173,7 +1212,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
                     r = 맞대기(mdl, geo, 글자들, 경계=경계)
                     r["기하"] = "판심" if 판심 else "조각" if 조각 else ("끝띠" if 끝띠 else ("읽기" if 읽기 else "자르기"))
                     r["제목"] = kh
-                    r["큰빼기"] = 빼기
+                    r["큰빼기"], r["부호빼기"] = 빼기 is True, 빼기 == "부호"
                     시도기록.append(dict(기하=r["기하"], 제목=kh, 큰빼기=빼기, 경계=경계,
                                       전사글자수=len(글자들), 일치=r.get("일치"),
                                       사유=r.get("사유"), 후보수=len(r.get("후보", [])),
@@ -1187,7 +1226,7 @@ def _한번(mdl, slug, ip, raw, 제목, 경계, 기하들, 큰빼기=None, 설�
     return best
 
 
-def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문", "연한본문", "본문열", "조각열", "연한구간", "책머리", "가장자리", "조각", "연한", "연한가장자리", "끝맞춤", "읽기정렬", "읽기정렬가장자리", "격자"), 합의=True, 밀림=False, 깨진=False,
+def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들=(False, True, "끝띠", "판심", "쪽자간", "본문", "연한본문", "본문열", "조각열", "연한구간", "책머리", "가장자리", "조각", "연한", "연한가장자리", "끝맞춤", "읽기정렬", "읽기정렬가장자리", "격자", "읽기경로"), 합의=True, 밀림=False, 깨진=False,
          설정=None, 누락=True):
     """
     위키 원문(편집 상자의 본문) 한 쪽을 그 쪽 스캔과 맞댄다.
@@ -1212,8 +1251,8 @@ def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들
     for c in r["후보"]:
         c["합의"] = c["갈래"] not in 낱갈래 or not 합의
     # 연한구간 · 책머리는 그것을 고른 쪽에서만 합의에도 씀. 읽기 정렬은 경계 검출기와 상관없이 같은 칸이라 합의에 안 씀(제 자신과 늘 같음)
-    조건후보 = ("연한구간", "책머리", "연한", "연한가장자리", "끝맞춤", "읽기정렬", "읽기정렬가장자리", "격자")
-    정렬후보 = ("읽기정렬", "읽기정렬가장자리", "격자")
+    조건후보 = ("연한구간", "책머리", "연한", "연한가장자리", "끝맞춤", "읽기정렬", "읽기정렬가장자리", "격자", "읽기경로")
+    정렬후보 = ("읽기정렬", "읽기정렬가장자리", "격자", "읽기경로")
     합의기하들 = tuple(p for p in 기하들 if p not in 조건후보 or (p == r.get("기하") and p not in 정렬후보))
     읽기합의 = (True, "판심", "본문", "연한본문", "본문열", "조각열", "가장자리", "조각")
     if r.get("기하") in 조건후보 and r["기하"] not in 정렬후보:
@@ -1222,7 +1261,7 @@ def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들
         남은 = [c for c in 낱 if not c["합의"]]
         if not 합의 or not 남은:
             break
-        r2, 글2 = _한번(mdl, slug, ip, raw, r["제목"], 큰빼기=r.get("큰빼기", False), 설정=설정, **옵)
+        r2, 글2 = _한번(mdl, slug, ip, raw, r["제목"], 큰빼기="부호" if r.get("부호빼기") else r.get("큰빼기", False), 설정=설정, **옵)
         r["합의본"].append(이름)
         if r2.get("사유") or len(글2) != len(글자들):
             continue
@@ -1240,6 +1279,8 @@ def 한쪽(mdl, slug, ip, raw, 제목=None, 그림=True, 경계=False, 기하들
     if 누락:
         import 누락대조
         geo = 본문 if 본문 is not None else 기하(slug, ip, 읽기=True, 설정=설정)
+        if geo is not None and geo.get("끝맞춤") is not None and len(geo["끝맞춤"]) != len(geo["cols"]):
+            geo = dict(geo, 끝맞춤=None)              # 열을 고친 후보 기하에 남은 옛 끝맞춤 구간(`읽기정렬짝` 과 같음)
         if geo is not None:
             for c in 누락대조.후보찾기(mdl, geo, 글자들, raw):
                 c["상자번호"] = -1
